@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icons/" alt="IndexLink" width="400">
+  <img src="assets/icons/indexlink-logo.png" alt="IndexLink" width="400">
 </p>
 
 <p align="center">
