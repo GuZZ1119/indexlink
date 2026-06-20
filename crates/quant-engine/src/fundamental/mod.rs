@@ -40,7 +40,6 @@ impl Weight {
     }
 
     /// 返回互补权重：`1.0 - self`。
-    #[must_use]
     pub fn complement(self) -> Self {
         Self(1.0 - self.0)
     }
@@ -82,7 +81,7 @@ impl FundamentalConfig {
     /// `cape_weight` 必须在 `[0.0, 1.0]`；`min_history_len` 必须大于 0。
     pub fn new(cape_weight: f64, min_history_len: usize) -> Result<Self, QuantError> {
         let min_history_len =
-            NonZeroUsize::new(min_history_len).ok_or_else(|| QuantError::InvalidMinHistoryLen {
+            NonZeroUsize::new(min_history_len).ok_or(QuantError::InvalidMinHistoryLen {
                 value: min_history_len,
             })?;
 

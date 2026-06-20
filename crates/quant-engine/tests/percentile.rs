@@ -86,7 +86,7 @@ fn zero_min_len_returns_error_before_empty_history_division() {
 #[test]
 fn nan_in_history_is_filtered() {
     let mut h: Vec<f64> = make_history(90);
-    h.extend(std::iter::repeat(f64::NAN).take(TEST_MIN_HISTORY_LEN));
+    h.extend(std::iter::repeat_n(f64::NAN, TEST_MIN_HISTORY_LEN));
     let p = percentile_of("T", &h, 45.0, DEFAULT_MIN_HISTORY_LEN).unwrap();
     assert!(p.value() > MIN_PERCENTILE);
 }
