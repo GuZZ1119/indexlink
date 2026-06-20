@@ -59,7 +59,6 @@ impl Percentile {
     ///
     /// 用于ERP等反向指标：ERP越高代表市场越便宜，
     /// 倒置后才与 CAPE 方向一致（值越大 = 市场越贵）。
-    #[must_use]
     pub fn invert(self) -> Self {
         Self(1.0 - self.0)
     }
@@ -140,9 +139,12 @@ impl Multiplier {
     pub const STANDARD_MAX: Self = Self(Self::STANDARD_MAX_VALUE);
 
     /// 创建倍率，自动 clamp 到 `[0.0, 1.5]`；NaN 视为最保守的 Skip 倍率。
-    #[must_use]
     pub fn new_clamped(value: f64) -> Self {
-        let v = if value.is_nan() { Self::MIN_VALUE } else { value };
+        let v = if value.is_nan() {
+            Self::MIN_VALUE
+        } else {
+            value
+        };
         Self(v.clamp(Self::MIN_VALUE, Self::MAX_VALUE))
     }
 
@@ -216,7 +218,10 @@ mod tests {
 
     #[test]
     fn percentile_error_display() {
-        assert_eq!(PercentileError::Nan.to_string(), "percentile must not be NaN");
+        assert_eq!(
+            PercentileError::Nan.to_string(),
+            "percentile must not be NaN"
+        );
         assert_eq!(
             PercentileError::OutOfRange { value: 1.2 }.to_string(),
             "percentile must be in [0.0, 1.0], got 1.2"
@@ -261,7 +266,10 @@ mod tests {
     #[test]
     fn multiplier_to_action() {
         assert_eq!(Multiplier::new_clamped(0.0).to_action(), Action::Skip);
-        assert_eq!(Multiplier::new_clamped(0.5).to_action(), Action::Underweight);
+        assert_eq!(
+            Multiplier::new_clamped(0.5).to_action(),
+            Action::Underweight
+        );
         assert_eq!(Multiplier::new_clamped(1.0).to_action(), Action::Standard);
         assert_eq!(Multiplier::new_clamped(1.4).to_action(), Action::Overweight);
     }

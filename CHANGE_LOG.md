@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### 2026-06-20 21:30 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：CI 配置重构。
+- 涉及文件：
+  - `.github/workflows/rust-ci.yml`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 Rust CI 从单个串行 `test` job 拆分为独立的 `fmt`、`clippy`、`test`、`coverage` jobs，便于 GitHub Checks 单独定位失败阶段。
+  - `fmt` job 仅安装 `rustfmt` 并执行 `cargo fmt --all -- --check`；`clippy` job 仅安装 `clippy` 并执行严格 clippy；`test` job 执行 workspace 测试。
+  - 新增 `coverage` job，安装 `llvm-tools-preview` 与 `cargo-llvm-cov`，执行 `cargo llvm-cov --workspace --all-features --summary-only`。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p core-domain` 通过：13 个单元测试全部通过。
+  - `cargo llvm-cov --workspace --all-features --summary-only` 通过：workspace 行覆盖率 67.77%，`core-domain` 与 `quant-engine` 行覆盖率均为 100.00%。
+
+### 2026-06-20 21:07 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：代码质量修复（Clippy warnings）。
+- 涉及文件：
+  - `crates/quant-engine/src/fundamental/mod.rs`
+  - `crates/quant-engine/tests/percentile.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 移除 `Weight::complement` 上与 `Weight` 类型级 `#[must_use]` 重复的函数级 `#[must_use]`，修复 `clippy::double_must_use`。
+  - 将 `FundamentalConfig::new` 中不必要的 `ok_or_else` 改为 `ok_or`，修复 `clippy::unnecessary_lazy_evaluations`。
+  - 将测试中的 `std::iter::repeat(...).take(...)` 改为 `std::iter::repeat_n(...)`，修复 `clippy::manual_repeat_n`。
+- 验证：
+  - `cargo fmt --all` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+  - `cargo test --workspace` 通过。
+
 ### 2026-06-20 19:38 UTC+10
 
 - 执行模型：Codex。
