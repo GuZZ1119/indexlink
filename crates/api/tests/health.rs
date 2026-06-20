@@ -3,15 +3,29 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{
+        header::{ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_METHOD, ORIGIN},
+        HeaderValue, Request, StatusCode,
+    },
 };
 use http_body_util::BodyExt;
-use indexlink_api::{build_router, ApiState, ReadinessCheck, ReadinessError};
+use indexlink_api::{
+    build_router, build_router_with_cors, ApiState, ReadinessCheck, ReadinessError,
+};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
 struct FakeReadiness {
     available: bool,
+}
+
+struct PanicReadiness;
+
+#[async_trait]
+impl ReadinessCheck for PanicReadiness {
+    async fn check(&self) -> Result<(), ReadinessError> {
+        panic!("health endpoint must not call readiness checker")
+    }
 }
 
 #[async_trait]
@@ -68,6 +82,44 @@ async fn health_returns_ok_with_expected_json() {
 }
 
 #[tokio::test]
+async fn health_does_not_call_failing_readiness_dependency() {
+    let app = build_router(ApiState::with_readiness(Arc::new(PanicReadiness), "0.1.0"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn health_reports_version_supplied_by_application_state() {
+    let app = build_router(ApiState::with_readiness(
+        Arc::new(PanicReadiness),
+        "2026.06-test",
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_json(response).await["version"],
+        json!("2026.06-test")
+    );
+}
+
+#[tokio::test]
 async fn ready_returns_ok_when_database_is_available() {
     let response = app(true)
         .oneshot(
@@ -113,4 +165,76 @@ async fn ready_hides_internal_error_when_database_is_unavailable() {
     assert!(!serialized.contains("secret"));
     assert!(!serialized.contains("internal"));
     assert!(!serialized.contains("password"));
+}
+
+#[tokio::test]
+async fn configured_cors_origin_is_returned_for_preflight_request() {
+    let app = build_router_with_cors(
+        ApiState::with_readiness(Arc::new(FakeReadiness { available: true }), "0.1.0"),
+        vec![HeaderValue::from_static("https://app.example")],
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/health")
+                .header(ORIGIN, "https://app.example")
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN),
+        Some(&HeaderValue::from_static("https://app.example"))
+    );
+}
+
+#[tokio::test]
+async fn unconfigured_cors_origin_is_not_reflected() {
+    let app = build_router_with_cors(
+        ApiState::with_readiness(Arc::new(FakeReadiness { available: true }), "0.1.0"),
+        vec![HeaderValue::from_static("https://app.example")],
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/health")
+                .header(ORIGIN, "https://attacker.example")
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(response
+        .headers()
+        .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+        .is_none());
+}
+
+#[tokio::test]
+async fn same_origin_router_does_not_grant_cross_origin_access() {
+    let response = app(true)
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/health")
+                .header(ORIGIN, "https://app.example")
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(response
+        .headers()
+        .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+        .is_none());
 }

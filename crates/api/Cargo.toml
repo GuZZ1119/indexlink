@@ -15,5 +15,6 @@ tracing.workspace = true
 [dev-dependencies]
 http-body-util = "0.1"
 serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tower.workspace = true

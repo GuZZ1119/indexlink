@@ -84,3 +84,72 @@ impl ReadinessError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
+    use super::*;
+
+    struct SecretChecker {
+        secret: &'static str,
+    }
+
+    #[async_trait]
+    impl ReadinessCheck for SecretChecker {
+        async fn check(&self) -> Result<(), ReadinessError> {
+            Err(ReadinessError::new(self.secret))
+        }
+    }
+
+    #[test]
+    fn readiness_error_display_preserves_internal_diagnostic_for_logs() {
+        let error = ReadinessError::new("database connection refused");
+
+        assert_eq!(error.to_string(), "database connection refused");
+    }
+
+    #[test]
+    fn custom_backend_debug_hides_checker_fields() {
+        let state = ApiState::with_readiness(
+            Arc::new(SecretChecker {
+                secret: "private-checker-detail",
+            }),
+            "0.1.0",
+        );
+        let debug = format!("{state:?}");
+
+        assert!(debug.contains("CustomReadinessCheck"));
+        assert!(!debug.contains("private-checker-detail"));
+        assert!(!debug.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn storage_backend_debug_and_error_hide_pool_details() {
+        let pool = PgPoolOptions::new().connect_lazy_with(
+            PgConnectOptions::new()
+                .host("secret-database.internal")
+                .username("secret-user")
+                .password("secret-password")
+                .database("secret-database"),
+        );
+        pool.close().await;
+        let state = ApiState::new(Storage::from_pool(pool), "0.1.0");
+        let debug = format!("{state:?}");
+
+        assert!(debug.contains("Storage"));
+        assert!(!debug.contains("secret-database"));
+        assert!(!debug.contains("secret-user"));
+        assert!(!debug.contains("secret-password"));
+
+        let error = state
+            .check_readiness()
+            .await
+            .expect_err("closed pool must fail readiness");
+        assert_eq!(error.to_string(), "database ping failed");
+        assert!(!error.to_string().contains("secret"));
+    }
+}
