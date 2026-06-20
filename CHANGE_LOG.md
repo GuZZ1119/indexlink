@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### 2026-06-20 21:36 UTC+10
+
+- 执行模型：Codex。
+- 变更类型：后端测试覆盖率提升。
+- 涉及文件：
+  - `crates/api/Cargo.toml`
+  - `crates/api/src/error.rs`
+  - `crates/api/src/state.rs`
+  - `crates/api/tests/health.rs`
+  - `crates/storage/src/lib.rs`
+  - `apps/server/src/config.rs`
+  - `Cargo.lock`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - API 集成测试保留 `/health`、`/ready` 与 CORS 跨模块 HTTP 契约；错误序列化、readiness backend 和 Debug 脱敏测试贴近对应源文件放置。
+  - 补充 health 不访问数据库、自定义版本、CORS 预检与拒绝、安全 503 JSON、request ID 序列化以及 Storage backend 错误脱敏测试。
+  - Storage 补充非法 URL、lazy pool、关闭连接池 ping 映射和结构化错误安全文案测试，并新增 `Storage::from_pool` 作为连接池依赖注入入口。
+  - 将 server 环境读取重构为委托给纯 `Config::from_lookup` 解析入口，覆盖默认值、自定义值、非法输入、CORS 列表和敏感信息保护；未改变环境变量名及 `APP_PORT=0` 行为。
+  - 未修改 CI workflow；`.github/workflows/rust-ci.yml` 与本次分支基线一致。
+- llvm-cov 修改前：
+  - `indexlink-api`：region 75.76%，function 82.35%，line 83.00%。
+  - `indexlink-storage`：region 43.90%，function 50.00%，line 54.55%。
+  - `indexlink-server`：region/function/line 均为 0.00%。
+- llvm-cov 修改后：
+  - `indexlink-api`：region 98.15%，function 96.15%，line 98.36%。
+  - `indexlink-storage`：region 84.71%，function 95.00%，line 91.03%。
+  - `indexlink-server`：整体 region 75.83%，function 75.00%，line 79.78%；其中 `config.rs` region 96.17%，function 93.75%，line 98.19%。
+- 验证：
+  - API 6 项单元测试与 8 项 HTTP 集成测试通过；Storage 6 项单元测试通过；server config 15 项单元测试通过。
+  - 三个后端包的 llvm-cov 干净复测通过。
+  - HTML 报告生成于本地 `target/llvm-cov/html`，未纳入 Git。
+  - `cargo check --workspace --locked` 通过；`cargo test --workspace --locked` 共 86 项测试通过。
+  - 三个后端包的 rustfmt check 与严格 Clippy（`-D warnings`）通过。
+  - 全 workspace rustfmt check 仍被 `crates/core-domain/src/lib.rs` 三处既有格式阻塞；全 workspace Clippy 仍被该文件两个 `double_must_use` lint 阻塞，按责任边界未修改。
+
 ### 2026-06-20 21:30 UTC+10
 
 - 执行模型：GPT-5.5。
