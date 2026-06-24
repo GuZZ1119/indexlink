@@ -5,6 +5,22 @@
 ### 2026-06-24 23:00 UTC+10
 
 - 执行模型：Claude。
+- 变更类型：feat（AI 语义感知层：核心类型与接口定义）。
+- 涉及文件：
+  - `crates/ai-client/src/sentiment.rs`
+  - `crates/ai-client/src/error.rs`
+  - `crates/ai-client/src/provider.rs`
+- 变更内容：
+  - `Sentiment` newtype：`[-1.0, +1.0]` 有界情绪值，NaN→0、越界自动截断，Display 安全。
+  - `AiClientError`：六种错误变体（Timeout / Transport / HttpStatus / InvalidJson / UnexpectedStructure / ParseFailure / EmptyResponse），所有 Display 不暴露密钥/URL。
+  - `AiConfig`：千问连接配置（默认 DashScope `qwen-plus`），Debug 将 api_key 显示为 `<redacted>`。
+  - `AiProvider` trait（`async_trait`）：可替换的 LLM 后端抽象，与 `ReadinessCheck` 同模式。
+- 验证：
+  - `cargo test -p ai-client`：42 单元测试全部通过。
+
+### 2026-06-24 23:00 UTC+10
+
+- 执行模型：Claude。
 - 变更类型：chore（workspace 注册 ai-client）。
 - 涉及文件：
   - `Cargo.toml`（根 workspace 注册 + reqwest 依赖声明）
