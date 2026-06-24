@@ -35,13 +35,16 @@ impl std::error::Error for SentimentError {}
 /// AI 情绪得分，硬限制在 `[-1.0, +1.0]`。
 ///
 /// - `-1.0` = 极度悲观（熊市恐慌、系统性风险）
-/// - `0.0` = 中性（无明显信号，或 LLM 不可用时的安全降级值）
+/// - `0.0` = 中性（无明显方向信号）
 /// - `+1.0` = 极度乐观（盈利超预期、宏观利好）
 ///
 /// AI 输出**无法突破**此边界：超限值会被 clamp，NaN 视为中性。
 ///
-/// 采用与 [`Multiplier`] 相同的 clamp 构造模式——AI 输出不可靠，
-/// 安全边界绝不因异常输入而 panic。
+/// # 注意
+///
+/// 此类型只表达 AI 语义分析结果。AI 不可用时的降级（70/20/10 → 90/10/0）
+/// 发生在 decision engine 层，不在 ai-client 层。ai-client 在 AI 不可用时
+/// 返回 [`AiClientError`]，由 engine 决定如何处理权重分配。
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Sentiment(f64);
@@ -58,7 +61,7 @@ impl Sentiment {
     pub const MIN: Self = Self(Self::MIN_VALUE);
     /// 情绪最大值（+1.0）。
     pub const MAX: Self = Self(Self::MAX_VALUE);
-    /// 中性情绪（0.0），LLM 不可用时的降级默认值。
+    /// 中性情绪（0.0）——无明显方向信号时的语义值。
     pub const NEUTRAL: Self = Self(Self::NEUTRAL_VALUE);
 
     /// 构造情绪值，自动 clamp 到 `[-1.0, +1.0]`；NaN 视为中性。
@@ -82,9 +85,7 @@ impl Sentiment {
         Self::try_from(value).ok()
     }
 
-    /// 返回中性情绪（0.0）。
-    ///
-    /// 用于 LLM 不可用、超时、解析失败时的显式降级。
+    /// 返回中性情绪值（0.0），即无方向信号。
     #[must_use = "returns a Sentiment value that should not be discarded"]
     pub fn neutral() -> Self {
         Self::NEUTRAL
@@ -119,8 +120,17 @@ impl From<Sentiment> for f64 {
 
 impl std::fmt::Display for Sentiment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sign = if self.0 > 0.0 { "+" } else { "" };
-        write!(f, "{sign}{:.1}", self.0)
+        let sign = if self.0 > 0.0 { "+" } else { "-" };
+        let abs = self.0.abs();
+        if abs == 0.0 {
+            write!(f, "0.0")
+        } else if abs.fract() == 0.0 {
+            // 整数（如 1.0 / -1.0）保留一位小数，避免输出 "+1"
+            write!(f, "{sign}{abs:.1}")
+        } else {
+            // 使用 ryu 最短表示，避免 {:.1} 的四舍五入精度丢失（如 0.75 → +0.8）
+            write!(f, "{sign}{}", abs)
+        }
     }
 }
 

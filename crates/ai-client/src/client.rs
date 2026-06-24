@@ -77,10 +77,11 @@ struct SentimentResponse {
 
 /// OpenAI 兼容 API 客户端（支持 Qwen / OpenAI / 任何兼容服务）。
 ///
-/// # 降级策略
+/// # 错误处理
 ///
-/// 任何错误（超时、网络、解析）都返回 [`AiClientError`]。
-/// 调用方使用 `.unwrap_or(Sentiment::neutral())` 即可安全降级。
+/// 任何错误（超时、网络、HTTP 状态码、解析失败）都以 [`AiClientError`]
+/// 返回给调用方。ai-client 不自行降级——由上层 decision engine
+/// 按 70/20/10 → 90/10/0 策略统一处理。
 ///
 /// # 示例
 ///
@@ -90,10 +91,13 @@ struct SentimentResponse {
 /// # async fn example() {
 /// let config = AiConfig::default();
 /// let client = QwenClient::new(config);
-/// let sentiment = client
+/// match client
 ///     .analyze("央行宣布降准50bp，释放长期流动性约1万亿元")
 ///     .await
-///     .unwrap_or_else(|_| Sentiment::neutral());
+/// {
+///     Ok(sentiment) => { /* engine 使用 70/20/10 */ }
+///     Err(err) => { /* engine 降级到 90/10/0 */ }
+/// }
 /// # }
 /// ```
 pub struct QwenClient {
@@ -135,11 +139,16 @@ impl QwenClient {
     }
 
     /// 拼接 chat completions 端点 URL。
+    ///
+    /// 若 `base_url` 已包含 `/v1` 则不再重复拼接，避免出现
+    /// `/v1/v1/chat/completions` 的重复路径。
     fn chat_url(&self) -> String {
-        format!(
-            "{}/v1/chat/completions",
-            self.config.base_url.trim_end_matches('/')
-        )
+        let base = self.config.base_url.trim_end_matches('/');
+        if base.ends_with("/v1") {
+            format!("{base}/chat/completions")
+        } else {
+            format!("{base}/v1/chat/completions")
+        }
     }
 
     /// 执行 HTTP 请求并解析响应。
@@ -204,13 +213,52 @@ impl QwenClient {
 
         debug!(content = %content, "received AI model output");
 
-        let parsed: SentimentResponse = serde_json::from_str(content).map_err(|err| {
-            warn!(?err, content, "failed to parse sentiment from model output");
-            AiClientError::ParseFailure
-        })?;
+        let sentiment = parse_sentiment_from_llm_output(content)?;
 
-        Ok(parsed.sentiment)
+        Ok(sentiment)
     }
+}
+
+/// 从 LLM 原始输出中提取 sentiment 值。
+///
+/// LLM 输出不可靠——可能返回纯 JSON `{"sentiment": 0.5}`，
+/// 也可能在 JSON 外包了 markdown 或解释文本。此函数优先直接解析，
+/// 失败时尝试从文本中提取 `{...}` 块再解析。两者都失败才返回错误。
+fn parse_sentiment_from_llm_output(content: &str) -> Result<f64, AiClientError> {
+    // 第一遍：直接解析
+    if let Ok(parsed) = serde_json::from_str::<SentimentResponse>(content) {
+        return Ok(parsed.sentiment);
+    }
+
+    // 第二遍：尝试提取 JSON 对象 { ... }
+    if let Some(json_block) = extract_json_object(content) {
+        if let Ok(parsed) = serde_json::from_str::<SentimentResponse>(&json_block) {
+            debug!("extracted sentiment from embedded JSON block");
+            return Ok(parsed.sentiment);
+        }
+    }
+
+    warn!(content, "failed to parse sentiment from model output");
+    Err(AiClientError::ParseFailure)
+}
+
+/// 从文本中提取第一个 `{ ... }` JSON 对象（平衡括号匹配）。
+fn extract_json_object(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let mut depth = 0u32;
+    for (i, ch) in text[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..start + i + 1].to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[async_trait]
@@ -245,15 +293,29 @@ mod tests {
     }
 
     #[test]
-    fn chat_url_trims_trailing_slash() {
+    fn chat_url_does_not_double_v1() {
+        // 若 base_url 已包含 /v1，不应再拼接一次
         let config = AiConfig {
-            base_url: "https://api.example.com/v1/".to_owned(),
+            base_url: "https://api.openai.com/v1".to_owned(),
             ..Default::default()
         };
         let client = QwenClient::new(config);
         assert_eq!(
             client.chat_url(),
-            "https://api.example.com/v1/v1/chat/completions"
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn chat_url_appends_v1_when_missing() {
+        let config = AiConfig {
+            base_url: "https://api.example.com".to_owned(),
+            ..Default::default()
+        };
+        let client = QwenClient::new(config);
+        assert_eq!(
+            client.chat_url(),
+            "https://api.example.com/v1/chat/completions"
         );
     }
 
@@ -303,5 +365,83 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("-1.0"));
         assert!(SYSTEM_PROMPT.contains("+1.0"));
         assert!(SYSTEM_PROMPT.contains("JSON"));
+    }
+
+    // ── extract_json_object ─────────────────────────────────────────────────
+
+    #[test]
+    fn extract_pure_json() {
+        let content = r#"{"sentiment": 0.7}"#;
+        let extracted = extract_json_object(content).unwrap();
+        assert_eq!(extracted, content);
+    }
+
+    #[test]
+    fn extract_json_from_markdown_code_block() {
+        let content = "```json\n{\"sentiment\": 0.5}\n```";
+        let extracted = extract_json_object(content).unwrap();
+        assert_eq!(extracted, r#"{"sentiment": 0.5}"#);
+    }
+
+    #[test]
+    fn extract_json_with_prefix_text() {
+        let content = "以下是分析结果：{\"sentiment\": -0.3}，仅供参考。";
+        let extracted = extract_json_object(content).unwrap();
+        assert_eq!(extracted, r#"{"sentiment": -0.3}"#);
+    }
+
+    #[test]
+    fn extract_nested_json() {
+        let content = r#"{"outer": {"sentiment": 0.8}}"#;
+        let extracted = extract_json_object(content).unwrap();
+        assert_eq!(extracted, content);
+    }
+
+    #[test]
+    fn extract_json_no_braces_returns_none() {
+        assert!(extract_json_object("no json here").is_none());
+    }
+
+    #[test]
+    fn extract_json_unclosed_brace_returns_none() {
+        assert!(extract_json_object(r#"{"sentiment": 0.5"#).is_none());
+    }
+
+    // ── parse_sentiment_from_llm_output ──────────────────────────────────────
+
+    #[test]
+    fn parse_sentiment_from_pure_json() {
+        let s = parse_sentiment_from_llm_output(r#"{"sentiment": 0.7}"#).unwrap();
+        assert!((s - 0.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_sentiment_from_markdown_wrapped_json() {
+        // LLM 常见输出：在 markdown 代码块中返回 JSON
+        let content = "```json\n{\"sentiment\": -0.5}\n```";
+        let s = parse_sentiment_from_llm_output(content).unwrap();
+        assert!((s - (-0.5)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_sentiment_with_explanatory_prefix() {
+        // LLM 有时在 JSON 前加解释文本
+        let content = "根据分析，我认为市场情绪偏正面。\n{\"sentiment\": 0.3}";
+        let s = parse_sentiment_from_llm_output(content).unwrap();
+        assert!((s - 0.3).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_sentiment_fails_on_unparseable_output() {
+        let content = "抱歉，我无法分析这条新闻，因为它不包含足够的金融信息。";
+        let result = parse_sentiment_from_llm_output(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_sentiment_fails_on_missing_field() {
+        let content = r#"{"score": 0.5}"#;
+        let result = parse_sentiment_from_llm_output(content);
+        assert!(result.is_err());
     }
 }

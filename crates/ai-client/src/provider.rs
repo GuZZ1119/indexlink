@@ -25,7 +25,8 @@ pub trait AiProvider: Send + Sync {
     /// # 错误
     ///
     /// 超时、网络错误、API 错误或响应解析失败时返回 [`AiClientError`]。
-    /// 调用方应使用 `.unwrap_or(Sentiment::neutral())` 实现安全降级。
+    /// ai-client 不在此层降级——由上层 decision engine 按 70/20/10 → 90/10/0
+    /// 策略处理错误（AI 权重归零，仅用基本面和趋势数据决策）。
     async fn analyze(&self, prompt: &str) -> Result<Sentiment, AiClientError>;
 }
 
@@ -64,7 +65,7 @@ impl Default for AiConfig {
 impl fmt::Debug for AiConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AiConfig")
-            .field("base_url", &self.base_url)
+            .field("base_url", &redact_url_userinfo(&self.base_url))
             .field("api_key", &"<redacted>")
             .field("model", &self.model)
             .field("timeout", &self.timeout)
@@ -74,12 +75,24 @@ impl fmt::Debug for AiConfig {
     }
 }
 
+/// 去除 URL 中的 `user:password@` 部分，防止 Debug/Display 输出泄露嵌入的凭据。
+fn redact_url_userinfo(url: &str) -> String {
+    match url.find('@') {
+        Some(at_pos) if url.contains("://") => {
+            let scheme_end = url.find("://").unwrap();
+            format!("{}<redacted>@{}", &url[..=scheme_end + 2], &url[at_pos + 1..])
+        }
+        _ => url.to_owned(),
+    }
+}
+
 impl fmt::Display for AiConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "AiConfig(model={}, base_url={})",
-            self.model, self.base_url
+            self.model,
+            redact_url_userinfo(&self.base_url)
         )
     }
 }
@@ -113,29 +126,32 @@ mod tests {
     }
 
     #[test]
-    fn config_display_hides_api_key() {
+    fn config_display_hides_api_key_and_url_credentials() {
         let config = AiConfig {
+            base_url: "https://user:password@evil.example.com/v1".to_owned(),
             api_key: "sk-secret-key-12345".to_owned(),
             ..Default::default()
         };
         let display = format!("{config}");
-        assert!(display.contains("qwen-plus"));
-        assert!(display.contains("dashscope"));
+        assert!(display.contains("evil.example.com"));
+        assert!(!display.contains("user:password"), "URL 凭据不应出现在 Display 中");
+        assert!(display.contains("<redacted>"));
         assert!(!display.contains("sk-secret-key-12345"));
     }
 
     #[test]
-    fn config_debug_does_not_leak_base_url_with_embedded_secret() {
+    fn config_debug_redacts_embedded_url_credentials() {
         let config = AiConfig {
             base_url: "https://user:password@evil.example.com/v1".to_owned(),
             api_key: "sk-abc".to_owned(),
             ..Default::default()
         };
         let debug = format!("{config:?}");
-        // base_url is shown in debug (not secret — Debug is for devs)
+        // URL 凭据被 redact，但 host 可保留（Debug 是给开发者看的）
         assert!(debug.contains("evil.example.com"));
-        // but api_key must still be redacted
-        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("user:password"), "URL 凭据不应出现在 Debug 中");
+        assert!(debug.contains("<redacted>"), "应有 redact 标记");
+        // api_key 同样被 redact
         assert!(!debug.contains("sk-abc"));
     }
 }
