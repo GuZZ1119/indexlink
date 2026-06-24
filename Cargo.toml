@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/core-domain",
     "crates/quant-engine",
+    "crates/investment-plans",
     "crates/storage",
     "crates/api",
     "crates/ai-client",
@@ -16,11 +17,13 @@ edition = "2021"
 [workspace.dependencies]
 core-domain = { path = "crates/core-domain" }
 ai-client = { path = "crates/ai-client" }
+investment-plans = { path = "crates/investment-plans" }
 indexlink-storage = { path = "crates/storage" }
 indexlink-api = { path = "crates/api" }
 async-trait = "0.1"
 axum = "0.7"
 dotenvy = "0.15"
+rust_decimal = { version = "1", default-features = false, features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
