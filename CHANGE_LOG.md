@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+### 2026-06-24 23:30 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：test（AI 语义感知层：集成测试）。
+- 涉及文件：
+  - `crates/ai-client/tests/client.rs`
+  - `crates/ai-client/tests/provider.rs`
+  - `crates/ai-client/tests/sentiment.rs`
+- 变更内容：
+  - 本地 axum HTTP mock server 模拟千问，验证 `QwenClient` 请求格式、响应解析、错误降级全链路。
+  - `MockAiProvider` 关键词匹配测试（正向/负向/中性/自定义默认值）。
+  - `Sentiment` 边界测试（构造、范围、比较、f64 互转）。
+  - `AiConfig` 安全测试（api_key 不出现在 Debug/Display 中）。
+- 验证：
+  - `cargo test -p ai-client`：66 测试全部通过。
+
+### 2026-06-24 23:15 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：feat（AI 语义感知层：客户端实现 + Mock）。
+- 涉及文件：
+  - `crates/ai-client/Cargo.toml`
+  - `crates/ai-client/src/client.rs`
+  - `crates/ai-client/src/mock.rs`
+  - `crates/ai-client/src/lib.rs`
+- 变更内容：
+  - `QwenClient`：对接 Qwen DashScope API，system prompt 约束模型输出结构化 JSON，三级步进降级。
+  - `MockAiProvider`：关键词匹配的本地假 AI（大涨→正向、大跌→负向，未匹配→中性），零网络零成本。
+  - `lib.rs` 统一导出 `QwenClient`、`MockAiProvider`、`AiProvider`、`AiConfig`、`Sentiment`。
+- 验证：
+  - `cargo test -p ai-client`：全部通过。
+
+### 2026-06-24 23:00 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：feat（AI 语义感知层：核心类型与接口定义）。
+- 涉及文件：
+  - `crates/ai-client/src/sentiment.rs`
+  - `crates/ai-client/src/error.rs`
+  - `crates/ai-client/src/provider.rs`
+- 变更内容：
+  - `Sentiment` newtype：`[-1.0, +1.0]` 有界情绪值，NaN→0、越界自动截断，Display 安全。
+  - `AiClientError`：六种错误变体（Timeout / Transport / HttpStatus / InvalidJson / UnexpectedStructure / ParseFailure / EmptyResponse），所有 Display 不暴露密钥/URL。
+  - `AiConfig`：千问连接配置（默认 DashScope `qwen-plus`），Debug 将 api_key 显示为 `<redacted>`。
+  - `AiProvider` trait（`async_trait`）：可替换的 LLM 后端抽象，与 `ReadinessCheck` 同模式。
+- 验证：
+  - `cargo test -p ai-client`：42 单元测试全部通过。
+
+### 2026-06-24 23:00 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：chore（workspace 注册 ai-client）。
+- 涉及文件：
+  - `Cargo.toml`（根 workspace 注册 + reqwest 依赖声明）
+  - `Cargo.lock`
+- 变更内容：
+  - 将 `ai-client` 加入 workspace members。
+  - 声明 `ai-client` workspace dependency。
+  - 声明 `reqwest` workspace dependency（`json` + `rustls-tls`）。
+- 验证：
+  - `cargo build --workspace` 通过。
+  - `cargo test --workspace` 全部通过。
+
 ### 2026-06-21 21:15 UTC+10
 
 - 执行模型：GPT-5.5。
