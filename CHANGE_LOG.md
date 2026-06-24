@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### 2026-06-24 22:37 UTC+10
+
+- 执行模型：Codex。
+- 变更类型：feat/test（Investment Plan 领域模型与校验）。
+- PR 范围：PR 2，仅实现投资计划领域类型、字段规范化与输入校验；不实现 repository、storage adapter、migration、API、Scheduler、Broker、Qwen、订单状态机或 `ExecutionPlan`。
+- 涉及文件：
+  - `Cargo.toml`
+  - `Cargo.lock`
+  - `crates/investment-plans/Cargo.toml`
+  - `crates/investment-plans/src/lib.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `ScheduleKind`、`InvestmentPlan`、`CreateInvestmentPlan`、`UpdateInvestmentPlan` 与 `PlanValidationError`。
+  - 创建输入支持 name trim、symbol trim + 大写、currency trim + 大写、monthly day 1..=28、Decimal 金额正数与 `max_single_execution >= base_contribution` 校验。
+  - 更新输入禁止修改 symbol / currency / schedule_kind，并拒绝空 PATCH；同时保留 Decimal 字符串 JSON 契约。
+  - 新增 `uuid` 与 `time` 作为领域模型 ID 和时间字段类型，未启用 SQLx 对应 feature。
+- 验证：
+  - `cargo test -p investment-plans` 通过：9 个领域与 Decimal 契约测试通过。
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-06-24 22:08 UTC+10
 
 - 执行模型：Codex。
