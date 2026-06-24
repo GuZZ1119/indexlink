@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### 2026-06-24 23:11 UTC+10
+
+- 执行模型：Codex。
+- 变更类型：feat/test（Investment Plan repository port 与应用服务）。
+- PR 范围：PR 3，仅新增 repository port、create/list/get 应用服务契约与 fake repository 测试；不实现 update 用例、storage adapter、migration、API、Scheduler、Broker、Qwen、订单状态机或 `ExecutionPlan`。
+- 涉及文件：
+  - `Cargo.lock`
+  - `crates/investment-plans/Cargo.toml`
+  - `crates/investment-plans/src/lib.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `InvestmentPlanRepository` outbound port，定义 `create`、`list`、`get` 契约。
+  - 新增 `PlanRepositoryError` 与 `PlanApplicationError`，保持持久化错误文案安全，不泄露数据库细节。
+  - 新增 `InvestmentPlanService`，在 create 用例中先调用领域 `normalize()`，再调用 repository port。
+  - 使用 fake repository 测试 create/list/get、NotFound/Unavailable 错误映射，并保持领域类型不直接派生 `Deserialize`。
+- 验证：
+  - `cargo test -p investment-plans` 通过：14 个领域、Decimal 与应用服务契约测试通过。
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-06-24 22:37 UTC+10
 
 - 执行模型：Codex。
