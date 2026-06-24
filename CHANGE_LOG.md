@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 2026-06-24 23:39 UTC+10
+
+- 执行模型：Codex。
+- 变更类型：feat/test（Investment Plan 更新与启停应用用例）。
+- PR 范围：PR 4，仅新增 update 与 set active 应用服务契约及 fake repository 测试；不实现 storage adapter、migration、API、Scheduler、Broker、Qwen、订单状态机或 `ExecutionPlan`。
+- 涉及文件：
+  - `crates/investment-plans/src/lib.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `InvestmentPlanRepository` port 新增 `update` 与 `set_active`。
+  - `InvestmentPlanService` 新增 `update` 与 `set_active`；update 会先规范化输入，并结合当前计划校验最终 `base_contribution` / `max_single_execution` 关系。
+  - fake repository 支持更新字段、启停状态与 `updated_at` 变化。
+  - 新增应用服务测试覆盖字段更新、最终金额上限校验和启停用例。
+- 验证：
+  - `cargo test -p investment-plans` 通过：17 个领域、Decimal 与应用服务契约测试通过。
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-06-24 23:11 UTC+10
 
 - 执行模型：Codex。
