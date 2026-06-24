@@ -17,9 +17,11 @@
   - 新增 `ScheduleKind`、`InvestmentPlan`、`CreateInvestmentPlan`、`UpdateInvestmentPlan` 与 `PlanValidationError`。
   - 创建输入支持 name trim、symbol trim + 大写、currency trim + 大写、monthly day 1..=28、Decimal 金额正数与 `max_single_execution >= base_contribution` 校验。
   - 更新输入禁止修改 symbol / currency / schedule_kind，并拒绝空 PATCH；同时保留 Decimal 字符串 JSON 契约。
+  - 领域类型不直接派生 `Deserialize`，避免入站 JSON 绕过 `normalize()`；后续 API adapter 应先反序列化 DTO 再进入领域模型。
+  - `symbol` 规范化新增 ASCII 校验，拒绝非 ASCII 标的代码。
   - 新增 `uuid` 与 `time` 作为领域模型 ID 和时间字段类型，未启用 SQLx 对应 feature。
 - 验证：
-  - `cargo test -p investment-plans` 通过：9 个领域与 Decimal 契约测试通过。
+  - `cargo test -p investment-plans` 通过：10 个领域与 Decimal 契约测试通过。
   - `cargo fmt --all -- --check` 通过。
   - `cargo check --workspace --locked` 通过。
   - `cargo test --workspace --locked` 通过。

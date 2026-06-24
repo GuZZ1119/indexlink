@@ -11,10 +11,11 @@
 //! 真实可交易、不计算任何本期买入金额或双桶资金分配。
 //!
 //! 金额统一使用 [`rust_decimal::Decimal`]。HTTP/JSON 边界必须以字符串编码金额，
-//! 避免 JavaScript Number 或 JSON 浮点转换造成精度损失。
+//! 避免 JavaScript Number 或 JSON 浮点转换造成精度损失。领域类型不直接实现
+//! `Deserialize`；入站 adapter 应先反序列化到 DTO，再调用 `normalize()` 进入领域模型。
 
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -22,7 +23,7 @@ const MAX_NAME_LEN: usize = 100;
 const MAX_SYMBOL_LEN: usize = 32;
 
 /// MVP 支持的投资计划周期。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleKind {
     /// 每月固定日期触发。
@@ -30,7 +31,7 @@ pub enum ScheduleKind {
 }
 
 /// 持久化后的投资计划。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InvestmentPlan {
     /// 计划 ID。
     pub id: Uuid,
@@ -59,7 +60,7 @@ pub struct InvestmentPlan {
 }
 
 /// 创建投资计划的领域输入。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CreateInvestmentPlan {
     /// 用户可读计划名称。
     pub name: String,
@@ -102,7 +103,7 @@ impl CreateInvestmentPlan {
 /// 更新投资计划的领域输入。
 ///
 /// 不包含 `symbol`、`currency` 或 `schedule_kind`；更换标的、币种或周期应创建新计划并停用旧计划。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct UpdateInvestmentPlan {
     /// 可选的新名称。
     pub name: Option<String>,
@@ -205,8 +206,12 @@ fn normalize_non_empty(
 }
 
 fn normalize_symbol(value: String) -> Result<String, PlanValidationError> {
-    normalize_non_empty(value, MAX_SYMBOL_LEN, PlanValidationError::InvalidSymbol)
-        .map(|symbol| symbol.to_ascii_uppercase())
+    let symbol = normalize_non_empty(value, MAX_SYMBOL_LEN, PlanValidationError::InvalidSymbol)?;
+    if symbol.is_ascii() {
+        Ok(symbol.to_ascii_uppercase())
+    } else {
+        Err(PlanValidationError::InvalidSymbol)
+    }
 }
 
 fn normalize_currency(value: String) -> Result<String, PlanValidationError> {
@@ -248,6 +253,7 @@ fn validate_amounts(base: Decimal, max: Decimal) -> Result<(), PlanValidationErr
 mod tests {
     use super::*;
     use rust_decimal::Decimal;
+    use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
 
     fn money(value: &str) -> Decimal {
@@ -335,6 +341,14 @@ mod tests {
             bad_currency.normalize(),
             Err(PlanValidationError::InvalidCurrency)
         );
+    }
+
+    #[test]
+    fn create_plan_rejects_non_ascii_symbol() {
+        let mut input = create_input();
+        input.symbol = "åapl".to_owned();
+
+        assert_eq!(input.normalize(), Err(PlanValidationError::InvalidSymbol));
     }
 
     #[test]
