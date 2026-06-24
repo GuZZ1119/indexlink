@@ -5,7 +5,8 @@
 use std::net::SocketAddr;
 
 use ai_client::{AiConfig, AiProvider, QwenClient};
-use axum::http::{HeaderMap, StatusCode};
+use axum::body::Body;
+use axum::http::{HeaderMap, Response, StatusCode};
 use axum::{routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -52,20 +53,32 @@ fn sentiment_response(value: f64) -> MockResponse {
     }
 }
 
+/// 构建 JSON 响应（统一使用 Response<Body> 以支持非 JSON 响应体测试）。
+fn json_response(status: StatusCode, value: f64) -> Response<Body> {
+    let body = serde_json::to_string(&sentiment_response(value)).unwrap();
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
 /// 启动本地 mock server，返回绑定的地址。
 async fn spawn_mock_server() -> SocketAddr {
     let app = Router::new().route(
         "/v1/chat/completions",
         post(
             |headers: HeaderMap, Json(body): Json<MockRequest>| async move {
-                // 验证 Authorization 头
+                // 验证 Authorization 头（必须包含非空 token）
                 let auth_valid = headers
                     .get("authorization")
                     .and_then(|v| v.to_str().ok())
-                    .map(|v| v.starts_with("Bearer "))
+                    .map(|v| {
+                        v.starts_with("Bearer ") && v.len() > "Bearer ".len()
+                    })
                     .unwrap_or(false);
                 if !auth_valid {
-                    return (StatusCode::UNAUTHORIZED, Json(sentiment_response(0.0)));
+                    return json_response(StatusCode::UNAUTHORIZED, 0.0);
                 }
 
                 // 验证请求包含必要字段
@@ -75,15 +88,43 @@ async fn spawn_mock_server() -> SocketAddr {
 
                 let user_content = &body.messages[1].content;
 
-                // 特殊关键词触发 HTTP 错误，用于测试客户端错误传播
+                // ── 以下关键词触发特定错误，用于测试客户端错误传播 ──
+
+                // HTTP 500 Internal Server Error
                 if user_content.contains("TRIGGER_500") {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(sentiment_response(0.0)),
-                    );
+                    return json_response(StatusCode::INTERNAL_SERVER_ERROR, 0.0);
                 }
 
-                // 根据用户输入的信号返回对应 sentiment
+                // 响应体不是合法 JSON
+                if user_content.contains("TRIGGER_INVALID_JSON") {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .body(Body::from("this is not valid json"))
+                        .unwrap();
+                }
+
+                // choices 数组为空
+                if user_content.contains("TRIGGER_EMPTY_CHOICES") {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"choices": []}"#))
+                        .unwrap();
+                }
+
+                // content 字段为空字符串
+                if user_content.contains("TRIGGER_EMPTY_CONTENT") {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"choices": [{"message": {"content": ""}}]}"#,
+                        ))
+                        .unwrap();
+                }
+
+                // ── 正常情绪分析 ──
+
                 let sentiment = if user_content.contains("大幅上涨")
                     || user_content.contains("利好")
                 {
@@ -94,7 +135,7 @@ async fn spawn_mock_server() -> SocketAddr {
                     0.0
                 };
 
-                (StatusCode::OK, Json(sentiment_response(sentiment)))
+                json_response(StatusCode::OK, sentiment)
             },
         ),
     );
@@ -229,4 +270,74 @@ async fn client_request_includes_bearer_auth() {
     );
     let sentiment = result.unwrap();
     assert!(sentiment.value().abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn client_returns_error_on_invalid_json_response() {
+    // call_api 第4步：serde_json::from_str 解析 ChatResponse 时，
+    // 响应体不是合法 JSON → InvalidJson 错误
+    let addr = spawn_mock_server().await;
+    let client = QwenClient::new(AiConfig {
+        base_url: format!("http://{addr}"),
+        api_key: "test-key".to_owned(),
+        model: "test-model".to_owned(),
+        ..Default::default()
+    });
+    let result = client.analyze("TRIGGER_INVALID_JSON").await;
+    assert!(
+        result.is_err(),
+        "非 JSON 响应体应返回 InvalidJson 错误"
+    );
+}
+
+#[tokio::test]
+async fn client_returns_error_on_empty_choices() {
+    // call_api 第5步：chat.choices.first() → None → EmptyResponse
+    let addr = spawn_mock_server().await;
+    let client = QwenClient::new(AiConfig {
+        base_url: format!("http://{addr}"),
+        api_key: "test-key".to_owned(),
+        model: "test-model".to_owned(),
+        ..Default::default()
+    });
+    let result = client.analyze("TRIGGER_EMPTY_CHOICES").await;
+    assert!(
+        result.is_err(),
+        "空 choices 数组应返回 EmptyResponse 错误"
+    );
+}
+
+#[tokio::test]
+async fn client_returns_error_on_empty_content() {
+    // call_api 第6步：content = "" → filter(!is_empty) → None → EmptyResponse
+    let addr = spawn_mock_server().await;
+    let client = QwenClient::new(AiConfig {
+        base_url: format!("http://{addr}"),
+        api_key: "test-key".to_owned(),
+        model: "test-model".to_owned(),
+        ..Default::default()
+    });
+    let result = client.analyze("TRIGGER_EMPTY_CONTENT").await;
+    assert!(
+        result.is_err(),
+        "空 content 应返回 EmptyResponse 错误"
+    );
+}
+
+#[tokio::test]
+async fn client_returns_error_on_auth_failure() {
+    // call_api 第2步：status.is_success() → false (401) → HttpStatus
+    // 空 api_key → Authorization: Bearer （token 为空）→ mock 校验不通过
+    let addr = spawn_mock_server().await;
+    let client = QwenClient::new(AiConfig {
+        base_url: format!("http://{addr}"),
+        api_key: String::new(),
+        model: "test-model".to_owned(),
+        ..Default::default()
+    });
+    let result = client.analyze("中性新闻").await;
+    assert!(
+        result.is_err(),
+        "空 api_key 导致认证失败，应返回 HttpStatus 401"
+    );
 }
