@@ -188,10 +188,18 @@ mod tests {
 
         // "强势反弹" 是强信号，不能因为包含 "反弹" 而返回弱信号
         let s = mock.analyze("市场强势反弹").await.unwrap();
-        assert!(s.value() > 0.5, "强势反弹应是强信号(0.6), got {}", s.value());
+        assert!(
+            s.value() > 0.5,
+            "强势反弹应是强信号(0.6), got {}",
+            s.value()
+        );
 
         // 纯弱信号不受影响
         let s = mock.analyze("市场温和反弹").await.unwrap();
-        assert!((0.2..0.5).contains(&s.value()), "反弹应是弱信号(0.3), got {}", s.value());
+        assert!(
+            (0.2..0.5).contains(&s.value()),
+            "反弹应是弱信号(0.3), got {}",
+            s.value()
+        );
     }
 }

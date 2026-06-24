@@ -80,7 +80,11 @@ fn redact_url_userinfo(url: &str) -> String {
     match url.find('@') {
         Some(at_pos) if url.contains("://") => {
             let scheme_end = url.find("://").unwrap();
-            format!("{}<redacted>@{}", &url[..=scheme_end + 2], &url[at_pos + 1..])
+            format!(
+                "{}<redacted>@{}",
+                &url[..=scheme_end + 2],
+                &url[at_pos + 1..]
+            )
         }
         _ => url.to_owned(),
     }
@@ -134,7 +138,10 @@ mod tests {
         };
         let display = format!("{config}");
         assert!(display.contains("evil.example.com"));
-        assert!(!display.contains("user:password"), "URL 凭据不应出现在 Display 中");
+        assert!(
+            !display.contains("user:password"),
+            "URL 凭据不应出现在 Display 中"
+        );
         assert!(display.contains("<redacted>"));
         assert!(!display.contains("sk-secret-key-12345"));
     }
@@ -149,7 +156,10 @@ mod tests {
         let debug = format!("{config:?}");
         // URL 凭据被 redact，但 host 可保留（Debug 是给开发者看的）
         assert!(debug.contains("evil.example.com"));
-        assert!(!debug.contains("user:password"), "URL 凭据不应出现在 Debug 中");
+        assert!(
+            !debug.contains("user:password"),
+            "URL 凭据不应出现在 Debug 中"
+        );
         assert!(debug.contains("<redacted>"), "应有 redact 标记");
         // api_key 同样被 redact
         assert!(!debug.contains("sk-abc"));

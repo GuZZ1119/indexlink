@@ -73,9 +73,7 @@ async fn spawn_mock_server() -> SocketAddr {
                 let auth_valid = headers
                     .get("authorization")
                     .and_then(|v| v.to_str().ok())
-                    .map(|v| {
-                        v.starts_with("Bearer ") && v.len() > "Bearer ".len()
-                    })
+                    .map(|v| v.starts_with("Bearer ") && v.len() > "Bearer ".len())
                     .unwrap_or(false);
                 if !auth_valid {
                     return json_response(StatusCode::UNAUTHORIZED, 0.0);
@@ -117,9 +115,7 @@ async fn spawn_mock_server() -> SocketAddr {
                     return Response::builder()
                         .status(StatusCode::OK)
                         .header("content-type", "application/json")
-                        .body(Body::from(
-                            r#"{"choices": [{"message": {"content": ""}}]}"#,
-                        ))
+                        .body(Body::from(r#"{"choices": [{"message": {"content": ""}}]}"#))
                         .unwrap();
                 }
 
@@ -284,10 +280,7 @@ async fn client_returns_error_on_invalid_json_response() {
         ..Default::default()
     });
     let result = client.analyze("TRIGGER_INVALID_JSON").await;
-    assert!(
-        result.is_err(),
-        "非 JSON 响应体应返回 InvalidJson 错误"
-    );
+    assert!(result.is_err(), "非 JSON 响应体应返回 InvalidJson 错误");
 }
 
 #[tokio::test]
@@ -301,10 +294,7 @@ async fn client_returns_error_on_empty_choices() {
         ..Default::default()
     });
     let result = client.analyze("TRIGGER_EMPTY_CHOICES").await;
-    assert!(
-        result.is_err(),
-        "空 choices 数组应返回 EmptyResponse 错误"
-    );
+    assert!(result.is_err(), "空 choices 数组应返回 EmptyResponse 错误");
 }
 
 #[tokio::test]
@@ -318,10 +308,7 @@ async fn client_returns_error_on_empty_content() {
         ..Default::default()
     });
     let result = client.analyze("TRIGGER_EMPTY_CONTENT").await;
-    assert!(
-        result.is_err(),
-        "空 content 应返回 EmptyResponse 错误"
-    );
+    assert!(result.is_err(), "空 content 应返回 EmptyResponse 错误");
 }
 
 #[tokio::test]
