@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### 2026-06-24 23:00 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：chore（workspace 注册 ai-client）。
+- 涉及文件：
+  - `Cargo.toml`（根 workspace 注册 + reqwest 依赖声明）
+  - `Cargo.lock`
+- 变更内容：
+  - 将 `ai-client` 加入 workspace members。
+  - 声明 `ai-client` workspace dependency。
+  - 声明 `reqwest` workspace dependency（`json` + `rustls-tls`）。
+- 验证：
+  - `cargo build --workspace` 通过。
+  - `cargo test --workspace` 全部通过。
+
+### 2026-06-24 (time not recorded)
+
+- 执行模型：DeepSeek-v4-pro。
+- 变更类型：功能实现（AI 语义感知层 10%）。
+- 涉及文件：
+  - `crates/ai-client/Cargo.toml`
+  - `crates/ai-client/src/lib.rs`
+  - `crates/ai-client/src/sentiment.rs`
+  - `crates/ai-client/src/error.rs`
+  - `crates/ai-client/src/provider.rs`
+  - `crates/ai-client/src/client.rs`
+  - `crates/ai-client/tests/sentiment.rs`
+  - `crates/ai-client/tests/provider.rs`
+  - `crates/ai-client/tests/client.rs`
+  - `Cargo.toml`（根 workspace 注册）
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新建 `ai-client` crate，实现 70/20/10 决策模型中 10% 的 AI 语义感知层。
+  - `Sentiment` newtype：`[-1.0, +1.0]` 有界情绪值，采用与 `Multiplier` 一致的 clamp 构造模式（NaN → 0、越界自动截断）。
+  - `AiProvider` trait（`async_trait`）：可替换的 LLM 后端抽象，遵循与 `ReadinessCheck` 相同的适配器模式。
+  - `QwenClient`：对接 OpenAI 兼容 API（默认 Qwen DashScope `/v1/chat/completions`），通过 System prompt 约束模型输出 `{"sentiment": <float>}`。
+  - 三级降级：HTTP 错误 → JSON 解析失败 → sentiment 值缺失，任一环节失败调用方以 `.unwrap_or(Sentiment::neutral())` 安全降级。
+  - `AiConfig` 自定义 Debug（api_key 显示 `<redacted>`），所有 `AiClientError` Display 不暴露密钥 / URL。
+  - 测试：Sentiment 单元测试、MockAiProvider trait 测试、本地 axum HTTP mock server 集成测试。
+- 验证：
+  - 待用户执行：`cargo check -p ai-client`、`cargo test -p ai-client`、`cargo clippy -p ai-client --all-targets -- -D warnings`、`cargo fmt --check`。
+  - 本地环境未安装 Rust 工具链，代码已通过结构审查。
+
 ### 2026-06-21 21:15 UTC+10
 
 - 执行模型：GPT-5.5。
