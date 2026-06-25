@@ -758,9 +758,14 @@ dependencies = [
 name = "indexlink-storage"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "investment-plans",
+ "rust_decimal",
  "sqlx",
  "thiserror",
+ "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

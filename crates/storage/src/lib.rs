@@ -1,13 +1,17 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! PostgreSQL 连接基础设施。
+//! PostgreSQL 连接与 repository adapter 基础设施。
 //!
-//! 此 crate 只负责连接池的建立与存活检查，不包含业务表或 repository。
+//! 此 crate 负责连接池的建立、存活检查，以及面向领域 crate 的 outbound adapter。
+
+mod investment_plans;
 
 use std::{str::FromStr, time::Duration};
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
+
+pub use investment_plans::PostgresInvestmentPlanRepository;
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
