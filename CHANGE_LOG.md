@@ -16,6 +16,7 @@
   - fake repository 支持更新字段、启停状态与 `updated_at` 变化。
   - 新增应用服务测试覆盖字段更新、最终金额上限校验和启停用例。
   - Review fix：将 update 最终金额组合校验移动到 repository 原子写入路径内，避免 service 层读写窗口。
+  - Review fix：补齐本 PR 新增 helper、fake repository 与测试函数文档注释，提高 docstring coverage。
 - 验证：
   - `cargo test -p investment-plans` 通过：17 个领域、Decimal 与应用服务契约测试通过。
   - `cargo fmt --all -- --check` 通过。
