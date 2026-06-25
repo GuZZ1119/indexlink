@@ -213,6 +213,9 @@ pub trait InvestmentPlanRepository: Send + Sync {
     async fn get(&self, id: Uuid) -> Result<InvestmentPlan, PlanRepositoryError>;
 
     /// 更新投资计划。
+    ///
+    /// 实现方必须在同一个原子写入路径中读取当前计划、合并已规范化的更新输入、
+    /// 校验最终金额组合，并写入结果。
     async fn update(
         &self,
         id: Uuid,
@@ -230,6 +233,9 @@ pub trait InvestmentPlanRepository: Send + Sync {
 /// Repository port 的安全错误。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PlanRepositoryError {
+    /// 输入未通过领域校验。
+    #[error(transparent)]
+    Validation(#[from] PlanValidationError),
     /// 计划不存在。
     #[error("investment plan not found")]
     NotFound,
@@ -274,21 +280,13 @@ impl InvestmentPlanService {
 
     /// 更新投资计划。
     ///
-    /// 当仅更新 `base_contribution` 或 `max_single_execution` 其中之一时，会读取当前计划
-    /// 并校验最终金额组合仍满足安全边界。
+    /// 先规范化输入；最终金额组合校验由 repository 在原子写入路径内完成。
     pub async fn update(
         &self,
         id: Uuid,
         input: UpdateInvestmentPlan,
     ) -> Result<InvestmentPlan, PlanApplicationError> {
         let input = input.normalize()?;
-        let current = self.repository.get(id).await?;
-        let base = input.base_contribution.unwrap_or(current.base_contribution);
-        let max = input
-            .max_single_execution
-            .unwrap_or(current.max_single_execution);
-        validate_amounts(base, max)?;
-
         self.repository.update(id, input).await.map_err(Into::into)
     }
 
@@ -322,6 +320,7 @@ pub enum PlanApplicationError {
 impl From<PlanRepositoryError> for PlanApplicationError {
     fn from(error: PlanRepositoryError) -> Self {
         match error {
+            PlanRepositoryError::Validation(error) => Self::Validation(error),
             PlanRepositoryError::NotFound => Self::NotFound,
             PlanRepositoryError::Unavailable => Self::Unavailable,
         }
@@ -487,6 +486,12 @@ mod tests {
             }
             let mut plans = self.plans.lock().unwrap();
             let plan = find_plan_mut(&mut plans, id)?;
+            let base = input.base_contribution.unwrap_or(plan.base_contribution);
+            let max = input
+                .max_single_execution
+                .unwrap_or(plan.max_single_execution);
+            validate_amounts(base, max)?;
+
             if let Some(name) = input.name {
                 plan.name = name;
             }
@@ -731,6 +736,10 @@ mod tests {
             Err(PlanApplicationError::Validation(
                 PlanValidationError::MaxBelowBaseContribution
             ))
+        );
+        assert_eq!(
+            service.get(created.id).await.unwrap().base_contribution,
+            money("1000.00")
         );
     }
 
