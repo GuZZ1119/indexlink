@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-06-26 22:42 UTC+10
+
+- 执行模型：Codex；变更类型：feat/test（Investment Plan API create/list/get）。
+- PR 范围：PR 7，仅新增 API DTO、create/list/get routes、safe error mapping 与 route tests；不实现 update/set active routes、Scheduler、Broker、Qwen、订单状态机、`ExecutionPlan` 或双桶逻辑。
+- 涉及文件：`Cargo.lock`、`crates/api/**`、`CHANGE_LOG.md`。
+- 变更内容：入站 JSON 先反序列化到 DTO 再转领域输入，避免 serde 直接构造领域类型；`ApiState` 持有 `InvestmentPlanService`，production 路径使用 storage adapter，测试路径使用 fake repository。
+- 验证：`cargo test -p indexlink-api --locked` 与完整 workspace fmt/check/test/clippy 均通过。
+
 ### 2026-06-26 16:43 UTC+10
 
 - 执行模型：Codex。
