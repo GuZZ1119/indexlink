@@ -346,4 +346,19 @@ fn quant_error_display_is_descriptive() {
         invalid_decay.to_string(),
         "decay alpha must be finite and in (0.0, 1.0], got 1.1"
     );
+
+    let invalid_threshold = QuantError::InvalidPercentileThreshold {
+        name: "overheated_above",
+        value: 1.5,
+    };
+    assert_eq!(
+        invalid_threshold.to_string(),
+        "overheated_above threshold must be finite and in [0.0, 1.0], got 1.5"
+    );
+
+    let not_implemented = QuantError::NotImplemented;
+    assert_eq!(
+        not_implemented.to_string(),
+        "quant engine API not yet implemented"
+    );
 }

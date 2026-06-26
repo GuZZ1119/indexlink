@@ -1,19 +1,57 @@
-// 覆盖 Quant Engine 第二层（20% 趋势）当前中性存根的契约。
+// 覆盖 Quant Engine 第二层（20% 趋势）的全量测试边界。
+//
+// 子模块分组：
+// - direction：过渡存根契约与整体方向性
+// - indicators：单指标隔离与审计字段
+// - regime：节奏体制（TrendRegime）
+// - errors：错误传播与边界输入
+// - config：配置不变量与默认配置契约
+//
+// CI 策略：`evaluate_trend` 未实现前，仅 `config` 与 stub 测试默认运行；
+// 其余 TDD 边界用 `trend_deferred_test!` 标记 `#[ignore]`。
+// 本地全量：`cargo test -p quant-engine --test trend -- --ignored`
 
 mod common;
 
-use common::NEUTRAL_PERCENTILE;
-use quant_engine::evaluate_trend_stub;
-
-#[test]
-fn trend_stub_returns_neutral_score() {
-    // 第二层（20% 趋势）当前为存根，按 readme 约定应始终返回中性 0.5，
-    // 使 Decision Engine 在趋势层接入前不会产生任何方向性偏移。
-    let signal = evaluate_trend_stub();
-    assert_eq!(
-        signal.score.value(),
-        NEUTRAL_PERCENTILE,
-        "趋势存根应返回中性 0.50，实际 {}",
-        signal.score
-    );
+/// 依赖 [`evaluate_trend`] 的 TDD 边界；默认 `#[ignore]`，避免 CI 在未实现行为测试失败。
+macro_rules! trend_deferred_test {
+    ($(#[$attr:meta])* fn $name:ident() $body:block) => {
+        #[ignore = "evaluate_trend 行为未实现；CI 仅跑 stub/config/NotImplemented。全量: cargo test -p quant-engine --test trend -- --ignored"]
+        $(#[$attr])*
+        #[test]
+        fn $name() $body
+    };
 }
+
+mod prelude {
+    pub use crate::common::{
+        falling_knife_trend_snapshot, make_history, neutral_trend_snapshot,
+        neutral_weighted_history, overheated_trend_snapshot, standard_history,
+        trend_balanced_test_config, trend_config_with_weights, trend_test_percentile_config,
+        CHEAP_SCORE_UPPER_BOUND, DEFAULT_HALF_LIFE_MONTHS, DEFAULT_MIN_HISTORY_LEN,
+        EXACT_FLOAT_TOLERANCE, EXPENSIVE_SCORE_LOWER_BOUND, MAX_PERCENTILE, MIN_PERCENTILE,
+        NEUTRAL_PERCENTILE, NEUTRAL_TOLERANCE, TREND_EQUAL_MA_WEIGHT, TREND_EQUAL_RSI_WEIGHT,
+        TREND_EQUAL_VIX_WEIGHT, TREND_FALLING_KNIFE_ABOVE, TREND_MA_ONLY_MA, TREND_MA_ONLY_RSI,
+        TREND_MA_ONLY_VIX, TREND_NEUTRAL_CURRENT, TREND_OVERHEATED_ABOVE, TREND_RSI_ONLY_MA,
+        TREND_RSI_ONLY_RSI, TREND_RSI_ONLY_VIX, TREND_TEST_HALF_LIFE, TREND_VIX_ONLY_MA,
+        TREND_VIX_ONLY_RSI, TREND_VIX_ONLY_VIX,
+    };
+
+    #[allow(deprecated)]
+    pub use quant_engine::evaluate_trend_stub;
+    pub use quant_engine::{
+        evaluate_trend, evaluate_trend_or_stub, weighted_percentile_of, EwPercentileConfig,
+        FundamentalConfig, QuantError, TrendConfig, TrendRegime, TrendSnapshot, TrendWeights,
+    };
+}
+
+#[path = "trend/config.rs"]
+mod config;
+#[path = "trend/direction.rs"]
+mod direction;
+#[path = "trend/errors.rs"]
+mod errors;
+#[path = "trend/indicators.rs"]
+mod indicators;
+#[path = "trend/regime.rs"]
+mod regime;
