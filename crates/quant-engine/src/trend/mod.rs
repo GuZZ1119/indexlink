@@ -74,7 +74,7 @@ pub struct TrendWeights {
 impl TrendWeights {
     /// 构造三指标子权重。
     ///
-    /// 所有参数须各自在 `[0.0, 1.0]` 且三者之和 ≈ 1.0（误差 < 1e-9），
+    /// 所有参数须各自在 `[0.0, 1.0]` 且三者之和 ≈ 1.0（误差 <= 1e-9），
     /// 否则返回 [`QuantError::InvalidWeight`]。
     ///
     /// # 错误
