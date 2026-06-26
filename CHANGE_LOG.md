@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 2026-06-26 16:43 UTC+10
+
+- 执行模型：Codex。
+- 变更类型：feat/db（Investment Plan PostgreSQL migration）。
+- PR 范围：PR 6，仅新增 `investment_plans` 表结构 migration；不接 API、不实现 Scheduler、Broker、Qwen、订单状态机、`ExecutionPlan` 或双桶逻辑。
+- 涉及文件：
+  - `migrations/20260626064200_create_investment_plans.sql`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `investment_plans` 表，字段与 `PostgresInvestmentPlanRepository` adapter 使用的 SQL 契约一致。
+  - 使用 `UUID` 主键、`NUMERIC(20, 8)` 金额、`TIMESTAMPTZ` 审计时间和 `monthly` MVP schedule。
+  - 增加数据库约束保护领域不变量：名称 trim、symbol 大写 ASCII、currency 三位大写、执行日 1..=28、金额为正且 `max_single_execution >= base_contribution`。
+  - 增加按创建顺序和 active schedule 的索引，支撑当前 list 顺序与后续 scheduler 查询。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+  - 静态检查确认 migration 包含 `investment_plans` 表、领域约束和索引。
+
 ### 2026-06-25 22:07 UTC+10
 
 - 执行模型：Codex。
