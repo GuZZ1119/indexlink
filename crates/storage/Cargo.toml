@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+investment-plans.workspace = true
+rust_decimal.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
+uuid.workspace = true

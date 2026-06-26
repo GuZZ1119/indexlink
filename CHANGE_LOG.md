@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-06-25 22:07 UTC+10
+
+- 执行模型：Codex。
+- 变更类型：feat/test（Investment Plan PostgreSQL repository adapter）。
+- PR 范围：PR 5，仅新增 storage crate 中的 PostgreSQL repository adapter；不新增 migration、不接 API、不实现 Scheduler、Broker、Qwen、订单状态机、`ExecutionPlan` 或双桶逻辑。
+- 涉及文件：
+  - `Cargo.lock`
+  - `Cargo.toml`
+  - `crates/storage/Cargo.toml`
+  - `crates/storage/src/lib.rs`
+  - `crates/storage/src/investment_plans.rs`
+- 变更内容：
+  - `indexlink-storage` 新增 `PostgresInvestmentPlanRepository`，实现 `InvestmentPlanRepository` port。
+  - 支持 create、list、get、update 与 set active；update 使用事务与 `FOR UPDATE` 在写入路径内合并并校验最终金额组合。
+  - SQL 边界使用 PostgreSQL cast 与文本/epoch 映射，避免扩大 sqlx feature 面。
+  - 新增 storage adapter 单元测试覆盖 SQLx 错误安全映射与最终金额组合校验。
+  - Review fix：为公开 re-export 的 `PostgresInvestmentPlanRepository` 补齐文档注释，满足 public API 文档要求。
+- 验证：
+  - `cargo test -p indexlink-storage --locked` 通过：8 个 storage 与 adapter 单元测试通过。
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-06-24 23:39 UTC+10
 
 - 执行模型：Codex。
