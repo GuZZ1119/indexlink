@@ -13,12 +13,14 @@
 pub mod fundamental;
 pub mod percentile;
 pub mod trend;
+pub mod weight;
 
 pub use fundamental::{
-    evaluate_fundamental, FundamentalConfig, FundamentalSignal, FundamentalSnapshot, Weight,
+    evaluate_fundamental, FundamentalConfig, FundamentalSignal, FundamentalSnapshot,
 };
 pub use percentile::{percentile_of, weighted_percentile_of, EwPercentileConfig};
 pub use trend::{evaluate_trend_stub, TrendSignal};
+pub use weight::Weight;
 
 // ─── 错误类型 ────────────────────────────────────────────────────────────────
 

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 2026-06-26 22:50 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：结构重构（模块边界调整）。
+- 涉及文件：
+  - `crates/quant-engine/src/weight.rs`
+  - `crates/quant-engine/src/fundamental/mod.rs`
+  - `crates/quant-engine/src/lib.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `weight` 模块承载跨层共享的 `Weight` newtype，避免趋势层未来复用权重类型时依赖 `fundamental` 模块。
+  - 从 `fundamental/mod.rs` 移除 `Weight` 实现，改为引用 crate 共享导出的 `Weight`。
+  - `lib.rs` 新增 `pub mod weight` 并从 `weight` 重新导出 `Weight`，保持外部 `quant_engine::Weight` API 路径不变。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine` 通过：20 个 fundamental 测试、25 个 percentile 测试、1 个 trend 测试、1 个 doc test 全部通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+  - `cargo llvm-cov -p quant-engine --summary-only --show-missing-lines` 通过：Region / Function / Line 覆盖率均为 100.00%，新增 `weight.rs` 行覆盖率 100.00%。
+  - `cargo test -p core-domain` 通过：13 个单元测试全部通过。
+
 ### 2026-06-26 16:43 UTC+10
 
 - 执行模型：Codex。
