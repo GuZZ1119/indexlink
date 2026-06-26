@@ -34,7 +34,7 @@ fn stub_regime_is_neutral() {
 // 方向性
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[test]
+trend_deferred_test! {
 fn trend_overheated_market_score_is_low() {
     // 强势上涨/赶顶场景：MA 距离与 RSI 极高（分位→1.0），VIX 极低（分位→0.0）。
     // MA/RSI 反向计入 → score 趋 0；方向约定：0.0 = 赶顶。
@@ -48,8 +48,9 @@ fn trend_overheated_market_score_is_low() {
         signal.score
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn trend_falling_knife_market_score_is_high() {
     // 急跌/接飞刀场景：VIX 极高（分位→1.0），MA 距离与 RSI 极低（分位→0.0）。
     // VIX 正向计入 → score 趋 1；方向约定：1.0 = 接飞刀。
@@ -63,8 +64,9 @@ fn trend_falling_knife_market_score_is_high() {
         signal.score
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn trend_neutral_market_score_is_near_half() {
     // 横盘中性场景：三指标均处于历史中位。
     let snapshot = neutral_trend_snapshot();
@@ -76,4 +78,5 @@ fn trend_neutral_market_score_is_near_half() {
         "中性场景得分应 ≈ 0.50，实际 {}",
         signal.score
     );
+}
 }

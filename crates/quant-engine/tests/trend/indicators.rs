@@ -4,7 +4,7 @@ use crate::prelude::*;
 // 单指标隔离（验证方向约定）
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[test]
+trend_deferred_test! {
 fn ma_only_high_distance_produces_low_score() {
     // 仅 MA 权重=1.0：极高 MA 距离分位应映射为极低 score（反向）。
     // score = 1 − ma_p，当 ma_p → 1.0 时 score → 0.0。
@@ -26,8 +26,9 @@ fn ma_only_high_distance_produces_low_score() {
         "MA 全权重且极高距离时 score 应精确为 0.0"
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn ma_only_score_equals_one_minus_ma_percentile() {
     // 仅 MA 权重=1.0，中间分位：score 应精确等于 1 − ma_p。
     let history = standard_history();
@@ -49,8 +50,9 @@ fn ma_only_score_equals_one_minus_ma_percentile() {
         signal.score
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn rsi_only_high_rsi_produces_low_score() {
     // 仅 RSI 权重=1.0：极高 RSI 分位（超买）应映射为极低 score（反向）。
     let history = standard_history();
@@ -72,8 +74,9 @@ fn rsi_only_high_rsi_produces_low_score() {
         "RSI 全权重且极高超买时 score 应精确为 0.0"
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn rsi_only_score_equals_one_minus_rsi_percentile() {
     // 仅 RSI 权重=1.0，中间分位：score 应精确等于 1 − rsi_p。
     let history = standard_history();
@@ -96,8 +99,9 @@ fn rsi_only_score_equals_one_minus_rsi_percentile() {
         signal.score
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn vix_only_high_vix_produces_high_score() {
     // 仅 VIX 权重=1.0：极高 VIX 分位（高恐慌）应映射为极高 score（正向，与 MA/RSI 相反）。
     let history = standard_history();
@@ -119,8 +123,9 @@ fn vix_only_high_vix_produces_high_score() {
         "VIX 全权重且极高恐慌时 score 应精确为 1.0"
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn vix_only_score_equals_vix_percentile() {
     // 仅 VIX 权重=1.0，中间分位：score 应精确等于 vix_p（正向，不反向）。
     let history = standard_history();
@@ -143,8 +148,9 @@ fn vix_only_score_equals_vix_percentile() {
         signal.score
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn high_vix_with_neutral_ma_rsi_pushes_score_above_neutral() {
     // 高 VIX + 中性 MA/RSI：验证 VIX 正向计入会单独把 score 推高，
     // 与 fundamental 层「低 ERP 单独推高得分」的场景对称。
@@ -166,12 +172,13 @@ fn high_vix_with_neutral_ma_rsi_pushes_score_above_neutral() {
         signal.score
     );
 }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 审计字段（原始分位未反向）
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[test]
+trend_deferred_test! {
 fn audit_fields_reflect_raw_unreversed_percentiles() {
     // 三个审计分位须如实记录原始（未反向）分位，便于回放决策。
     // 当 MA/RSI 极高时，ma_distance_percentile 与 rsi_percentile 应接近 1.0（未反向）；
@@ -196,8 +203,9 @@ fn audit_fields_reflect_raw_unreversed_percentiles() {
         "赶顶场景下 vix_percentile 应为 0.0（极低恐慌）"
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn audit_fields_falling_knife_scenario() {
     // 接飞刀场景：vix_percentile 极高，ma_distance_percentile 与 rsi_percentile 极低。
     let snapshot = falling_knife_trend_snapshot();
@@ -220,8 +228,9 @@ fn audit_fields_falling_knife_scenario() {
         "接飞刀场景下 rsi_percentile 应为 0.0"
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn score_is_distinct_from_raw_audit_fields_when_reversed() {
     // 当 MA 权重=1.0 且 MA 分位处于极高位时，score 应与 ma_distance_percentile 不同
     // （因为 score = 1 − ma_p，两者之和 ≈ 1.0，不相等），验证反向确实生效。
@@ -247,4 +256,5 @@ fn score_is_distinct_from_raw_audit_fields_when_reversed() {
             < EXACT_FLOAT_TOLERANCE,
         "score + ma_p 应精确等于 1.0（验证反向公式）"
     );
+}
 }

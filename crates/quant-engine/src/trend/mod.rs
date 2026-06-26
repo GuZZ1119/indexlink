@@ -14,6 +14,19 @@
 //!
 //! 最终 `score = 0.0` 对应强势上涨/赶顶风险，`1.0` 对应强势下跌/接飞刀风险。
 //!
+//! # 数据频率（默认契约）
+//!
+//! **默认按月度样本处理**，与第一层（70% 基本面）及 MVP 月度定投节奏对齐：
+//!
+//! - 历史序列中**每个元素 = 一个评估月**（通常为每月最后一个交易日的指标读数）。
+//! - [`TrendConfig::default`] 的半衰期 `H = 36` 表示 **36 个月**；`min_len = 60` 表示至少 **5 年**
+//!   月度有效样本。
+//! - 指标本身可在日频上计算（如 200 日均线、14 日 RSI），但接入层须在评估日**采样为月度序列**
+//!   后再传入本模块；勿将日频序列直接配合 `H = 36` 使用（那等价于仅 36 个交易日记忆）。
+//!
+//! 若接入层确需日频序列，须显式构造 [`EwPercentileConfig`]（例如 `H ≈ 756` 交易日、
+//! `min_len ≈ 252`），且不得使用 [`TrendConfig::default`]。
+//!
 //! # 注意
 //!
 //! 本模块为**纯函数，零 IO**；所有计算均无副作用，可用于实盘与回测。
@@ -32,10 +45,10 @@ const DEFAULT_MA_WEIGHT: f64 = 0.4;
 const DEFAULT_RSI_WEIGHT: f64 = 0.3;
 /// 默认 VIX 子权重（= 1 − MA − RSI）。
 const DEFAULT_VIX_WEIGHT: f64 = 0.3;
-/// 默认指数加权分位半衰期：与基本面层保持同源（36 个月月度数据）。
-const DEFAULT_HALF_LIFE: f64 = 36.0;
-/// 默认最少历史样本数（日频：约 1 年交易日）。
-const DEFAULT_MIN_HISTORY_LEN: usize = 252;
+/// 默认指数加权分位半衰期（月频）：36 个月；与基本面层同源。
+const DEFAULT_HALF_LIFE_MONTHS: f64 = 36.0;
+/// 默认最少历史样本数（月频）：5 年月度数据；与基本面层同源。
+const DEFAULT_MIN_HISTORY_LEN: usize = 60;
 /// 默认赶顶阈值：RSI/MA 分位高于此值视为过热。
 const DEFAULT_OVERHEATED_ABOVE: f64 = 0.90;
 /// 默认接飞刀阈值：VIX 分位高于此值视为高恐慌急跌。
@@ -101,9 +114,8 @@ pub struct TrendConfig {
     pub weights: TrendWeights,
     /// 指数加权历史分位配置（半衰期 + 最少样本数）。
     ///
-    /// 日频数据时单位为交易日；半衰期默认 36 个月 ≈ 756 交易日，
-    /// 此处存根为简化 default 使用月度单位同源值 36.0，
-    /// 实盘接入时应按数据频率重新配置。
+    /// **默认契约为月频**：`half_life` 单位为月，`min_len` 为月度样本数。
+    /// 与 [`TrendSnapshot`] 的历史序列频率须一致；详见模块级「数据频率」说明。
     pub percentile_config: EwPercentileConfig,
     /// RSI 或 MA200 原始分位超过此阈值时判定为「赶顶/过热」。
     ///
@@ -120,6 +132,7 @@ impl TrendConfig {
     /// # 错误
     ///
     /// - [`QuantError::InvalidWeight`]：权重非法或不和为 1。
+    /// - [`QuantError::InvalidPercentileThreshold`]：分位阈值非法。
     /// - 来自 [`EwPercentileConfig`] 构造的错误透传。
     pub fn new(
         weights: TrendWeights,
@@ -128,11 +141,13 @@ impl TrendConfig {
         falling_knife_above: f64,
     ) -> Result<Self, QuantError> {
         let overheated_above =
-            Percentile::new(overheated_above).ok_or(QuantError::InvalidWeight {
+            Percentile::new(overheated_above).ok_or(QuantError::InvalidPercentileThreshold {
+                name: "overheated_above",
                 value: overheated_above,
             })?;
         let falling_knife_above =
-            Percentile::new(falling_knife_above).ok_or(QuantError::InvalidWeight {
+            Percentile::new(falling_knife_above).ok_or(QuantError::InvalidPercentileThreshold {
+                name: "falling_knife_above",
                 value: falling_knife_above,
             })?;
 
@@ -150,7 +165,7 @@ impl Default for TrendConfig {
         Self {
             weights: TrendWeights::default(),
             percentile_config: EwPercentileConfig::from_half_life(
-                DEFAULT_HALF_LIFE,
+                DEFAULT_HALF_LIFE_MONTHS,
                 DEFAULT_MIN_HISTORY_LEN,
             )
             .expect("默认半衰期与最少历史长度有效"),
@@ -169,22 +184,28 @@ impl Default for TrendConfig {
 /// 各指标**自带历史序列**，与 [`crate::fundamental::FundamentalSnapshot`] 同构，
 /// 以便各指标独立使用不同长度的历史数据。
 ///
-/// 历史序列须按时间正序排列：索引 `0` 为最旧，末尾为最新。
+/// # 数据频率
+///
+/// **默认契约为月度样本**（见模块级说明）：索引 `0` 为最旧月，末尾为最近评估月。
+/// 接入层通常先在日频上计算指标，再于每月评估日取最后一个读数写入序列。
+/// 若传入日频序列，须配合日频 [`EwPercentileConfig`]，不可使用 [`TrendConfig::default`]。
+///
+/// 历史序列须按时间正序排列。
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrendSnapshot {
-    /// MA200 距离历史序列：`(price − ma200) / ma200`，正值表示价格在均线上方。
+    /// MA200 距离历史序列（月频采样）：`(price − ma200) / ma200`，正值表示价格在均线上方。
     pub ma_distance_history: Vec<f64>,
-    /// 当前 MA200 距离读数。
+    /// 当前 MA200 距离读数（最近评估月）。
     pub ma_distance_current: f64,
 
-    /// RSI 历史序列（通常为 14 日 RSI，取值范围 [0, 100]）。
+    /// RSI 历史序列（月频采样；指标可在日频上计算，取值范围 [0, 100]）。
     pub rsi_history: Vec<f64>,
-    /// 当前 RSI 读数。
+    /// 当前 RSI 读数（最近评估月）。
     pub rsi_current: f64,
 
-    /// VIX 历史序列（CBOE 波动率指数）。
+    /// VIX 历史序列（月频采样；CBOE 波动率指数）。
     pub vix_history: Vec<f64>,
-    /// 当前 VIX 读数。
+    /// 当前 VIX 读数（最近评估月）。
     pub vix_current: f64,
 }
 

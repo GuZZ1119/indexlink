@@ -47,6 +47,8 @@ pub enum QuantError {
     InvalidHalfLife { value: f64 },
     /// 指数加权分位的衰减系数无效（不在 `(0.0, 1.0]`）。
     InvalidDecay { alpha: f64 },
+    /// 分位阈值无效。
+    InvalidPercentileThreshold { name: &'static str, value: f64 },
 }
 
 impl std::fmt::Display for QuantError {
@@ -81,6 +83,12 @@ impl std::fmt::Display for QuantError {
                 write!(
                     f,
                     "decay alpha must be finite and in (0.0, 1.0], got {alpha}"
+                )
+            }
+            Self::InvalidPercentileThreshold { name, value } => {
+                write!(
+                    f,
+                    "{name} threshold must be finite and in [0.0, 1.0], got {value}"
                 )
             }
         }

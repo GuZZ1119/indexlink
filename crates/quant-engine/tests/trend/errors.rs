@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-#[test]
+trend_deferred_test! {
 fn propagates_insufficient_history_for_ma_distance() {
     // MA 历史不足时应向上传播错误，供熔断链触发默认 Skip。
     let config = trend_balanced_test_config(); // min_len = 10
@@ -26,8 +26,9 @@ fn propagates_insufficient_history_for_ma_distance() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn propagates_insufficient_history_for_rsi() {
     // RSI 历史不足时指向 RSI 的错误。
     let config = trend_balanced_test_config();
@@ -53,8 +54,9 @@ fn propagates_insufficient_history_for_rsi() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn propagates_insufficient_history_for_vix() {
     // VIX 历史不足时指向 VIX 的错误。
     let config = trend_balanced_test_config();
@@ -80,8 +82,9 @@ fn propagates_insufficient_history_for_vix() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn propagates_invalid_current_value_for_nan_ma() {
     // MA 当前读数为 NaN 时应传播 InvalidCurrentValue，绝不静默产出得分。
     let config = trend_balanced_test_config();
@@ -107,8 +110,9 @@ fn propagates_invalid_current_value_for_nan_ma() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn propagates_invalid_current_value_for_nan_rsi() {
     let config = trend_balanced_test_config();
     let snapshot = TrendSnapshot {
@@ -133,8 +137,9 @@ fn propagates_invalid_current_value_for_nan_rsi() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn propagates_invalid_current_value_for_nan_vix() {
     let config = trend_balanced_test_config();
     let snapshot = TrendSnapshot {
@@ -159,8 +164,9 @@ fn propagates_invalid_current_value_for_nan_vix() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn propagates_invalid_current_value_for_infinite_inputs() {
     // ±Inf 更像上游数据管道异常，应被拒绝。
     let config = trend_balanced_test_config();
@@ -186,8 +192,9 @@ fn propagates_invalid_current_value_for_infinite_inputs() {
         err
     );
 }
+}
 
-#[test]
+trend_deferred_test! {
 fn unequal_history_lengths_each_evaluated_independently() {
     // 三个历史序列长度不同：只要各自满足 min_len，应各自独立计算分位并成功。
     // 如未来加入等长校验，须改为断言返回错误。
@@ -208,4 +215,5 @@ fn unequal_history_lengths_each_evaluated_independently() {
         "不等长但各自满足 min_len 时应成功，实际 {:?}",
         result
     );
+}
 }

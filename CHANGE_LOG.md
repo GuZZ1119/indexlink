@@ -2,6 +2,112 @@
 
 ## Unreleased
 
+### 2026-06-27 00:05 UTC+10
+
+- 执行模型：Composer。
+- 变更类型：测试策略（趋势层 CI 隔离）。
+- 涉及文件：
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/trend/direction.rs`
+  - `crates/quant-engine/tests/trend/errors.rs`
+  - `crates/quant-engine/tests/trend/indicators.rs`
+  - `crates/quant-engine/tests/trend/regime.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `trend_deferred_test!` 宏，为依赖 `evaluate_trend` 的 TDD 边界测试统一标记 `#[ignore]`。
+  - CI 默认仅运行 `config` 不变量测试（17）与 stub 契约测试（2）；29 个行为测试保留供实现期本地验证。
+  - 本地全量命令：`cargo test -p quant-engine --test trend -- --ignored`。
+- 验证：
+  - `cargo test -p quant-engine --test trend` 通过：19 passed, 29 ignored。
+
+### 2026-06-26 23:55 UTC+10
+
+- 执行模型：Composer。
+- 变更类型：语义对齐（趋势层默认月频契约）。
+- 涉及文件：
+  - `crates/quant-engine/src/trend/mod.rs`
+  - `crates/quant-engine/tests/trend/config.rs`
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/common/mod.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 趋势层默认 `min_len` 由 252 改为 60（5 年月度），与基本面层同源。
+  - 模块/`TrendConfig`/`TrendSnapshot` 文档明确默认契约为**月度样本**；日频接入须显式配置 `EwPercentileConfig`。
+  - 常量重命名为 `DEFAULT_HALF_LIFE_MONTHS`，消除日频/月频注释矛盾。
+  - 新增测试 `default_percentile_config_matches_fundamental`，锁定趋势层与基本面层默认分位配置一致。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine --test trend config::default` 通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+
+### 2026-06-26 23:42 UTC+10
+
+- 执行模型：Composer。
+- 变更类型：测试补强（趋势权重和容忍边界）。
+- 涉及文件：
+  - `crates/quant-engine/tests/trend/config.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `accepts_weight_sum_exactly_one`：权重和 = 1.0 构造成功。
+  - 新增 `accepts_weight_sum_within_tolerance`：偏差在 `1e-9` 内构造成功。
+  - 新增 `rejects_weight_sum_beyond_tolerance`：偏差超过 `1e-9` 返回 `InvalidWeight`。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine --test trend config::accepts_weight_sum config::rejects_weight_sum` 通过。
+
+### 2026-06-26 23:35 UTC+10
+
+- 执行模型：Composer。
+- 变更类型：测试补强（趋势阈值非法）。
+- 涉及文件：
+  - `crates/quant-engine/tests/trend/config.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 `rejects_invalid_falling_knife_threshold` 改为与 `overheated_above` 对称的超界用例（`1.5`）。
+  - 新增 `rejects_nan_overheated_threshold`（`overheated_above = NaN`）。
+  - 新增 `rejects_negative_threshold`（`overheated_above = -0.1`）。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine --test trend config::rejects` 通过。
+
+### 2026-06-26 23:28 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：测试补强（趋势体制边界）。
+- 涉及文件：
+  - `crates/quant-engine/tests/trend/regime.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `strict_boundary_config` 测试辅助配置，将 `overheated_above` 与 `falling_knife_above` 设置为 `1.0`。
+  - 补充 `ma_p == overheated_above`、`rsi_p == overheated_above`、`vix_p == falling_knife_above` 三个边界测试，锁定趋势体制判定使用严格 `>`，等于阈值时保持 `Neutral`，避免误触发 TacticalDelay。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine --no-run` 通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+  - `cargo test -p core-domain` 通过：13 个单元测试全部通过。
+
+### 2026-06-26 23:23 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：错误语义修正（趋势阈值）。
+- 涉及文件：
+  - `crates/quant-engine/src/lib.rs`
+  - `crates/quant-engine/src/trend/mod.rs`
+  - `crates/quant-engine/tests/trend/config.rs`
+  - `crates/quant-engine/tests/percentile.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `QuantError::InvalidPercentileThreshold { name, value }`，用于表达分位阈值非法，避免 `overheated_above` / `falling_knife_above` 继续复用 `InvalidWeight`。
+  - `TrendConfig::new` 在构造 `overheated_above` 与 `falling_knife_above` 时返回带阈值名称的结构化错误。
+  - 更新趋势配置测试，并补充 `falling_knife_above` 非法阈值覆盖；更新错误 `Display` 测试锁定新分支文案。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine --no-run` 通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+  - `cargo test -p core-domain` 通过：13 个单元测试全部通过。
+  - `cargo test -p quant-engine --test percentile quant_error_display_is_descriptive` 通过。
+  - `cargo test -p quant-engine --test trend config::rejects_invalid` 通过：2 个趋势阈值错误测试全部通过。
+
 ### 2026-06-26 23:20 UTC+10
 
 - 执行模型：claude-sonnet-4-5。
