@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### 2026-06-26 23:20 UTC+10
+
+- 执行模型：claude-sonnet-4-5。
+- 变更类型：feat（趋势层存根 + 全量测试边界）。
+- 涉及文件：
+  - `crates/quant-engine/src/trend/mod.rs`
+  - `crates/quant-engine/src/lib.rs`
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/common/mod.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - **`trend/mod.rs`**：重写为完整存根（函数签名 + `todo!()`），新增以下公开类型与函数：
+    - `TrendWeights`：三指标子权重（MA/RSI/VIX），构造时校验各自在 `[0,1]` 且和 ≈ 1.0。
+    - `TrendConfig`：子权重 + 分位配置 + `overheated_above` / `falling_knife_above` 阈值，提供 `Default`。
+    - `TrendSnapshot`：三指标历史序列 + 当前读数的输入快照，与 `FundamentalSnapshot` 同构。
+    - `TrendRegime`：`Overheated / Neutral / FallingKnife` 离散节奏体制标签，供 Decision Engine 触发 `TacticalDelay`。
+    - `TrendSignal`：连续 `score`（`0.0=赶顶, 1.0=接飞刀`）+ 三个未反向审计分位 + `regime`。
+    - `evaluate_trend`：纯函数存根，`todo!()` 占位；文档注释完整描述合成公式与体制判定规则。
+    - `evaluate_trend_stub`：标 `#[deprecated]`，过渡期保留，`regime` 补充为 `Neutral`。
+  - **`lib.rs`**：导出全部新增趋势层公开 API；注释同步说明趋势层现状。
+  - **`tests/common/mod.rs`**：新增趋势层夹具常量（权重、阈值、历史长度）与 helper（`neutral/overheated/falling_knife_trend_snapshot`、`trend_balanced_test_config`、`trend_config_with_weights`）。
+  - **`tests/trend.rs`**：完整测试边界（38 个测试），覆盖：
+    - A 过渡存根契约（2 个）
+    - B 方向性（3 个）
+    - C 单指标隔离（6 个，验证 MA/RSI 反向、VIX 正向）
+    - D 审计字段未反向（3 个）
+    - E 节奏体制（5 个，含 FallingKnife 优先级）
+    - F 错误传播（7 个：NaN/Inf/历史不足/不等长）
+    - G 配置不变量（6 个：构造期校验）
+    - H 默认配置契约（4 个）
+- 验证：
+  - `cargo test -p quant-engine --no-run` 通过，零 warning，零 error。
+  - `cargo test -p quant-engine` 执行结果：fundamental 20 个 ✅ / percentile 25 个 ✅ / trend 存根/配置相关 12 个 ✅ / 待实现 26 个以 `todo!()` 正确 panic（符合存根阶段预期）；现有测试无退化。
+
+### 2026-06-26 23:14 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：测试结构整理（不改变测试语义）。
+- 涉及文件：
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/trend/direction.rs`
+  - `crates/quant-engine/tests/trend/indicators.rs`
+  - `crates/quant-engine/tests/trend/regime.rs`
+  - `crates/quant-engine/tests/trend/errors.rs`
+  - `crates/quant-engine/tests/trend/config.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 800+ 行的 `tests/trend.rs` 拆为单一集成测试入口 + `tests/trend/` 子模块目录，保留 Cargo test binary 为 `trend`。
+  - 按测试关注点拆分为 `direction`（存根契约/方向性）、`indicators`（单指标隔离/审计字段）、`regime`（节奏体制）、`errors`（错误传播）、`config`（配置不变量/默认契约）。
+  - 入口文件提供共享 prelude，减少各子模块重复导入，并让 CI 输出出现 `trend::direction::...` 等更精确的失败路径。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+  - `cargo test -p quant-engine --no-run` 通过，拆分后的 `trend` 集成测试模块编译成功。
+  - `cargo test -p quant-engine` 已运行并可编译新模块结构；当前因既有 `evaluate_trend` 仍为 `todo!()`，非配置/存根类趋势边界测试按预期失败，待趋势实现落地后转绿。
+
 ### 2026-06-26 22:50 UTC+10
 
 - 执行模型：GPT-5.5。
