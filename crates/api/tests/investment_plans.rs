@@ -180,7 +180,7 @@ async fn invalid_create_json_returns_safe_bad_request() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         response_json(response).await,
-        json!({"error": {"code": "bad_request", "message": "request failed validation"}})
+        json!({"error": {"code": "bad_request", "message": "invalid request"}})
     );
 }
 
@@ -243,6 +243,6 @@ async fn list_get_and_bad_id_routes_use_service() {
     assert_eq!(bad_id.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         response_json(bad_id).await,
-        json!({"error": {"code": "bad_request", "message": "request failed validation"}})
+        json!({"error": {"code": "bad_request", "message": "invalid request"}})
     );
 }

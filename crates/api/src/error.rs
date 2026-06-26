@@ -43,7 +43,7 @@ impl IntoResponse for ApiError {
                 ErrorEnvelope {
                     error: ErrorBody {
                         code: "bad_request",
-                        message: "request failed validation",
+                        message: "invalid request",
                         request_id: None,
                     },
                 },
