@@ -30,6 +30,41 @@ fn stub_regime_is_neutral() {
     );
 }
 
+#[test]
+fn evaluate_trend_returns_not_implemented() {
+    let snapshot = neutral_trend_snapshot();
+    let config = trend_balanced_test_config();
+    assert_eq!(
+        evaluate_trend(&snapshot, &config).unwrap_err(),
+        QuantError::NotImplemented,
+        "evaluate_trend 落地前应返回 NotImplemented"
+    );
+}
+
+#[test]
+#[allow(deprecated)]
+fn evaluate_trend_or_stub_falls_back_to_neutral_stub() {
+    let snapshot = neutral_trend_snapshot();
+    let config = trend_balanced_test_config();
+    let signal = evaluate_trend_or_stub(&snapshot, &config).expect("NotImplemented 应降级为 stub");
+    assert_eq!(signal.score.value(), NEUTRAL_PERCENTILE);
+    assert_eq!(signal.regime, TrendRegime::Neutral);
+}
+
+#[test]
+fn neutral_weighted_history_is_near_half_under_trend_config() {
+    let history = neutral_weighted_history();
+    let config = trend_test_percentile_config();
+
+    let percentile =
+        weighted_percentile_of("TREND_NEUTRAL", &history, TREND_NEUTRAL_CURRENT, &config).unwrap();
+    assert!(
+        (percentile.value() - NEUTRAL_PERCENTILE).abs() < NEUTRAL_TOLERANCE,
+        "加权中性历史应自然落在约 0.50，实际 {}",
+        percentile
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 方向性
 // ═══════════════════════════════════════════════════════════════════════════
@@ -68,7 +103,7 @@ fn trend_falling_knife_market_score_is_high() {
 
 trend_deferred_test! {
 fn trend_neutral_market_score_is_near_half() {
-    // 横盘中性场景：三指标均处于历史中位。
+    // 横盘中性场景：三指标在加权 ECDF 下均接近中性分位。
     let snapshot = neutral_trend_snapshot();
     let config = trend_balanced_test_config();
 

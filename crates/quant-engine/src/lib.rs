@@ -8,7 +8,8 @@
 //! # 当前实现范围（MVP 第一阶段）
 //!
 //! - **第一层（70% 基本面）**：Shiller CAPE 分位 + ERP 分位 → 综合基本面得分
-//! - **第二层（20% 趋势）**：MA200 距离 / RSI / VIX 加权分位 → 综合趋势得分 + 节奏体制（函数存根，待实现）
+//! - **第二层（20% 趋势）**：MA200 距离 / RSI / VIX 加权分位 → 综合趋势得分 + 节奏体制
+//!   （[`evaluate_trend`] 公开但未实现，返回 [`QuantError::NotImplemented`]；调用方应降级 stub 或 Skip）
 
 pub mod fundamental;
 pub mod percentile;
@@ -21,8 +22,8 @@ pub use fundamental::{
 pub use percentile::{percentile_of, weighted_percentile_of, EwPercentileConfig};
 #[allow(deprecated)]
 pub use trend::{
-    evaluate_trend, evaluate_trend_stub, TrendConfig, TrendRegime, TrendSignal, TrendSnapshot,
-    TrendWeights,
+    evaluate_trend, evaluate_trend_or_stub, evaluate_trend_stub, TrendConfig, TrendRegime,
+    TrendSignal, TrendSnapshot, TrendWeights,
 };
 pub use weight::Weight;
 
@@ -49,6 +50,11 @@ pub enum QuantError {
     InvalidDecay { alpha: f64 },
     /// 分位阈值无效。
     InvalidPercentileThreshold { name: &'static str, value: f64 },
+    /// 公开 API 尚未实现（非输入/配置错误）。
+    ///
+    /// 调用方须显式处理：降级为 [`evaluate_trend_stub`](crate::evaluate_trend_stub)，
+    /// 或由 Decision Engine 返回 [`core_domain::Action::Skip`]。
+    NotImplemented,
 }
 
 impl std::fmt::Display for QuantError {
@@ -90,6 +96,9 @@ impl std::fmt::Display for QuantError {
                     f,
                     "{name} threshold must be finite and in [0.0, 1.0], got {value}"
                 )
+            }
+            Self::NotImplemented => {
+                write!(f, "quant engine API not yet implemented")
             }
         }
     }

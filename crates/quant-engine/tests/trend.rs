@@ -13,10 +13,10 @@
 
 mod common;
 
-/// 依赖 [`evaluate_trend`] 的 TDD 边界；默认 `#[ignore]`，避免 CI 被 `todo!()` 卡住。
+/// 依赖 [`evaluate_trend`] 的 TDD 边界；默认 `#[ignore]`，避免 CI 在未实现行为测试失败。
 macro_rules! trend_deferred_test {
     ($(#[$attr:meta])* fn $name:ident() $body:block) => {
-        #[ignore = "evaluate_trend 未实现；CI 仅跑 stub/config。全量: cargo test -p quant-engine --test trend -- --ignored"]
+        #[ignore = "evaluate_trend 行为未实现；CI 仅跑 stub/config/NotImplemented。全量: cargo test -p quant-engine --test trend -- --ignored"]
         $(#[$attr])*
         #[test]
         fn $name() $body
@@ -26,21 +26,22 @@ macro_rules! trend_deferred_test {
 mod prelude {
     pub use crate::common::{
         falling_knife_trend_snapshot, make_history, neutral_trend_snapshot,
-        overheated_trend_snapshot, standard_history, trend_balanced_test_config,
-        trend_config_with_weights, trend_test_percentile_config, CHEAP_SCORE_UPPER_BOUND,
-        DEFAULT_HALF_LIFE_MONTHS, DEFAULT_MIN_HISTORY_LEN, EXACT_FLOAT_TOLERANCE,
-        EXPENSIVE_SCORE_LOWER_BOUND, MAX_PERCENTILE, MIN_PERCENTILE, NEUTRAL_PERCENTILE,
-        NEUTRAL_TOLERANCE, TREND_EQUAL_MA_WEIGHT, TREND_EQUAL_RSI_WEIGHT, TREND_EQUAL_VIX_WEIGHT,
-        TREND_FALLING_KNIFE_ABOVE, TREND_MA_ONLY_MA, TREND_MA_ONLY_RSI, TREND_MA_ONLY_VIX,
-        TREND_OVERHEATED_ABOVE, TREND_RSI_ONLY_MA, TREND_RSI_ONLY_RSI, TREND_RSI_ONLY_VIX,
-        TREND_TEST_HALF_LIFE, TREND_VIX_ONLY_MA, TREND_VIX_ONLY_RSI, TREND_VIX_ONLY_VIX,
+        neutral_weighted_history, overheated_trend_snapshot, standard_history,
+        trend_balanced_test_config, trend_config_with_weights, trend_test_percentile_config,
+        CHEAP_SCORE_UPPER_BOUND, DEFAULT_HALF_LIFE_MONTHS, DEFAULT_MIN_HISTORY_LEN,
+        EXACT_FLOAT_TOLERANCE, EXPENSIVE_SCORE_LOWER_BOUND, MAX_PERCENTILE, MIN_PERCENTILE,
+        NEUTRAL_PERCENTILE, NEUTRAL_TOLERANCE, TREND_EQUAL_MA_WEIGHT, TREND_EQUAL_RSI_WEIGHT,
+        TREND_EQUAL_VIX_WEIGHT, TREND_FALLING_KNIFE_ABOVE, TREND_MA_ONLY_MA, TREND_MA_ONLY_RSI,
+        TREND_MA_ONLY_VIX, TREND_NEUTRAL_CURRENT, TREND_OVERHEATED_ABOVE, TREND_RSI_ONLY_MA,
+        TREND_RSI_ONLY_RSI, TREND_RSI_ONLY_VIX, TREND_TEST_HALF_LIFE, TREND_VIX_ONLY_MA,
+        TREND_VIX_ONLY_RSI, TREND_VIX_ONLY_VIX,
     };
 
     #[allow(deprecated)]
     pub use quant_engine::evaluate_trend_stub;
     pub use quant_engine::{
-        evaluate_trend, EwPercentileConfig, FundamentalConfig, QuantError, TrendConfig,
-        TrendRegime, TrendSnapshot, TrendWeights,
+        evaluate_trend, evaluate_trend_or_stub, weighted_percentile_of, EwPercentileConfig,
+        FundamentalConfig, QuantError, TrendConfig, TrendRegime, TrendSnapshot, TrendWeights,
     };
 }
 

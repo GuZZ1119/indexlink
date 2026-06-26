@@ -154,13 +154,14 @@ trend_deferred_test! {
 fn high_vix_with_neutral_ma_rsi_pushes_score_above_neutral() {
     // 高 VIX + 中性 MA/RSI：验证 VIX 正向计入会单独把 score 推高，
     // 与 fundamental 层「低 ERP 单独推高得分」的场景对称。
-    let history = standard_history();
+    let neutral_history = neutral_weighted_history();
+    let vix_history = standard_history();
     let snapshot = TrendSnapshot {
-        ma_distance_history: history.clone(),
-        ma_distance_current: 50.5, // ≈ 中性
-        rsi_history: history.clone(),
-        rsi_current: 50.5,
-        vix_history: history.clone(),
+        ma_distance_history: neutral_history.clone(),
+        ma_distance_current: TREND_NEUTRAL_CURRENT,
+        rsi_history: neutral_history,
+        rsi_current: TREND_NEUTRAL_CURRENT,
+        vix_history,
         vix_current: 9999.0, // 极高 VIX
     };
     let config = trend_balanced_test_config();

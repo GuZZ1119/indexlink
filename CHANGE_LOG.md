@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### 2026-06-27 00:20 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：测试夹具语义修正（趋势中性历史）。
+- 涉及文件：
+  - `crates/quant-engine/tests/common/mod.rs`
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/trend/direction.rs`
+  - `crates/quant-engine/tests/trend/indicators.rs`
+  - `crates/quant-engine/tests/trend/regime.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `neutral_weighted_history` 与 `TREND_NEUTRAL_CURRENT`，用低/高样本成对交错构造加权 ECDF 语义上的趋势中性历史。
+  - `neutral_trend_snapshot` 改用加权中性历史，不再把 `standard_history() + 50.5` 标注为“历史中位 / 中性分位”。
+  - 新增 `neutral_weighted_history_is_near_half_under_trend_config`，直接验证趋势测试配置下加权分位接近 0.5。
+  - 同步修正趋势行为测试中的中性场景注释与夹具使用。
+- 验证：
+  - `cargo fmt -p quant-engine` 通过。
+  - `cargo test -p quant-engine --test trend direction::neutral_weighted_history -- --nocapture` 通过。
+  - `cargo test -p quant-engine --test trend direction::evaluate_trend -- --nocapture` 通过。
+  - `cargo test -p quant-engine` 通过：22 passed, 29 ignored。
+  - `cargo test -p core-domain` 通过：13 个单元测试全部通过。
+
+### 2026-06-27 00:15 UTC+10
+
+- 执行模型：Composer。
+- 变更类型：公开 API 语义（趋势层未实现显式化）。
+- 涉及文件：
+  - `crates/quant-engine/src/lib.rs`
+  - `crates/quant-engine/src/trend/mod.rs`
+  - `crates/quant-engine/tests/trend/direction.rs`
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/percentile.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `evaluate_trend` 由 `todo!()` 改为返回 `QuantError::NotImplemented`；文档说明调用方须降级 stub 或 Skip。
+  - 新增 `QuantError::NotImplemented` 及 Display 文案。
+  - 新增过渡期入口 `evaluate_trend_or_stub`：`NotImplemented` 时降级为中性 stub，其余错误原样传播。
+  - 新增测试 `evaluate_trend_returns_not_implemented`、`evaluate_trend_or_stub_falls_back_to_neutral_stub`。
+- 验证：
+  - `cargo test -p quant-engine` 通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-06-27 00:05 UTC+10
 
 - 执行模型：Composer。

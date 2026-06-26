@@ -98,7 +98,7 @@ fn regime_falling_knife_takes_precedence_over_overheated() {
 
 trend_deferred_test! {
 fn regime_is_neutral_when_all_indicators_are_moderate() {
-    // 三指标均处于历史中位，均不触发体制阈值，regime 应为 Neutral。
+    // 三指标在加权 ECDF 下均接近中性分位，不触发体制阈值。
     let snapshot = neutral_trend_snapshot();
     let config = trend_balanced_test_config();
 

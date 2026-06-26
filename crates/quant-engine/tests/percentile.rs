@@ -355,4 +355,10 @@ fn quant_error_display_is_descriptive() {
         invalid_threshold.to_string(),
         "overheated_above threshold must be finite and in [0.0, 1.0], got 1.5"
     );
+
+    let not_implemented = QuantError::NotImplemented;
+    assert_eq!(
+        not_implemented.to_string(),
+        "quant engine API not yet implemented"
+    );
 }

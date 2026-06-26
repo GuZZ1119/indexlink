@@ -130,16 +130,35 @@ pub fn trend_config_with_weights(ma: f64, rsi: f64, vix: f64) -> TrendConfig {
     .expect("趋势测试配置有效")
 }
 
-/// 构造标准中性趋势快照：三指标历史均匀分布，当前值处于历史中位。
+/// 趋势中性夹具使用的当前读数。
+pub const TREND_NEUTRAL_CURRENT: f64 = 50.0;
+
+/// 构造加权 ECDF 语义上的中性趋势历史。
+///
+/// 序列按 `[低于 current, 高于 current]` 成对交错排列；由于指数加权 ECDF 对越新的
+/// 样本赋予更高权重，成对交错比单调递增历史更接近“加权后约 0.5”的中性语义。
+pub fn neutral_weighted_history() -> Vec<f64> {
+    (0..STANDARD_HISTORY_LEN)
+        .map(|i| {
+            if i % 2 == 0 {
+                TREND_NEUTRAL_CURRENT - 1.0
+            } else {
+                TREND_NEUTRAL_CURRENT + 1.0
+            }
+        })
+        .collect()
+}
+
+/// 构造标准中性趋势快照：三指标历史在时间权重上围绕 current 成对交错。
 pub fn neutral_trend_snapshot() -> TrendSnapshot {
-    let history = standard_history(); // 1..=100
+    let history = neutral_weighted_history();
     TrendSnapshot {
         ma_distance_history: history.clone(),
-        ma_distance_current: 50.5, // 历史中位
+        ma_distance_current: TREND_NEUTRAL_CURRENT,
         rsi_history: history.clone(),
-        rsi_current: 50.5,
+        rsi_current: TREND_NEUTRAL_CURRENT,
         vix_history: history.clone(),
-        vix_current: 50.5,
+        vix_current: TREND_NEUTRAL_CURRENT,
     }
 }
 
