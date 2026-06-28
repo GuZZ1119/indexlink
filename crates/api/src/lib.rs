@@ -28,7 +28,7 @@ pub fn build_router(state: ApiState) -> Router {
 /// 空列表表示不添加跨域来源；调用方应在启动阶段完成来源值校验。
 pub fn build_router_with_cors(state: ApiState, allowed_origins: Vec<HeaderValue>) -> Router {
     let mut cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH])
         .allow_headers([CONTENT_TYPE]);
     if !allowed_origins.is_empty() {
         cors = cors.allow_origin(allowed_origins);

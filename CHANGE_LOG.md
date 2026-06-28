@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-06-28 18:36 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：投资计划 API（更新路由）。
+- 涉及文件：
+  - `crates/api/src/routes/investment_plans.rs`
+  - `crates/api/src/lib.rs`
+  - `crates/api/tests/investment_plans.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `PATCH /investment-plans/:id`，通过 API DTO 转换到领域 `UpdateInvestmentPlan`，不让 serde 直接构造领域类型。
+  - 路径 UUID 与 JSON 解析失败统一映射为 `ApiError::BadRequest`，保持 JSON error envelope。
+  - CORS 允许方法补充 `PATCH`。
+  - 新增路由测试覆盖字段合并、金额组合校验、非法 ID 与非法 JSON。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-api --locked` 通过。
+
 ### 2026-06-27 00:20 UTC+10
 
 - 执行模型：GPT-5.5。

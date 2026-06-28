@@ -63,13 +63,45 @@ impl InvestmentPlanRepository for FakeRepository {
             .ok_or(PlanRepositoryError::NotFound)
     }
 
-    /// Updates are outside this PR's route scope.
+    /// Merge and store updates through the repository port.
     async fn update(
         &self,
-        _id: Uuid,
-        _input: UpdateInvestmentPlan,
+        id: Uuid,
+        input: UpdateInvestmentPlan,
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
-        Err(PlanRepositoryError::Unavailable)
+        let mut plans = self.plans.lock().unwrap();
+        let plan = plans
+            .iter_mut()
+            .find(|plan| plan.id == id)
+            .ok_or(PlanRepositoryError::NotFound)?;
+        let base = input.base_contribution.unwrap_or(plan.base_contribution);
+        let max = input
+            .max_single_execution
+            .unwrap_or(plan.max_single_execution);
+        if max < base {
+            return Err(PlanRepositoryError::Validation(
+                investment_plans::PlanValidationError::MaxBelowBaseContribution,
+            ));
+        }
+
+        if let Some(name) = input.name {
+            plan.name = name;
+        }
+        if let Some(base_contribution) = input.base_contribution {
+            plan.base_contribution = base_contribution;
+        }
+        if let Some(schedule_day) = input.schedule_day {
+            plan.schedule_day = schedule_day;
+        }
+        if let Some(max_single_execution) = input.max_single_execution {
+            plan.max_single_execution = max_single_execution;
+        }
+        if let Some(is_active) = input.is_active {
+            plan.is_active = is_active;
+        }
+        plan.updated_at = OffsetDateTime::from_unix_timestamp(1_700_000_100).unwrap();
+
+        Ok(plan.clone())
     }
 
     /// Active-state toggles are outside this PR's route scope.
@@ -245,4 +277,104 @@ async fn list_get_and_bad_id_routes_use_service() {
         response_json(bad_id).await,
         json!({"error": {"code": "bad_request", "message": "invalid request"}})
     );
+}
+
+/// Verify update route uses DTO conversion and safe rejection mapping.
+#[tokio::test]
+async fn update_plan_merges_fields_and_maps_bad_input() {
+    let repository = Arc::new(FakeRepository::default());
+    let created = repository.create(create_input()).await.unwrap();
+    let app = app(repository);
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/investment-plans/{}", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "  Core ETF Plus  ",
+                        "base_contribution": "1200.00",
+                        "schedule_day": 20,
+                        "is_active": false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let body = response_json(updated).await;
+    assert_eq!(body["name"], json!("Core ETF Plus"));
+    assert_eq!(body["base_contribution"], json!("1200.00"));
+    assert_eq!(body["schedule_day"], json!(20));
+    assert_eq!(body["is_active"], json!(false));
+
+    let invalid_amounts = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/investment-plans/{}", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"max_single_execution": "1000.00"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_amounts.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(invalid_amounts).await,
+        json!({"error": {"code": "bad_request", "message": "invalid request"}})
+    );
+
+    let empty_patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/investment-plans/{}", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty_patch.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(empty_patch).await,
+        json!({"error": {"code": "bad_request", "message": "invalid request"}})
+    );
+
+    let bad_id = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/investment-plans/not-a-uuid")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({"name": "Core"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_id.status(), StatusCode::BAD_REQUEST);
+
+    let bad_json = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/investment-plans/{}", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({"base_contribution": 1200.0}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_json.status(), StatusCode::BAD_REQUEST);
 }
