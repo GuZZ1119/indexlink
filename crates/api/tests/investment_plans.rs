@@ -333,6 +333,24 @@ async fn update_plan_merges_fields_and_maps_bad_input() {
         json!({"error": {"code": "bad_request", "message": "invalid request"}})
     );
 
+    let empty_patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/investment-plans/{}", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty_patch.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(empty_patch).await,
+        json!({"error": {"code": "bad_request", "message": "invalid request"}})
+    );
+
     let bad_id = app
         .clone()
         .oneshot(
