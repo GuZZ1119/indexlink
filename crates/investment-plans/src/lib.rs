@@ -8,7 +8,7 @@
 //! Scheduler 与真实订单生成均属于外部 adapter 或后续阶段。
 //!
 //! MVP 假设：单用户系统、仅支持 monthly、无计划级 timezone、不验证 symbol 是否
-//! 真实可交易、不计算任何本期买入金额或双桶资金分配。
+//! 真实可交易、不生成任何真实订单；双桶资金分配会在后续阶段接入执行预览。
 //!
 //! 金额统一使用 [`rust_decimal::Decimal`]。HTTP/JSON 边界必须以字符串编码金额，
 //! 避免 JavaScript Number 或 JSON 浮点转换造成精度损失。领域类型不直接实现
@@ -24,6 +24,82 @@ use uuid::Uuid;
 
 const MAX_NAME_LEN: usize = 100;
 const MAX_SYMBOL_LEN: usize = 32;
+
+/// 投资计划双桶类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestmentBucket {
+    /// 常规定投桶，用于稳定执行计划基准金额。
+    Core,
+    /// 机会桶，用于后续根据市场条件增加投入。
+    Opportunity,
+}
+
+/// 双桶分配比例，范围为 0..=1。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct BucketAllocationRatio {
+    /// 已校验的比例值。
+    #[serde(with = "rust_decimal::serde::str")]
+    value: Decimal,
+}
+
+impl BucketAllocationRatio {
+    /// 创建已校验的双桶分配比例。
+    pub fn new(value: Decimal) -> Result<Self, PlanValidationError> {
+        if (Decimal::ZERO..=Decimal::ONE).contains(&value) {
+            Ok(Self { value })
+        } else {
+            Err(PlanValidationError::InvalidBucketAllocationRatio)
+        }
+    }
+
+    /// 返回已校验的比例值。
+    #[must_use]
+    pub fn value(self) -> Decimal {
+        self.value
+    }
+}
+
+/// 投资计划双桶分配配置。
+///
+/// 该配置只表达目标比例，不读取余额、不判断市场信号，也不生成本次分配金额。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TwoBucketAllocationConfig {
+    /// 常规定投桶目标比例。
+    core_ratio: BucketAllocationRatio,
+    /// 机会桶目标比例。
+    opportunity_ratio: BucketAllocationRatio,
+}
+
+impl TwoBucketAllocationConfig {
+    /// 创建已校验的双桶分配配置。
+    pub fn new(
+        core_ratio: BucketAllocationRatio,
+        opportunity_ratio: BucketAllocationRatio,
+    ) -> Result<Self, PlanValidationError> {
+        if core_ratio.value() + opportunity_ratio.value() == Decimal::ONE {
+            Ok(Self {
+                core_ratio,
+                opportunity_ratio,
+            })
+        } else {
+            Err(PlanValidationError::BucketAllocationRatiosMustSumToOne)
+        }
+    }
+
+    /// 返回常规定投桶目标比例。
+    #[must_use]
+    pub fn core_ratio(self) -> BucketAllocationRatio {
+        self.core_ratio
+    }
+
+    /// 返回机会桶目标比例。
+    #[must_use]
+    pub fn opportunity_ratio(self) -> BucketAllocationRatio {
+        self.opportunity_ratio
+    }
+}
 
 /// MVP 支持的投资计划周期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -247,6 +323,12 @@ pub enum PlanValidationError {
     /// 执行预览日期不在 1..=31。
     #[error("execution preview day must be between 1 and 31")]
     InvalidExecutionPreviewDay,
+    /// 双桶分配比例不在 0..=1。
+    #[error("bucket allocation ratio must be between 0 and 1")]
+    InvalidBucketAllocationRatio,
+    /// 双桶分配比例合计不等于 1。
+    #[error("bucket allocation ratios must sum to 1")]
+    BucketAllocationRatiosMustSumToOne,
     /// 金额不是正数。
     #[error("{field} must be greater than zero")]
     NonPositiveAmount {
@@ -686,6 +768,56 @@ mod tests {
         let result = serde_json::from_value::<DecimalContract>(json!({"amount": 1000.00}));
 
         assert!(result.is_err());
+    }
+
+    /// 验证双桶比例只能通过构造器进入有效范围。
+    #[test]
+    fn bucket_allocation_ratio_accepts_only_closed_unit_interval() {
+        assert_eq!(
+            BucketAllocationRatio::new(money("0")).unwrap().value(),
+            Decimal::ZERO
+        );
+        assert_eq!(
+            BucketAllocationRatio::new(money("1")).unwrap().value(),
+            Decimal::ONE
+        );
+        assert_eq!(
+            BucketAllocationRatio::new(money("-0.01")),
+            Err(PlanValidationError::InvalidBucketAllocationRatio)
+        );
+        assert_eq!(
+            BucketAllocationRatio::new(money("1.01")),
+            Err(PlanValidationError::InvalidBucketAllocationRatio)
+        );
+    }
+
+    /// 验证双桶配置要求常规定投桶和机会桶比例合计为 1。
+    #[test]
+    fn two_bucket_config_requires_ratios_to_sum_to_one() {
+        let config = TwoBucketAllocationConfig::new(
+            BucketAllocationRatio::new(money("0.80")).unwrap(),
+            BucketAllocationRatio::new(money("0.20")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(config.core_ratio().value(), money("0.80"));
+        assert_eq!(config.opportunity_ratio().value(), money("0.20"));
+        assert_eq!(
+            TwoBucketAllocationConfig::new(
+                BucketAllocationRatio::new(money("0.80")).unwrap(),
+                BucketAllocationRatio::new(money("0.30")).unwrap(),
+            ),
+            Err(PlanValidationError::BucketAllocationRatiosMustSumToOne)
+        );
+    }
+
+    /// 验证双桶比例以字符串形式序列化，避免浮点比例进入 JSON 边界。
+    #[test]
+    fn bucket_allocation_ratio_serializes_as_json_string() {
+        let encoded =
+            serde_json::to_value(BucketAllocationRatio::new(money("0.25")).unwrap()).unwrap();
+
+        assert_eq!(encoded, json!("0.25"));
     }
 
     /// 验证创建输入会裁剪文本并规范化 symbol/currency。

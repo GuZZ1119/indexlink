@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-07-02 00:24 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：投资计划双桶配置领域模型。
+- 涉及文件：
+  - `crates/investment-plans/src/lib.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `InvestmentBucket`、`BucketAllocationRatio` 与 `TwoBucketAllocationConfig`，先定义双桶配置边界，不接执行分配算法。
+  - `BucketAllocationRatio` 通过构造器保证比例位于 0..=1，避免公开字段绕过不变量。
+  - `TwoBucketAllocationConfig` 要求常规定投桶和机会桶比例合计为 1。
+  - 新增测试覆盖比例边界、比例求和和 JSON 字符串序列化契约。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-07-01 00:19 UTC+10
 
 - 执行模型：GPT-5。
