@@ -490,6 +490,17 @@ async fn preview_execution_maps_bad_input_to_safe_bad_request() {
         ),
         (
             format!("/investment-plans/{}/execution-preview", created.id),
+            json!({
+                "day_of_month": 15,
+                "bucket_allocation": {
+                    "core_ratio": "-0.20",
+                    "opportunity_ratio": "1.20"
+                }
+            })
+            .to_string(),
+        ),
+        (
+            format!("/investment-plans/{}/execution-preview", created.id),
             json!({"day_of_month": "15"}).to_string(),
         ),
     ] {
