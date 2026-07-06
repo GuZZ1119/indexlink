@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### 2026-07-06 23:00 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：AI 感知层新闻源接入与全链路管线。
+- 涉及文件：
+  - `Cargo.toml`
+  - `crates/ai-client/Cargo.toml`
+  - `crates/ai-client/src/lib.rs`
+  - `crates/ai-client/src/news.rs`
+  - `crates/ai-client/tests/news.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `NewsSource` trait 与 `RssNewsSource`，对接 CNBC US Top News RSS，拉取最近 24h 英文财经新闻。
+  - 新增 `NewsItem`、`NewsSourceError`、`PipelineError` 类型。
+  - 新增 `format_sentiment_prompt` 将新闻格式化为英文 AI prompt。
+  - 新增 `fetch_market_sentiment` 一站式函数：拉取 → 格式化 → AI 分析 → sentiment。
+  - `RssNewsSource` 支持 CDATA 解析、HTML 标签穿透、时间过滤（24h）、数量上限（10 条）、句末截断。
+  - `lib.rs` 公开导出 news 模块所有类型与函数。
+  - 新增 22 个单测覆盖解析/过滤/格式化/pipeline。
+  - 新增 2 个 `#[ignore]` 集成测试：`real_cnbc_with_mock`（仅需网络）与 `real_cnbc_with_qwen`（需网络 + `DASHSCOPE_API_KEY`）。
+- 待完成：
+  - 申请 DashScope API Key，设 `DASHSCOPE_API_KEY` 环境变量，运行 `real_cnbc_with_qwen` 验证真实 Qwen 输出。
+- 验证：
+  - `cargo test -p ai-client --locked` 通过：106 个测试（77 单测 + 18 集成测试 + 4 doc test + 7 集成测试），含 2 个 ignored。
+  - `cargo clippy -p ai-client --all-targets --all-features -- -D warnings` 通过。
+  - `cargo fmt -p ai-client --check` 通过。
+  - 手动跑过 `real_cnbc_with_mock`，验证 10 条真实 CNBC 新闻正常拉取、描述完整、prompt 格式正确。
+
 ### 2026-07-06 20:55 UTC+10
 
 - 执行模型：GPT-5。
