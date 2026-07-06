@@ -16,7 +16,7 @@
   - 执行预览 API 复用领域构造器校验 `day_of_month`、双桶比例范围与比例合计，不让 serde 直接构造领域类型。
   - due 且提供双桶配置时返回 `bucket_split`；waiting/inactive 不返回投入金额和双桶拆分。
   - 新增 route tests 覆盖 due 拆分、非执行日省略拆分，以及非法 UUID、非法日期、非法比例和非法 JSON 的统一 bad request。
-  - 新增 `docs/minimum_mvp.md`，记录最小 MVP 实现清单、演示流程、阿里云接入后待补任务和非 MVP 边界。
+  - 新增 `docs/minimum_mvp.md`，以全项目视角记录 70/20/10 最小 MVP 主线、已完成能力、20% trend/阿里云接入/decision engine/最终 summary 缺口、演示流程和非 MVP 边界。
 - 验证：
   - `cargo fmt --all -- --check` 通过。
   - `cargo check --workspace --locked` 通过。
