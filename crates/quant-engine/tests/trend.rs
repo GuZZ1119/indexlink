@@ -7,16 +7,13 @@
 // - errors：错误传播与边界输入
 // - config：配置不变量与默认配置契约
 //
-// CI 策略：`evaluate_trend` 未实现前，仅 `config` 与 stub 测试默认运行；
-// 其余 TDD 边界用 `trend_deferred_test!` 标记 `#[ignore]`。
-// 本地全量：`cargo test -p quant-engine --test trend -- --ignored`
+// CI 策略：`evaluate_trend` 已实现，趋势层行为测试默认运行。
 
 mod common;
 
-/// 依赖 [`evaluate_trend`] 的 TDD 边界；默认 `#[ignore]`，避免 CI 在未实现行为测试失败。
+/// 依赖 [`evaluate_trend`] 的趋势层行为测试。
 macro_rules! trend_deferred_test {
     ($(#[$attr:meta])* fn $name:ident() $body:block) => {
-        #[ignore = "evaluate_trend 行为未实现；CI 仅跑 stub/config/NotImplemented。全量: cargo test -p quant-engine --test trend -- --ignored"]
         $(#[$attr])*
         #[test]
         fn $name() $body

@@ -9,7 +9,7 @@
 //!
 //! - **第一层（70% 基本面）**：Shiller CAPE 分位 + ERP 分位 → 综合基本面得分
 //! - **第二层（20% 趋势）**：MA200 距离 / RSI / VIX 加权分位 → 综合趋势得分 + 节奏体制
-//!   （[`evaluate_trend`] 公开但未实现，返回 [`QuantError::NotImplemented`]；调用方应降级 stub 或 Skip）
+//!   （[`evaluate_trend`] 已实现；过渡期 [`evaluate_trend_or_stub`] 仍保留兼容入口）
 
 pub mod fundamental;
 pub mod percentile;

@@ -33,8 +33,6 @@
 
 use core_domain::Percentile;
 
-// weighted_percentile_of 将在 evaluate_trend 实现时使用；存根阶段暂时抑制警告。
-#[allow(unused_imports)]
 use crate::{weighted_percentile_of, EwPercentileConfig, QuantError, Weight};
 
 // ─── 配置常量 ────────────────────────────────────────────────────────────────
@@ -259,17 +257,7 @@ pub struct TrendSignal {
 
 /// 计算第二层（20% 趋势）综合得分与节奏体制。纯函数，无 IO。
 ///
-/// # 实现状态
-///
-/// **当前尚未实现**，始终返回 [`QuantError::NotImplemented`]。
-/// 调用方（Decision Engine）须显式处理，不可 `unwrap` 或忽略：
-///
-/// - **降级（推荐过渡期）**：改用 [`evaluate_trend_or_stub`] 或手动匹配
-///   `NotImplemented` 后调用 [`evaluate_trend_stub`]，20% 层保持中性、不触发 [`TrendRegime`] 偏移；
-/// - **Skip**：若趋势输入不可用或不允许降级，整条定投管线返回
-///   [`core_domain::Action::Skip`]（由上层决策，非本函数职责）。
-///
-/// # 合成逻辑（落地后）
+/// # 合成逻辑
 ///
 /// ```text
 /// ma_p  = weighted_percentile_of(ma_distance_history, ma_distance_current)
@@ -292,21 +280,72 @@ pub struct TrendSignal {
 ///
 /// # 错误
 ///
-/// - [`QuantError::NotImplemented`]：**当前唯一返回值**（实现完成前）。
-/// - [`QuantError::InsufficientHistory`]：任一指标有效样本数 < `min_len`（实现后）。
-/// - [`QuantError::InvalidCurrentValue`]：任一 `current` 非有限数（实现后）。
+/// - [`QuantError::InsufficientHistory`]：任一指标有效样本数 < `min_len`。
+/// - [`QuantError::InvalidCurrentValue`]：任一 `current` 非有限数。
 pub fn evaluate_trend(
     snapshot: &TrendSnapshot,
     config: &TrendConfig,
 ) -> Result<TrendSignal, QuantError> {
-    let _ = (snapshot, config);
-    Err(QuantError::NotImplemented)
+    let ma_distance_percentile = weighted_percentile_of(
+        "MA_DISTANCE",
+        &snapshot.ma_distance_history,
+        snapshot.ma_distance_current,
+        &config.percentile_config,
+    )?;
+    let rsi_percentile = weighted_percentile_of(
+        "RSI",
+        &snapshot.rsi_history,
+        snapshot.rsi_current,
+        &config.percentile_config,
+    )?;
+    let vix_percentile = weighted_percentile_of(
+        "VIX",
+        &snapshot.vix_history,
+        snapshot.vix_current,
+        &config.percentile_config,
+    )?;
+
+    let composite = config.weights.ma_weight.value() * ma_distance_percentile.invert().value()
+        + config.weights.rsi_weight.value() * rsi_percentile.invert().value()
+        + config.weights.vix_weight.value() * vix_percentile.value();
+    let score = Percentile::new(composite).expect("趋势加权平均结果必然在 [0.0, 1.0]");
+    let regime = classify_regime(
+        ma_distance_percentile,
+        rsi_percentile,
+        vix_percentile,
+        config,
+    );
+
+    Ok(TrendSignal {
+        score,
+        ma_distance_percentile,
+        rsi_percentile,
+        vix_percentile,
+        regime,
+    })
+}
+
+fn classify_regime(
+    ma_distance_percentile: Percentile,
+    rsi_percentile: Percentile,
+    vix_percentile: Percentile,
+    config: &TrendConfig,
+) -> TrendRegime {
+    if vix_percentile.value() > config.falling_knife_above.value() {
+        TrendRegime::FallingKnife
+    } else if ma_distance_percentile.value() > config.overheated_above.value()
+        || rsi_percentile.value() > config.overheated_above.value()
+    {
+        TrendRegime::Overheated
+    } else {
+        TrendRegime::Neutral
+    }
 }
 
 /// 调用 [`evaluate_trend`]，[`QuantError::NotImplemented`] 时降级为 [`evaluate_trend_stub`]。
 ///
-/// Decision Engine 在趋势层落地前的推荐入口：数据/配置错误仍向上传播，
-/// 仅「尚未实现」时使用中性 stub，避免 panic 且保持 20% 层无方向偏移。
+/// 此函数是过渡兼容入口：当前 [`evaluate_trend`] 已实现，正常情况下直接返回真实趋势信号；
+/// 若未来某个替代实现临时返回 [`QuantError::NotImplemented`]，这里仍会降级为中性 stub。
 ///
 /// # 错误
 ///

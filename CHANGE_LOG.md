@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### 2026-07-07 00:37 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：20% 趋势层真实实现与全项目 MVP 文档补充。
+- 涉及文件：
+  - `crates/quant-engine/src/lib.rs`
+  - `crates/quant-engine/src/trend/mod.rs`
+  - `crates/quant-engine/tests/trend.rs`
+  - `crates/quant-engine/tests/trend/direction.rs`
+  - `crates/quant-engine/tests/DEFERRED_TESTS.md`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `evaluate_trend` 从 `NotImplemented` 升级为真实趋势计算：MA200 distance 与 RSI 原始分位反向计入，VIX 原始分位正向计入。
+  - 新增趋势体制判定：`FallingKnife` 优先于 `Overheated`，否则为 `Neutral`。
+  - 保留 `evaluate_trend_or_stub` 和 `evaluate_trend_stub` 作为兼容入口，但默认测试已覆盖真实 trend 行为。
+  - 打开既有 trend 行为测试，不再让核心 20% trend TDD 边界保持 ignored。
+  - 更新 deferred 测试说明：剩余场景主要阻塞在 Decision Engine，而不是 trend stub。
+  - 更新 `docs/minimum_mvp.md`：标记 20% trend 已可复用，并补充演示级最小前端属于全项目 MVP。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p quant-engine --locked` 通过。
+  - `cargo clippy -p quant-engine --all-targets --all-features -- -D warnings` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-07-07 00:09 UTC+10
 
 - 执行模型：GPT-5。

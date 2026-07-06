@@ -31,23 +31,23 @@ fn stub_regime_is_neutral() {
 }
 
 #[test]
-fn evaluate_trend_returns_not_implemented() {
+fn evaluate_trend_returns_real_neutral_signal() {
     let snapshot = neutral_trend_snapshot();
     let config = trend_balanced_test_config();
-    assert_eq!(
-        evaluate_trend(&snapshot, &config).unwrap_err(),
-        QuantError::NotImplemented,
-        "evaluate_trend 落地前应返回 NotImplemented"
-    );
+    let signal = evaluate_trend(&snapshot, &config).unwrap();
+
+    assert!((signal.score.value() - NEUTRAL_PERCENTILE).abs() < NEUTRAL_TOLERANCE);
+    assert_eq!(signal.regime, TrendRegime::Neutral);
 }
 
 #[test]
 #[allow(deprecated)]
-fn evaluate_trend_or_stub_falls_back_to_neutral_stub() {
+fn evaluate_trend_or_stub_returns_real_signal_after_implementation() {
     let snapshot = neutral_trend_snapshot();
     let config = trend_balanced_test_config();
-    let signal = evaluate_trend_or_stub(&snapshot, &config).expect("NotImplemented 应降级为 stub");
-    assert_eq!(signal.score.value(), NEUTRAL_PERCENTILE);
+    let signal = evaluate_trend_or_stub(&snapshot, &config).expect("真实趋势信号应成功返回");
+
+    assert!((signal.score.value() - NEUTRAL_PERCENTILE).abs() < NEUTRAL_TOLERANCE);
     assert_eq!(signal.regime, TrendRegime::Neutral);
 }
 
