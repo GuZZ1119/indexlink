@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### 2026-07-06 23:00 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：AI 感知层新闻源接入与全链路管线。
+- 涉及文件：
+  - `Cargo.toml`
+  - `crates/ai-client/Cargo.toml`
+  - `crates/ai-client/src/lib.rs`
+  - `crates/ai-client/src/news.rs`
+  - `crates/ai-client/tests/news.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `NewsSource` trait 与 `RssNewsSource`，对接 CNBC US Top News RSS，拉取最近 24h 英文财经新闻。
+  - 新增 `NewsItem`、`NewsSourceError`、`PipelineError` 类型。
+  - 新增 `format_sentiment_prompt` 将新闻格式化为英文 AI prompt。
+  - 新增 `fetch_market_sentiment` 一站式函数：拉取 → 格式化 → AI 分析 → sentiment。
+  - `RssNewsSource` 支持 CDATA 解析、HTML 标签穿透、时间过滤（24h）、数量上限（10 条）、句末截断。
+  - `lib.rs` 公开导出 news 模块所有类型与函数。
+  - 新增 22 个单测覆盖解析/过滤/格式化/pipeline。
+  - 新增 2 个 `#[ignore]` 集成测试：`real_cnbc_with_mock`（仅需网络）与 `real_cnbc_with_qwen`（需网络 + `DASHSCOPE_API_KEY`）。
+- 待完成：
+  - 申请 DashScope API Key，设 `DASHSCOPE_API_KEY` 环境变量，运行 `real_cnbc_with_qwen` 验证真实 Qwen 输出。
+- 验证：
+  - `cargo test -p ai-client --locked` 通过：106 个测试（77 单测 + 18 集成测试 + 4 doc test + 7 集成测试），含 2 个 ignored。
+  - `cargo clippy -p ai-client --all-targets --all-features -- -D warnings` 通过。
+  - `cargo fmt -p ai-client --check` 通过。
+  - 手动跑过 `real_cnbc_with_mock`，验证 10 条真实 CNBC 新闻正常拉取、描述完整、prompt 格式正确。
+
+### 2026-07-06 23:45 UTC+10
+
+- 执行模型：Claude。
+- 变更类型：fix（AI 感知层 code review 修复）。
+- 涉及文件：
+  - `crates/ai-client/src/news.rs`
+  - `crates/ai-client/tests/news.rs`
+- 变更内容：
+  - `RssNewsSource::new` / `with_config` 改用 `reqwest::Client::builder().timeout(DEFAULT_HTTP_TIMEOUT)`（30 秒），避免 HTTP 请求无超时挂起。
+  - `parse_items` 将逐片段 `trim()` 改为条目解析完成后统一起 trim，修复内联 HTML 标签导致词间空格丢失（如 `as<b>investors</b> cheered` → `asinvestors cheered`）。
+  - `filter_and_convert` 在 `truncate` 前先 `sort_by_key(|item| Reverse(item.pub_date))`，确保保留最新 N 条，满足 trait 文档「按时间降序」契约。
+  - `truncate_at_sentence` 改用 `char_indices().nth(max_chars)` 定位字符边界，修复 `floor_char_boundary` 对多字节字符（中文）的字节/字符语义不一致。
+  - 集成测试 `real_cnbc_with_mock` / `real_cnbc_with_qwen` 将 `fetch_market_sentiment` 从重复两次调用改为一次调用复用结果，避免重复网络/API 计费。
+- 验证：
+  - `cargo test -p ai-client --locked` 22 个 news 单测通过。
+  - `cargo clippy -p ai-client --all-targets --all-features -- -D warnings` 通过。
+  - 手动跑过 `real_cnbc_with_mock`，10 条真实 CNBC 新闻正常拉取，管道全链路通过。
+
 ### 2026-07-06 20:55 UTC+10
 
 - 执行模型：GPT-5。

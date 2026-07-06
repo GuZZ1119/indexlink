@@ -39,11 +39,16 @@
 mod client;
 mod error;
 mod mock;
+pub mod news;
 mod provider;
 mod sentiment;
 
 pub use client::QwenClient;
 pub use error::AiClientError;
 pub use mock::MockAiProvider;
+pub use news::{
+    fetch_market_sentiment, format_sentiment_prompt, NewsItem, NewsSource, NewsSourceError,
+    PipelineError, RssNewsSource, CNBC_TOP_NEWS_RSS,
+};
 pub use provider::{AiConfig, AiProvider};
 pub use sentiment::{Sentiment, SentimentError};
