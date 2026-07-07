@@ -406,6 +406,65 @@ pub trait BrokerClient: Send + Sync {
     ) -> Result<BrokerOrderAck, BrokerError>;
 }
 
+/// OpenD order gateway implemented by a TCP or SDK transport.
+#[async_trait]
+pub trait OpenDOrderGateway: Send + Sync {
+    /// Submit one paper-trading order through OpenD.
+    async fn submit_paper_order(
+        &self,
+        config: &OpenDConnectionConfig,
+        request: &BrokerOrderRequest,
+    ) -> Result<BrokerOrderAck, BrokerError>;
+}
+
+/// Paper-trading broker adapter for Futu/Moomoo OpenD.
+#[derive(Debug)]
+pub struct OpenDPaperBroker<G> {
+    config: OpenDConnectionConfig,
+    gateway: G,
+}
+
+impl<G> OpenDPaperBroker<G> {
+    /// Build a paper-only OpenD broker adapter.
+    pub fn new(config: OpenDConnectionConfig, gateway: G) -> Result<Self, BrokerError> {
+        if config.environment() != BrokerEnvironment::Paper || config.live_trading_enabled() {
+            return Err(BrokerError::PaperTradingRequired {
+                configured: config.environment(),
+            });
+        }
+
+        Ok(Self { config, gateway })
+    }
+
+    /// Return validated OpenD connection settings.
+    #[must_use]
+    pub fn config(&self) -> &OpenDConnectionConfig {
+        &self.config
+    }
+
+    /// Return the underlying OpenD gateway transport.
+    #[must_use]
+    pub fn gateway(&self) -> &G {
+        &self.gateway
+    }
+}
+
+#[async_trait]
+impl<G> BrokerClient for OpenDPaperBroker<G>
+where
+    G: OpenDOrderGateway,
+{
+    async fn submit_order(
+        &self,
+        request: BrokerOrderRequest,
+    ) -> Result<BrokerOrderAck, BrokerError> {
+        self.config.validate_order_environment(&request)?;
+        self.gateway
+            .submit_paper_order(&self.config, &request)
+            .await
+    }
+}
+
 /// Safe broker implementation for demos and tests.
 #[derive(Debug, Default)]
 pub struct MockBroker {
@@ -519,6 +578,12 @@ pub enum BrokerError {
         /// Requested order environment.
         requested: BrokerEnvironment,
     },
+    /// OpenD paper adapter was created with a non-paper environment.
+    #[error("opend paper adapter requires Paper environment, got {configured:?}")]
+    PaperTradingRequired {
+        /// Configured adapter environment.
+        configured: BrokerEnvironment,
+    },
     /// Broker adapter or gateway is unavailable.
     #[error("broker is unavailable")]
     Unavailable,
@@ -596,6 +661,51 @@ fn normalize_printable_ascii(
 mod tests {
     use super::*;
 
+    #[derive(Debug, Default)]
+    struct FakeOpenDGateway {
+        calls: Mutex<Vec<String>>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl OpenDOrderGateway for FakeOpenDGateway {
+        async fn submit_paper_order(
+            &self,
+            config: &OpenDConnectionConfig,
+            request: &BrokerOrderRequest,
+        ) -> Result<BrokerOrderAck, BrokerError> {
+            if self.fail {
+                return Err(BrokerError::Unavailable);
+            }
+
+            self.calls.lock().unwrap().push(format!(
+                "{:?}:{}:{}",
+                config.provider(),
+                config.host(),
+                request.idempotency_key()
+            ));
+            BrokerOrderAck::new(
+                format!("OPEND-PAPER-{}", request.idempotency_key()),
+                request.environment(),
+                BrokerOrderStatus::Accepted,
+            )
+            .map_err(Into::into)
+        }
+    }
+
+    impl FakeOpenDGateway {
+        fn failing() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                fail: true,
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
     /// Parse decimal fixtures without floating-point literals.
     fn money(value: &str) -> Decimal {
         value.parse().unwrap()
@@ -611,6 +721,115 @@ mod tests {
             BrokerEnvironment::Paper,
         )
         .unwrap()
+    }
+
+    /// Verify OpenD paper adapter submits paper orders through the gateway.
+    #[tokio::test]
+    async fn opend_paper_broker_submits_order_through_gateway() {
+        let broker = OpenDPaperBroker::new(
+            OpenDConnectionConfig::paper(BrokerProvider::Moomoo, "127.0.0.1", 11111).unwrap(),
+            FakeOpenDGateway::default(),
+        )
+        .unwrap();
+        let ack = broker
+            .submit_order(paper_market_order("demo-opend-1"))
+            .await
+            .unwrap();
+
+        assert_eq!(broker.config().provider(), BrokerProvider::Moomoo);
+        assert_eq!(ack.order_id(), "OPEND-PAPER-demo-opend-1");
+        assert_eq!(ack.environment(), BrokerEnvironment::Paper);
+        assert_eq!(ack.status(), BrokerOrderStatus::Accepted);
+        assert_eq!(
+            broker.gateway().calls(),
+            vec!["Moomoo:127.0.0.1:demo-opend-1"]
+        );
+    }
+
+    /// Verify OpenD paper adapter rejects non-paper configuration.
+    #[test]
+    fn opend_paper_broker_rejects_live_config() {
+        let config = OpenDConnectionConfig::new(
+            BrokerProvider::Futu,
+            "127.0.0.1",
+            11111,
+            BrokerEnvironment::Live,
+            None,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            OpenDPaperBroker::new(config, FakeOpenDGateway::default()).map(|_| ()),
+            Err(BrokerError::PaperTradingRequired {
+                configured: BrokerEnvironment::Live,
+            })
+        );
+    }
+
+    /// Verify OpenD paper adapter rejects paper config with live gate enabled.
+    #[test]
+    fn opend_paper_broker_rejects_enabled_live_gate() {
+        let config = OpenDConnectionConfig::new(
+            BrokerProvider::Futu,
+            "127.0.0.1",
+            11111,
+            BrokerEnvironment::Paper,
+            None,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            OpenDPaperBroker::new(config, FakeOpenDGateway::default()).map(|_| ()),
+            Err(BrokerError::PaperTradingRequired {
+                configured: BrokerEnvironment::Paper,
+            })
+        );
+    }
+
+    /// Verify live orders are rejected before the OpenD gateway is called.
+    #[tokio::test]
+    async fn opend_paper_broker_rejects_live_order_before_gateway() {
+        let broker = OpenDPaperBroker::new(
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, "127.0.0.1", 11111).unwrap(),
+            FakeOpenDGateway::default(),
+        )
+        .unwrap();
+        let request = BrokerOrderRequest::market(
+            "demo-opend-live",
+            "VOO",
+            BrokerOrderSide::Buy,
+            money("1.00"),
+            BrokerEnvironment::Live,
+        )
+        .unwrap();
+
+        assert_eq!(
+            broker.submit_order(request).await,
+            Err(BrokerError::EnvironmentMismatch {
+                configured: BrokerEnvironment::Paper,
+                requested: BrokerEnvironment::Live,
+            })
+        );
+        assert!(broker.gateway().calls().is_empty());
+    }
+
+    /// Verify gateway failures are surfaced as safe broker errors.
+    #[tokio::test]
+    async fn opend_paper_broker_propagates_gateway_failure() {
+        let broker = OpenDPaperBroker::new(
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, "127.0.0.1", 11111).unwrap(),
+            FakeOpenDGateway::failing(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            broker
+                .submit_order(paper_market_order("demo-opend-2"))
+                .await,
+            Err(BrokerError::Unavailable)
+        );
     }
 
     /// Verify OpenD paper settings normalize text and keep live trading disabled.

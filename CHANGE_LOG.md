@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### 2026-07-07 22:48 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：Futu/Moomoo OpenD paper adapter。
+- 涉及文件：
+  - `crates/broker/src/lib.rs`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `OpenDOrderGateway`，作为后续 Futu/Moomoo OpenD TCP/SDK transport 的最小提交订单接口。
+  - 新增 `OpenDPaperBroker`，实现 `BrokerClient`，用于把已校验订单提交到 OpenD paper gateway。
+  - OpenD paper adapter 在调用 gateway 前拒绝 live config 和 live order，保持 paper trading 默认安全边界。
+  - 新增 adapter 测试，覆盖正常 paper 提交、live config 拒绝、live order 不穿透 gateway、gateway unavailable 安全上抛。
+  - 更新 `docs/minimum_mvp.md`，明确下一步后端顺序：先 Decision Engine，再 Decision Preview API + MockBroker 串联，之后接阿里云 Qwen API。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p broker --locked` 通过。
+  - `cargo clippy -p broker --all-targets --all-features -- -D warnings` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-07-07 22:03 UTC+10
 
 - 执行模型：GPT-5。

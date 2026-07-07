@@ -95,6 +95,8 @@ MVP 接入策略：
 - 已新增 Futu/Moomoo OpenD 连接配置模型，覆盖 provider、host、port、paper/live 环境和可选 account id。
 - OpenD 配置默认不允许 live trading；live orders 需要配置环境匹配且显式开启 live gate。
 - OpenD 配置的 account id 可供 adapter 使用，但 debug 输出会脱敏，避免进入日志。
+- 已新增 OpenD paper broker adapter，作为 `BrokerClient` 实现接入 Futu/Moomoo paper trading gateway。
+- OpenD paper adapter 会在调用 gateway 前拒绝 live config 和 live order，保证真实 transport 前仍有安全闸门。
 - 已支持 mock broker，用于虚拟账号 demo 前的本地闭环测试。
 - mock broker 默认拒绝 live orders，必须显式开启才接受 live-mode 请求。
 
@@ -160,14 +162,14 @@ score = 0.70 * fundamental + 0.20 * trend + 0.10 * sentiment
 - 当 AI 不可用时，按设计降级为 `90/10/0` 或明确的 neutral sentiment 策略。
 - 将综合得分映射为执行倍率或执行建议。
 
-### Futu/Moomoo OpenD adapter 尚未实现
+### Futu/Moomoo OpenD transport 尚未实现
 
-当前 broker crate 只定义了 provider-neutral port 和 mock broker，还没有真正连接 Futu/Moomoo OpenD。
+当前 broker crate 已定义 provider-neutral port、mock broker、OpenD 配置模型和 OpenD paper adapter，但还没有真正实现 Futu/Moomoo OpenD 的 TCP/SDK transport。
 
 MVP 需要补到：
 
 - server config 读取 OpenD host、port、目标 broker provider 和 paper/live mode，并映射到已校验的 OpenD 配置模型。
-- 新增 Futu/Moomoo OpenD adapter。
+- 新增 Futu/Moomoo OpenD gateway transport，实现 `OpenDOrderGateway`。
 - paper trading 下支持提交最小 market/limit order。
 - 下单返回 broker order id 与初始状态。
 - API 层仅暴露 paper trading demo 所需的安全信息。
@@ -296,28 +298,27 @@ Content-Type: application/json
 
 ## 后续 PR 建议顺序
 
-1. 阿里云 Qwen API 接入
-   - server config 读取 DashScope 配置。
-   - API state 注入 Qwen provider。
-   - 新增 market sentiment endpoint。
-   - 测试用 fake provider，演示用真实阿里云 key。
-
-2. Decision domain / engine
+1. Decision domain / engine
    - 定义 70/20/10 输入快照。
    - 合成 score。
    - 支持 AI 不可用时降级。
    - 输出 multiplier/action。
 
-3. Decision preview API
+2. Decision preview API + MockBroker 串联
    - 组合 investment plan、fundamental、trend、sentiment、execution preview 和 bucket split。
-   - 返回最终 summary。
-   - 这是整个项目演示 MVP 的核心接口。
+   - 先用 `MockBroker` 完成 decision-to-paper-order 闭环。
+   - 返回最终 summary 与 paper order ack。
+
+3. 阿里云 Qwen API 接入
+   - server config 读取 DashScope 配置。
+   - API state 注入 Qwen provider。
+   - 新增 market sentiment endpoint。
+   - 测试用 fake provider，演示用真实阿里云 key。
 
 4. Futu/Moomoo OpenD paper adapter
-   - 读取 OpenD host/port 与 paper mode 配置。
-   - 实现 broker port。
-   - 优先支持 paper trading order submit。
-   - live trading 默认关闭。
+   - 已完成 broker port adapter 和安全闸门。
+   - 下一步补真实 OpenD gateway transport。
+   - 读取 server OpenD host/port 与 paper mode 配置。
 
 5. Broker paper execution API
    - decision preview 之后可提交 paper order。
