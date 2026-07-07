@@ -1,0 +1,10 @@
+[package]
+name = "decision-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-client.workspace = true
+core-domain.workspace = true
+quant-engine.workspace = true
+thiserror.workspace = true

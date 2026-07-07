@@ -8,6 +8,7 @@ members = [
     "crates/api",
     "crates/ai-client",
     "crates/broker",
+    "crates/decision-engine",
     "apps/server",
 ]
 
@@ -19,9 +20,11 @@ edition = "2021"
 core-domain = { path = "crates/core-domain" }
 ai-client = { path = "crates/ai-client" }
 broker = { path = "crates/broker" }
+decision-engine = { path = "crates/decision-engine" }
 investment-plans = { path = "crates/investment-plans" }
 indexlink-storage = { path = "crates/storage" }
 indexlink-api = { path = "crates/api" }
+quant-engine = { path = "crates/quant-engine" }
 async-trait = "0.1"
 axum = "0.7"
 dotenvy = "0.15"

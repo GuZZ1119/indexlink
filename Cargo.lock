@@ -287,6 +287,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "decision-engine"
+version = "0.1.0"
+dependencies = [
+ "ai-client",
+ "core-domain",
+ "quant-engine",
+ "thiserror",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
