@@ -19,6 +19,7 @@
   - 订单请求通过构造器校验 idempotency key、ASCII symbol、正数数量、limit order 价格等不变量。
   - 新增 `MockBroker`，默认只接受 paper orders，拒绝 live orders；用于本地 demo 与后续 decision-to-order 测试。
   - 更新 `docs/minimum_mvp.md`，将 Futu/Moomoo OpenD paper trading、broker ack、live trading 保护开关和演示级前端展示纳入全项目 MVP 路线。
+  - Review fix：将 broker crate 的 `missing_docs` 提升为 deny，并明确 MVP 只要求最终 summary，decision record 属于可选存证。
 - 验证：
   - `cargo fmt --all -- --check` 通过。
   - `cargo test -p broker --locked` 通过。
