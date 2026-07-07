@@ -92,6 +92,9 @@ MVP 接入策略：
 - 已新增 provider-neutral broker port。
 - 已支持 `Paper` / `Live` 两种执行环境。
 - 已支持 market / limit order request 的基础不变量校验。
+- 已新增 Futu/Moomoo OpenD 连接配置模型，覆盖 provider、host、port、paper/live 环境和可选 account id。
+- OpenD 配置默认不允许 live trading；live orders 需要配置环境匹配且显式开启 live gate。
+- OpenD 配置的 account id 可供 adapter 使用，但 debug 输出会脱敏，避免进入日志。
 - 已支持 mock broker，用于虚拟账号 demo 前的本地闭环测试。
 - mock broker 默认拒绝 live orders，必须显式开启才接受 live-mode 请求。
 
@@ -163,7 +166,7 @@ score = 0.70 * fundamental + 0.20 * trend + 0.10 * sentiment
 
 MVP 需要补到：
 
-- server config 读取 OpenD host、port、目标 broker provider 和 paper/live mode。
+- server config 读取 OpenD host、port、目标 broker provider 和 paper/live mode，并映射到已校验的 OpenD 配置模型。
 - 新增 Futu/Moomoo OpenD adapter。
 - paper trading 下支持提交最小 market/limit order。
 - 下单返回 broker order id 与初始状态。
@@ -172,6 +175,8 @@ MVP 需要补到：
 ### 演示级最小前端尚未实现
 
 完整产品级前端不属于 MVP，但演示级最小前端属于 MVP。它不需要复杂设计系统、登录、多账户或图表编辑能力，只需要能把核心后端链路串起来。
+
+实现分工：演示级前端由 Jame 负责；当前后端工作流只提供 API 契约、配置、安全边界和测试，不修改前端代码。
 
 MVP 需要补到：
 
@@ -319,7 +324,7 @@ Content-Type: application/json
    - 返回 broker order ack。
    - 使用 idempotency key 防止重复提交。
 
-6. 演示级最小前端
+6. 演示级最小前端（Jame 负责）
    - 实现计划列表/创建/详情。
    - 实现 execution preview + bucket split 展示。
    - 实现 market sentiment 与 decision summary 展示。

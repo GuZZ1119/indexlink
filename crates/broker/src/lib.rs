@@ -9,7 +9,7 @@
 //! paper trading is the default demo path, live trading must be explicitly
 //! enabled, and public errors must not expose account credentials.
 
-use std::sync::Mutex;
+use std::{fmt, sync::Mutex};
 
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -17,6 +17,8 @@ use serde::Serialize;
 
 const MAX_SYMBOL_LEN: usize = 32;
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 128;
+const MAX_OPEND_HOST_LEN: usize = 253;
+const MAX_OPEND_ACCOUNT_ID_LEN: usize = 128;
 
 /// Broker execution environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -26,6 +28,156 @@ pub enum BrokerEnvironment {
     Paper,
     /// Real account execution; must be explicitly enabled by the adapter.
     Live,
+}
+
+/// Broker provider family backed by an OpenD gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerProvider {
+    /// Futu OpenD.
+    Futu,
+    /// Moomoo OpenD.
+    Moomoo,
+}
+
+/// Validated OpenD connection settings for paper-trading adapters.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OpenDConnectionConfig {
+    /// Target OpenD-compatible provider.
+    provider: BrokerProvider,
+    /// OpenD host, usually localhost or an internal gateway host.
+    host: String,
+    /// OpenD TCP port.
+    port: u16,
+    /// Configured execution environment.
+    environment: BrokerEnvironment,
+    /// Optional broker account identifier, redacted from debug output.
+    account_id: Option<String>,
+    /// Whether live trading requests are allowed by this configuration.
+    live_trading_enabled: bool,
+}
+
+impl OpenDConnectionConfig {
+    /// Build validated OpenD settings.
+    ///
+    /// Live trading stays disabled unless `live_trading_enabled` is set
+    /// explicitly, even when `environment` is [`BrokerEnvironment::Live`].
+    pub fn new(
+        provider: BrokerProvider,
+        host: impl Into<String>,
+        port: u16,
+        environment: BrokerEnvironment,
+        account_id: Option<String>,
+        live_trading_enabled: bool,
+    ) -> Result<Self, BrokerValidationError> {
+        let host = normalize_opend_host(host.into())?;
+        validate_opend_port(port)?;
+        let account_id = account_id.map(normalize_opend_account_id).transpose()?;
+
+        Ok(Self {
+            provider,
+            host,
+            port,
+            environment,
+            account_id,
+            live_trading_enabled,
+        })
+    }
+
+    /// Build paper-trading OpenD settings without an account identifier.
+    pub fn paper(
+        provider: BrokerProvider,
+        host: impl Into<String>,
+        port: u16,
+    ) -> Result<Self, BrokerValidationError> {
+        Self::new(provider, host, port, BrokerEnvironment::Paper, None, false)
+    }
+
+    /// Build paper-trading OpenD settings with a redacted account identifier.
+    pub fn paper_with_account(
+        provider: BrokerProvider,
+        host: impl Into<String>,
+        port: u16,
+        account_id: impl Into<String>,
+    ) -> Result<Self, BrokerValidationError> {
+        Self::new(
+            provider,
+            host,
+            port,
+            BrokerEnvironment::Paper,
+            Some(account_id.into()),
+            false,
+        )
+    }
+
+    /// Return the configured broker provider.
+    #[must_use]
+    pub fn provider(&self) -> BrokerProvider {
+        self.provider
+    }
+
+    /// Return the OpenD host.
+    #[must_use]
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// Return the OpenD TCP port.
+    #[must_use]
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Return the configured execution environment.
+    #[must_use]
+    pub fn environment(&self) -> BrokerEnvironment {
+        self.environment
+    }
+
+    /// Return the optional broker account identifier.
+    #[must_use]
+    pub fn account_id(&self) -> Option<&str> {
+        self.account_id.as_deref()
+    }
+
+    /// Return whether live trading requests are explicitly allowed.
+    #[must_use]
+    pub fn live_trading_enabled(&self) -> bool {
+        self.live_trading_enabled
+    }
+
+    /// Validate that an order request matches the configured environment gate.
+    pub fn validate_order_environment(
+        &self,
+        request: &BrokerOrderRequest,
+    ) -> Result<(), BrokerError> {
+        if request.environment() != self.environment {
+            return Err(BrokerError::EnvironmentMismatch {
+                configured: self.environment,
+                requested: request.environment(),
+            });
+        }
+
+        if request.environment() == BrokerEnvironment::Live && !self.live_trading_enabled {
+            return Err(BrokerError::LiveTradingDisabled);
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Debug for OpenDConnectionConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let account_id = self.account_id.as_ref().map(|_| "<redacted>");
+        f.debug_struct("OpenDConnectionConfig")
+            .field("provider", &self.provider)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("environment", &self.environment)
+            .field("account_id", &account_id)
+            .field("live_trading_enabled", &self.live_trading_enabled)
+            .finish()
+    }
 }
 
 /// Broker order side.
@@ -337,6 +489,15 @@ pub enum BrokerValidationError {
     /// Market orders must not include a limit price.
     #[error("market order must not include a limit price")]
     UnexpectedLimitPrice,
+    /// OpenD host is empty, too long, non-ASCII, or contains control characters.
+    #[error("opend host must be 1..=253 printable ASCII characters after trimming")]
+    InvalidOpenDHost,
+    /// OpenD TCP port cannot be zero.
+    #[error("opend port must be greater than zero")]
+    InvalidOpenDPort,
+    /// Broker account identifier is empty, too long, or unsafe to log.
+    #[error("broker account id must be 1..=128 printable ASCII characters after trimming")]
+    InvalidAccountId,
 }
 
 /// Broker adapter error.
@@ -348,6 +509,16 @@ pub enum BrokerError {
     /// Live trading is disabled by configuration.
     #[error("live trading is disabled")]
     LiveTradingDisabled,
+    /// Order environment does not match the adapter configuration.
+    #[error(
+        "order environment {requested:?} does not match configured environment {configured:?}"
+    )]
+    EnvironmentMismatch {
+        /// Configured adapter environment.
+        configured: BrokerEnvironment,
+        /// Requested order environment.
+        requested: BrokerEnvironment,
+    },
     /// Broker adapter or gateway is unavailable.
     #[error("broker is unavailable")]
     Unavailable,
@@ -380,6 +551,47 @@ fn validate_positive(field: &'static str, value: Decimal) -> Result<(), BrokerVa
     }
 }
 
+fn normalize_opend_host(value: String) -> Result<String, BrokerValidationError> {
+    normalize_printable_ascii(
+        value,
+        MAX_OPEND_HOST_LEN,
+        BrokerValidationError::InvalidOpenDHost,
+    )
+}
+
+fn validate_opend_port(port: u16) -> Result<(), BrokerValidationError> {
+    if port == 0 {
+        Err(BrokerValidationError::InvalidOpenDPort)
+    } else {
+        Ok(())
+    }
+}
+
+fn normalize_opend_account_id(value: String) -> Result<String, BrokerValidationError> {
+    normalize_printable_ascii(
+        value,
+        MAX_OPEND_ACCOUNT_ID_LEN,
+        BrokerValidationError::InvalidAccountId,
+    )
+}
+
+fn normalize_printable_ascii(
+    value: String,
+    max_len: usize,
+    error: BrokerValidationError,
+) -> Result<String, BrokerValidationError> {
+    let normalized = value.trim().to_owned();
+    if normalized.is_empty()
+        || normalized.len() > max_len
+        || !normalized.is_ascii()
+        || normalized.chars().any(char::is_control)
+    {
+        Err(error)
+    } else {
+        Ok(normalized)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +611,123 @@ mod tests {
             BrokerEnvironment::Paper,
         )
         .unwrap()
+    }
+
+    /// Verify OpenD paper settings normalize text and keep live trading disabled.
+    #[test]
+    fn opend_paper_config_normalizes_host_and_disables_live() {
+        let config =
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, " 127.0.0.1 ", 11111).unwrap();
+
+        assert_eq!(config.provider(), BrokerProvider::Futu);
+        assert_eq!(config.host(), "127.0.0.1");
+        assert_eq!(config.port(), 11111);
+        assert_eq!(config.environment(), BrokerEnvironment::Paper);
+        assert_eq!(config.account_id(), None);
+        assert!(!config.live_trading_enabled());
+    }
+
+    /// Verify OpenD settings reject unsafe host, port, and account values.
+    #[test]
+    fn opend_config_rejects_invalid_connection_fields() {
+        assert_eq!(
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, "", 11111),
+            Err(BrokerValidationError::InvalidOpenDHost)
+        );
+        assert_eq!(
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, "open\nd", 11111),
+            Err(BrokerValidationError::InvalidOpenDHost)
+        );
+        assert_eq!(
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, "127.0.0.1", 0),
+            Err(BrokerValidationError::InvalidOpenDPort)
+        );
+        assert_eq!(
+            OpenDConnectionConfig::paper_with_account(
+                BrokerProvider::Moomoo,
+                "127.0.0.1",
+                11111,
+                " "
+            ),
+            Err(BrokerValidationError::InvalidAccountId)
+        );
+    }
+
+    /// Verify account identifiers are available to adapters but redacted from debug logs.
+    #[test]
+    fn opend_config_debug_redacts_account_id() {
+        let config = OpenDConnectionConfig::paper_with_account(
+            BrokerProvider::Moomoo,
+            "127.0.0.1",
+            11111,
+            "paper-account-1",
+        )
+        .unwrap();
+        let debug = format!("{config:?}");
+
+        assert_eq!(config.account_id(), Some("paper-account-1"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("paper-account-1"));
+    }
+
+    /// Verify OpenD settings reject requests for the wrong environment.
+    #[test]
+    fn opend_config_rejects_environment_mismatch() {
+        let config =
+            OpenDConnectionConfig::paper(BrokerProvider::Futu, "127.0.0.1", 11111).unwrap();
+        let live_order = BrokerOrderRequest::market(
+            "demo-live",
+            "VOO",
+            BrokerOrderSide::Buy,
+            money("1.00"),
+            BrokerEnvironment::Live,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.validate_order_environment(&live_order),
+            Err(BrokerError::EnvironmentMismatch {
+                configured: BrokerEnvironment::Paper,
+                requested: BrokerEnvironment::Live,
+            })
+        );
+    }
+
+    /// Verify live-mode OpenD settings still require the explicit live gate.
+    #[test]
+    fn opend_config_requires_live_gate_for_live_orders() {
+        let live_order = BrokerOrderRequest::market(
+            "demo-live",
+            "VOO",
+            BrokerOrderSide::Buy,
+            money("1.00"),
+            BrokerEnvironment::Live,
+        )
+        .unwrap();
+        let disabled = OpenDConnectionConfig::new(
+            BrokerProvider::Futu,
+            "127.0.0.1",
+            11111,
+            BrokerEnvironment::Live,
+            None,
+            false,
+        )
+        .unwrap();
+        let enabled = OpenDConnectionConfig::new(
+            BrokerProvider::Futu,
+            "127.0.0.1",
+            11111,
+            BrokerEnvironment::Live,
+            None,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            disabled.validate_order_environment(&live_order),
+            Err(BrokerError::LiveTradingDisabled)
+        );
+        assert_eq!(enabled.validate_order_environment(&live_order), Ok(()));
     }
 
     /// Verify order constructors normalize text and keep decimal precision.

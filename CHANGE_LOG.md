@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### 2026-07-07 22:03 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：Futu/Moomoo OpenD paper trading 配置底座。
+- 涉及文件：
+  - `crates/broker/src/lib.rs`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `BrokerProvider`，区分 Futu 与 Moomoo OpenD 目标 provider。
+  - 新增 `OpenDConnectionConfig`，校验 OpenD host、port、paper/live 环境和可选 account id。
+  - OpenD 配置默认不允许 live trading；live orders 必须同时满足环境匹配和显式 live gate。
+  - OpenD 配置的 account id 可供 adapter 使用，但 debug 输出会脱敏，避免进入日志。
+  - 新增配置层测试，覆盖 paper 默认值、非法连接字段、account id 脱敏、环境不匹配和 live gate。
+  - 更新 `docs/minimum_mvp.md`，明确演示级前端由 Jame 负责；当前后端分支只提供 API 契约、配置、安全边界和测试。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p broker --locked` 通过。
+  - `cargo clippy -p broker --all-targets --all-features -- -D warnings` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-07-07 21:40 UTC+10
 
 - 执行模型：GPT-5。
