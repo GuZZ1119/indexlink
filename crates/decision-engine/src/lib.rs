@@ -13,7 +13,6 @@ use quant_engine::{FundamentalSignal, TrendRegime, TrendSignal, Weight};
 
 const WEIGHT_SUM_TOLERANCE: f64 = 1e-9;
 const NEUTRAL_SENTIMENT_SCORE: f64 = 0.5;
-const SKIP_SCORE_AT_OR_BELOW: f64 = 0.05;
 
 /// Default fundamental layer weight in the normal 70/20/10 model.
 pub const DEFAULT_FUNDAMENTAL_WEIGHT: f64 = 0.70;
@@ -212,11 +211,7 @@ pub fn evaluate_decision(input: &DecisionInput, config: &DecisionConfig) -> Deci
         + weights.sentiment_weight.value() * sentiment_value;
     let final_score =
         Percentile::new(composite.clamp(0.0, 1.0)).expect("clamp keeps score in [0.0, 1.0]");
-    let multiplier = if final_score.value() <= SKIP_SCORE_AT_OR_BELOW {
-        Multiplier::MIN
-    } else {
-        Multiplier::new_clamped(0.5 + final_score.value())
-    };
+    let multiplier = multiplier_from_score(final_score);
     let action = if input.trend.regime == TrendRegime::Neutral {
         multiplier.to_action()
     } else {
@@ -245,6 +240,16 @@ fn trend_timing_score(score: Percentile) -> Percentile {
     let distance_from_neutral = (score.value() - 0.5).abs();
     Percentile::new((0.5 - distance_from_neutral).clamp(0.0, 1.0))
         .expect("trend timing score stays in [0.0, 1.0]")
+}
+
+fn multiplier_from_score(score: Percentile) -> Multiplier {
+    let raw = if score.value() <= 0.5 {
+        score.value() * 2.0
+    } else {
+        1.0 + (score.value() - 0.5)
+    };
+
+    Multiplier::new_clamped(raw)
 }
 
 #[cfg(test)]
@@ -467,5 +472,41 @@ mod tests {
         assert_close(result.final_score.value(), 0.0);
         assert_eq!(result.multiplier, Multiplier::MIN);
         assert_eq!(result.action, Action::Skip);
+    }
+
+    /// Verify the multiplier crosses the core-domain skip threshold smoothly.
+    #[test]
+    fn multiplier_mapping_is_continuous_around_skip_boundary() {
+        let config = DecisionConfig::new(
+            DecisionWeights::new(1.0, 0.0, 0.0).unwrap(),
+            DecisionWeights::default(),
+        );
+        let just_below = evaluate_decision(
+            &input(
+                0.976,
+                0.5,
+                TrendRegime::Neutral,
+                DecisionSentiment::Available(Sentiment::neutral()),
+            ),
+            &config,
+        );
+        let just_above = evaluate_decision(
+            &input(
+                0.974,
+                0.5,
+                TrendRegime::Neutral,
+                DecisionSentiment::Available(Sentiment::neutral()),
+            ),
+            &config,
+        );
+
+        assert!(just_below.multiplier.value() < Multiplier::SKIP_BELOW.value());
+        assert!(just_above.multiplier.value() > Multiplier::SKIP_BELOW.value());
+        assert_eq!(just_below.action, Action::Skip);
+        assert_eq!(just_above.action, Action::Underweight);
+        assert_close(
+            just_above.multiplier.value() - just_below.multiplier.value(),
+            0.004,
+        );
     }
 }
