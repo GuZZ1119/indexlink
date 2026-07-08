@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-07-08 18:06 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：前端 Dashboard 布局调整。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `apps/web/src/pages/dashboard/score-cards.tsx`
+  - `apps/web/src/pages/dashboard/returns-cards.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 `LatestDecisionCard` 从顶部估值卡右侧移动到下方 8 个指标卡的右侧。
+  - Dashboard 顶部改为单独显示 `ValuationCard`；下方新增三列布局，左侧两列放得分卡与收益卡，右侧一列放最近一次决策卡。
+  - 得分卡、收益卡的 4 列布局断点从 `xl` 提前到 `lg`，确保桌面下左侧 8 个卡片保持 4 列 x 2 行。
+- 验证：
+  - `pnpm lint` 通过。
+  - `pnpm build` 通过；Vite 仅提示产物 chunk 超过 500 kB 的体积警告。
+  - `cargo test -p core-domain --locked` 通过：13 个单元测试全部通过。
+
 ### 2026-07-08 17:59 UTC+10
 
 - 执行模型：GPT-5.5。
