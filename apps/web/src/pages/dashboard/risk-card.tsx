@@ -34,7 +34,7 @@ export function RiskCard() {
                 className={cn(
                   'flex items-start gap-2 rounded-lg border p-3 text-sm leading-relaxed',
                   notice.level === 'warning'
-                    ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                    ? 'border-semantic-warning-border bg-semantic-warning-bg text-semantic-warning'
                     : 'border-border bg-muted/40 text-muted-foreground',
                 )}
               >

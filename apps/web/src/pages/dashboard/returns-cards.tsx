@@ -9,8 +9,8 @@ import { cn } from '@/lib/utils'
 
 function pnlTone(value: number): string {
   return value >= 0
-    ? 'text-emerald-600 dark:text-emerald-400'
-    : 'text-rose-600 dark:text-rose-400'
+    ? 'text-semantic-positive'
+    : 'text-semantic-negative'
 }
 
 export function ReturnsCards() {

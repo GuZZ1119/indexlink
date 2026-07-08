@@ -2,15 +2,11 @@ import type { DecisionAction } from '@/api/types'
 
 /** 动作 → Badge 配色，保持全站一致的语义色。 */
 export const actionBadgeClass: Record<DecisionAction, string> = {
-  overweight:
-    'border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300',
-  standard:
-    'border-transparent bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300',
-  delay:
-    'border-transparent bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
-  underweight:
-    'border-transparent bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300',
-  skip: 'border-transparent bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300',
+  overweight: 'border-transparent bg-action-overweight-bg text-action-overweight-fg',
+  standard: 'border-transparent bg-action-standard-bg text-action-standard-fg',
+  delay: 'border-transparent bg-action-delay-bg text-action-delay-fg',
+  underweight: 'border-transparent bg-action-underweight-bg text-action-underweight-fg',
+  skip: 'border-transparent bg-action-skip-bg text-action-skip-fg',
 }
 
 export function formatMultiplier(value: number): string {

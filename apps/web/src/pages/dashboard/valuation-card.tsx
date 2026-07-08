@@ -1,6 +1,6 @@
-import { Gauge, Info } from 'lucide-react'
+import { CircleHelp, Gauge, Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, XAxis, YAxis } from 'recharts'
 
 import { useMarketOverview } from '@/api/queries'
 import { Badge } from '@/components/ui/badge'
@@ -18,9 +18,21 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { appLanguage } from '@/i18n'
 import { actionBadgeClass, formatCurrency, formatMultiplier } from '@/lib/decision'
 import { cn } from '@/lib/utils'
+
+function percentileColor(percentile: number): string {
+  if (percentile >= 80) return 'var(--percentile-extreme)'
+  if (percentile >= 60) return 'var(--percentile-high)'
+  if (percentile >= 40) return 'var(--percentile-neutral)'
+  return 'var(--percentile-low)'
+}
 
 export function ValuationCard() {
   const { t, i18n } = useTranslation()
@@ -29,7 +41,7 @@ export function ValuationCard() {
   const chartConfig = {
     percentile: {
       label: t('dashboard.valuation.composite'),
-      color: 'var(--chart-1)',
+      color: 'var(--percentile-neutral)',
     },
   } satisfies ChartConfig
   const percentileData =
@@ -38,6 +50,7 @@ export function ValuationCard() {
       label: t(`dashboard.valuation.metrics.${metric.key}`),
       description: t(`dashboard.valuation.metricDescriptions.${metric.key}`),
       percentile: metric.percentile,
+      fill: percentileColor(metric.percentile),
     })) ?? []
 
   return (
@@ -121,87 +134,104 @@ export function ValuationCard() {
               </div>
             </div>
 
-            <ChartContainer
-              config={chartConfig}
-              className="h-56 w-full rounded-xl bg-muted/20 px-2 pb-2 pt-5"
-            >
-              <BarChart
-                data={percentileData}
-                margin={{ top: 20, right: 8, left: 0, bottom: 0 }}
-              >
-                <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                  interval={0}
-                />
-                <YAxis
-                  domain={[0, 100]}
-                  ticks={[0, 25, 50, 75, 100]}
-                  tickLine={false}
-                  axisLine={false}
-                  width={36}
-                  tickFormatter={(value: number) => `${value}%`}
-                />
-                <ChartTooltip
-                  cursor={false}
-                  content={
-                    <ChartTooltipContent
-                      hideLabel
-                      formatter={(value, _name, _item, _index, payload) => {
-                        const label =
-                          typeof payload === 'object' &&
-                          payload !== null &&
-                          'label' in payload &&
-                          typeof payload.label === 'string'
-                            ? payload.label
-                            : t('dashboard.valuation.composite')
-                        const formattedValue =
-                          typeof value === 'number' ? `${value}%` : String(value ?? '')
-                        const description =
-                          typeof payload === 'object' &&
-                          payload !== null &&
-                          'description' in payload &&
-                          typeof payload.description === 'string'
-                            ? payload.description
-                            : ''
+            <div className="rounded-xl bg-muted/20 px-2 pb-3 pt-5">
+              <ChartContainer config={chartConfig} className="h-48 w-full">
+                <BarChart
+                  data={percentileData}
+                  margin={{ top: 20, right: 8, left: 0, bottom: 0 }}
+                >
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="label"
+                    tick={false}
+                    tickLine={false}
+                    axisLine={false}
+                    height={8}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    ticks={[0, 25, 50, 75, 100]}
+                    tickLine={false}
+                    axisLine={false}
+                    width={36}
+                    tickFormatter={(value: number) => `${value}%`}
+                  />
+                  <ChartTooltip
+                    cursor={false}
+                    content={
+                      <ChartTooltipContent
+                        hideLabel
+                        formatter={(value, _name, _item, _index, payload) => {
+                          const label =
+                            typeof payload === 'object' &&
+                            payload !== null &&
+                            'label' in payload &&
+                            typeof payload.label === 'string'
+                              ? payload.label
+                              : t('dashboard.valuation.composite')
+                          const formattedValue =
+                            typeof value === 'number' ? `${value}%` : String(value ?? '')
 
-                        return (
-                          <div className="flex max-w-60 flex-1 flex-col gap-2">
-                            <div className="flex items-center justify-between gap-4">
+                          return (
+                            <div className="flex min-w-40 flex-1 items-center justify-between gap-4">
                               <span className="font-medium text-foreground">{label}</span>
                               <span className="font-mono font-medium text-foreground tabular-nums">
                                 {formattedValue}
                               </span>
                             </div>
-                            {description && (
-                              <p className="text-muted-foreground leading-relaxed">
-                                {description}
-                              </p>
-                            )}
-                          </div>
-                        )
-                      }}
-                    />
-                  }
-                />
-                <Bar
-                  dataKey="percentile"
-                  fill="var(--foreground)"
-                  radius={[6, 6, 0, 0]}
-                  maxBarSize={48}
-                >
-                  <LabelList
-                    dataKey="percentile"
-                    position="top"
-                    className="fill-foreground font-mono text-xs font-semibold"
-                    formatter={(value) => (typeof value === 'number' ? `${value}%` : '')}
+                          )
+                        }}
+                      />
+                    }
                   />
-                </Bar>
-              </BarChart>
-            </ChartContainer>
+                  <Bar
+                    dataKey="percentile"
+                    fill="var(--percentile-neutral)"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={48}
+                  >
+                    <LabelList
+                      dataKey="percentile"
+                      position="top"
+                      className="fill-foreground font-mono text-xs font-semibold"
+                      formatter={(value) => (typeof value === 'number' ? `${value}%` : '')}
+                    />
+                    {percentileData.map((metric) => (
+                      <Cell key={metric.key} fill={metric.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ChartContainer>
+              <div className="grid grid-cols-5 gap-2 pl-10 pr-2 pt-1">
+                {percentileData.map((metric) => (
+                  <div
+                    key={metric.key}
+                    className="flex min-w-0 items-center justify-center gap-1"
+                  >
+                    <span className="truncate text-xs text-muted-foreground">
+                      {metric.label}
+                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="shrink-0 rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          aria-label={`${metric.label} description`}
+                        >
+                          <CircleHelp className="size-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        className="max-w-72 items-start border border-border/50 bg-background text-xs leading-relaxed text-muted-foreground shadow-xl [&>svg]:!bg-background [&>svg]:!fill-background"
+                      >
+                        {metric.description}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </CardContent>

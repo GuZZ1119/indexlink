@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### 2026-07-08 17:11 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：前端样式规范（业务语义色 token 集中化）。
+- 涉及文件：
+  - `apps/web/src/index.css`
+  - `apps/web/src/lib/decision.ts`
+  - `apps/web/src/pages/dashboard/valuation-card.tsx`
+  - `apps/web/src/pages/dashboard/comparison-chart.tsx`
+  - `apps/web/src/pages/dashboard/returns-cards.tsx`
+  - `apps/web/src/pages/dashboard/score-cards.tsx`
+  - `apps/web/src/pages/dashboard/risk-card.tsx`
+  - `apps/web/src/components/layout/news-ticker.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 在 `index.css` 中新增动作 badge、收益正负、风险提示、实时状态、分位区间、对比图系列等业务语义色 token，并提供 dark theme 对应值。
+  - `decision.ts` 的 `actionBadgeClass` 改为使用 `action-*` token，不再直接散落 Tailwind 具体色阶。
+  - Dashboard 的收益、分数、风险提示、新闻状态、估值分位柱状图、普通定投 vs 自适应定投图表统一改为调用集中 token。
+  - 保留 shadcn chart 的局部 `--color-*` 系列变量机制，但其来源改为业务 token（如 `--chart-dca` / `--chart-adaptive`）。
+- 验证：
+  - `pnpm lint` 通过。
+  - `pnpm build` 通过；Vite 仅提示产物 chunk 超过 500 kB 的体积警告。
+  - `ReadLints` 检查相关前端文件无诊断。
+  - `cargo test -p core-domain` 通过：13 个单元测试全部通过。
+
+### 2026-07-08 17:05 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：前端 Dashboard 视觉修复。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/valuation-card.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 强制覆盖 Current Market Valuation 问号说明 tooltip 的箭头背景和填充色，避免浅色 tooltip 下方继续显示默认黑色菱形。
+- 验证：
+  - `pnpm lint` 通过。
+  - `pnpm build` 通过；Vite 仅提示产物 chunk 超过 500 kB 的体积警告。
+  - `cargo test -p core-domain --locked` 通过：13 个单元测试全部通过。
+
+### 2026-07-08 17:04 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：前端 Dashboard 视觉修复。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/valuation-card.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 Current Market Valuation 底部问号说明 tooltip 从默认黑底样式局部覆盖为与图表 tooltip 一致的浅色卡片风格。
+  - 覆盖 tooltip 箭头颜色，使其与浅色背景保持一致。
+- 验证：
+  - `pnpm lint` 通过。
+  - `pnpm build` 通过；Vite 仅提示产物 chunk 超过 500 kB 的体积警告。
+  - `cargo test -p core-domain --locked` 通过：13 个单元测试全部通过。
+
+### 2026-07-08 17:02 UTC+10
+
+- 执行模型：GPT-5.5。
+- 变更类型：前端 Dashboard 交互调整。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/valuation-card.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 Current Market Valuation 柱状图自身 tooltip 简化为只显示指标名和百分比。
+  - 隐藏 Recharts XAxis 原始标签，在图表下方新增指标名 + 问号图标行。
+  - 每个问号图标使用 shadcn Tooltip 展示对应 percentile 指标解释，避免长说明受图表 hover 区域影响而消失。
+- 验证：
+  - `pnpm lint` 通过。
+  - `pnpm build` 通过；Vite 仅提示产物 chunk 超过 500 kB 的体积警告。
+  - `cargo test -p core-domain --locked` 通过：13 个单元测试全部通过。
+
 ### 2026-07-08 16:57 UTC+10
 
 - 执行模型：GPT-5.5。

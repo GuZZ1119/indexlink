@@ -7,9 +7,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 function scoreTone(score: number): string {
-  if (score >= 60) return 'text-emerald-600 dark:text-emerald-400'
+  if (score >= 60) return 'text-semantic-positive'
   if (score >= 40) return 'text-foreground'
-  return 'text-orange-600 dark:text-orange-400'
+  return 'text-semantic-caution'
 }
 
 export function ScoreCards() {

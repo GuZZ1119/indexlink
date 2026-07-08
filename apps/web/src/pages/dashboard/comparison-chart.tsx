@@ -36,8 +36,8 @@ export function ComparisonChart() {
   const { chartRange } = useSnapshot(uiStore)
 
   const chartConfig = {
-    dca: { label: t('dashboard.chart.dca'), color: 'var(--chart-2)' },
-    adaptive: { label: t('dashboard.chart.adaptive'), color: 'var(--chart-4)' },
+    dca: { label: t('dashboard.chart.dca'), color: 'var(--chart-dca)' },
+    adaptive: { label: t('dashboard.chart.adaptive'), color: 'var(--chart-adaptive)' },
   } satisfies ChartConfig
 
   const months = RANGES.find((r) => r.key === chartRange)?.months ?? null

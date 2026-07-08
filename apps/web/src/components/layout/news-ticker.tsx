@@ -14,7 +14,7 @@ export function NewsTicker() {
   return (
     <div className="flex h-9 shrink-0 items-center overflow-hidden border-b bg-muted/40">
       <div className="flex h-full shrink-0 items-center gap-1.5 border-r bg-background px-4 text-xs font-medium text-muted-foreground">
-        <Radio className="size-3.5 text-emerald-500" />
+        <Radio className="size-3.5 text-status-live" />
       </div>
       <div className="relative flex-1 overflow-hidden">
         {items.length > 0 && (
