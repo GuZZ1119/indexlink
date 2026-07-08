@@ -19,7 +19,7 @@ export function ReturnsCards() {
 
   if (isPending || !data) {
     return (
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <Skeleton key={i} className="h-28 w-full rounded-xl" />
         ))}
@@ -61,7 +61,7 @@ export function ReturnsCards() {
   ] as const
 
   return (
-    <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
       {items.map((item) => (
         <Card key={item.key} className="py-4">
           <CardContent className="px-4">
