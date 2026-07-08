@@ -25,4 +25,4 @@
 - 前端规划：apps\web\PLAN.md
 - 使用vite + react + tailwindcss，配合shadcn的组件库进行快速构建。
 - 统一使用 pnpm 管理依赖
-- 路由统一使用 react-router；来自 Rust API 的服务端数据、缓存、loading/error/retry、mutation 后失效刷新统一使用 @tanstack/react-query；浏览器本地 UI 状态（当前选中的 plan、筛选条件、modal 开关、图表显示范围、临时交互状态）使用 valtio，不要用 valtio 存长期服务端数据。页面样式使用 Tailwind CSS v4 和 @tailwindcss/vite；通用组件优先使用 shadcn 体系，样式组合用 clsx + tailwind-merge，变体组件用 class-variance-authority，动画辅助用 tw-animate-css，图标使用 lucide-react。图表底层使用 recharts，shadcn chart 只作为样式/容器封装。代码质量使用 eslint + typescript-eslint + react-hooks / react-refresh 规则，构建脚本保持 tsc -b && vite build。
+- 路由统一使用 react-router；来自 Rust API 的服务端数据、缓存、loading/error/retry、mutation 后失效刷新统一使用 @tanstack/react-query；浏览器本地 UI 状态（当前选中的 plan、筛选条件、modal 开关、图表显示范围、临时交互状态）使用 valtio，不要用 valtio 存长期服务端数据。页面样式使用 Tailwind CSS v4 和 @tailwindcss/vite；通用组件优先使用 shadcn 体系，样式组合用 clsx + tailwind-merge，变体组件用 class-variance-authority，动画辅助用 tw-animate-css，图标使用 lucide-react。图表底层使用 recharts，shadcn chart 只作为样式/容器封装。i18n做多语言。代码质量使用 eslint + typescript-eslint + react-hooks / react-refresh 规则，构建脚本保持 tsc -b && vite build。
