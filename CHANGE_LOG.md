@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### 2026-07-10 11:53 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：API 管理文档。
+- 涉及文件：
+  - `API_MANAGEMENT.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增根目录 `API_MANAGEMENT.md`，面向前端对接整理当前已有 API、请求/响应约定、统一错误格式和对接顺序。
+  - 补充待实现 API 清单，包括阿里云 Qwen market sentiment、fundamental/trend signal、Futu/Moomoo OpenD paper trading、Decision Preview 真实上游升级和 decision record/history。
+- 验证：
+  - 文档变更，无需运行 Rust 测试。
+  - `git status --short` 已检查。
+
 ### 2026-07-09 23:43 UTC+10
 
 - 执行模型：GPT-5。
