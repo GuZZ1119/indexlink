@@ -9,6 +9,7 @@ members = [
     "crates/ai-client",
     "crates/broker",
     "crates/decision-engine",
+    "crates/decision-records",
     "apps/server",
 ]
 
@@ -21,6 +22,7 @@ core-domain = { path = "crates/core-domain" }
 ai-client = { path = "crates/ai-client" }
 broker = { path = "crates/broker" }
 decision-engine = { path = "crates/decision-engine" }
+decision-records = { path = "crates/decision-records" }
 investment-plans = { path = "crates/investment-plans" }
 indexlink-storage = { path = "crates/storage" }
 indexlink-api = { path = "crates/api" }
