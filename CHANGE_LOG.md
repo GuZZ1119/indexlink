@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### 2026-07-13 23:22 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：Decision Record 持久化（Part 2：PostgreSQL storage adapter）。
+- 涉及文件：
+  - `Cargo.lock`
+  - `crates/storage/Cargo.toml`
+  - `crates/storage/src/lib.rs`
+  - `crates/storage/src/decision_records.rs`
+  - `migrations/20260713093000_create_decision_records.sql`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `decision_records` PostgreSQL migration，用于保存 decision preview / execution 的审计快照。
+  - migration 使用 `JSONB` 保存 execution、fundamental、trend、sentiment、decision 与 broker 输入输出快照，并通过 `plan_id` 外键关联 `investment_plans`。
+  - 新增 `PostgresDecisionRecordRepository`，实现 `DecisionRecordRepository` 的 create、list_by_plan 与 get。
+  - storage adapter 在写入前再次调用 `CreateDecisionRecord::normalize()`，避免绕过服务层时写入未规范化数据。
+  - 为 plan + created_at 与全局 created_at 添加查询索引，支持后续 history API。
+  - storage adapter 使用 SQL `::jsonb` 写入，并在 Rust 侧解析 JSON snapshot，避免扩大 SQLx workspace feature 面。
+- 接下来计划：
+  1. Part 3：新增 decision record 查询 API，并更新 `API_MANAGEMENT.md` / `docs/minimum_mvp.md`。
+  2. 后续阶段：在 Decision Preview API 中接入持久化写入。
+  3. 后续阶段：接入阿里云 Qwen Market Sentiment API 与 Futu/Moomoo OpenD paper gateway transport。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check -p indexlink-storage --locked` 通过。
+  - `cargo test -p indexlink-storage --locked` 通过。
+  - `cargo clippy -p indexlink-storage --all-targets --all-features -- -D warnings` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-07-12 00:15 UTC+10
 
 - 执行模型：GPT-5。
