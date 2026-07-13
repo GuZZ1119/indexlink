@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 const MAX_SYMBOL_LEN: usize = 32;
 const MAX_SUMMARY_LEN: usize = 2000;
+const DEFAULT_RECORD_LIST_LIMIT: u16 = 50;
+const MAX_RECORD_LIST_LIMIT: u16 = 200;
 
 /// Execution status captured by a decision record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -148,6 +150,42 @@ pub struct CreateDecisionRecord {
     pub summary: String,
 }
 
+/// Query options for listing decision records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionRecordListQuery {
+    limit: u16,
+}
+
+impl DecisionRecordListQuery {
+    /// Build a bounded list query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecisionRecordValidationError::InvalidListLimit`] when the
+    /// requested limit is zero or above the supported maximum.
+    pub fn new(limit: u16) -> Result<Self, DecisionRecordValidationError> {
+        if limit == 0 || limit > MAX_RECORD_LIST_LIMIT {
+            Err(DecisionRecordValidationError::InvalidListLimit)
+        } else {
+            Ok(Self { limit })
+        }
+    }
+
+    /// Maximum number of records to return.
+    #[must_use]
+    pub fn limit(&self) -> u16 {
+        self.limit
+    }
+}
+
+impl Default for DecisionRecordListQuery {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_RECORD_LIST_LIMIT,
+        }
+    }
+}
+
 impl CreateDecisionRecord {
     /// Normalize and validate an inbound decision record before persistence.
     pub fn normalize(self) -> Result<Self, DecisionRecordValidationError> {
@@ -203,6 +241,9 @@ pub enum DecisionRecordValidationError {
     /// Summary is empty or too long.
     #[error("decision record summary is invalid")]
     InvalidSummary,
+    /// Record list limit is zero or too large.
+    #[error("decision record list limit is invalid")]
+    InvalidListLimit,
 }
 
 /// Repository errors hidden behind the application layer.
@@ -256,6 +297,7 @@ pub trait DecisionRecordRepository: Send + Sync {
     async fn list_by_plan(
         &self,
         plan_id: Uuid,
+        query: DecisionRecordListQuery,
     ) -> Result<Vec<DecisionRecord>, DecisionRecordRepositoryError>;
 
     /// Fetch one decision record by ID.
@@ -299,8 +341,22 @@ impl DecisionRecordService {
         &self,
         plan_id: Uuid,
     ) -> Result<Vec<DecisionRecord>, DecisionRecordApplicationError> {
+        self.list_by_plan_with_query(plan_id, DecisionRecordListQuery::default())
+            .await
+    }
+
+    /// List decision records for one investment plan with query options.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecisionRecordApplicationError::Unavailable`] if storage is unavailable.
+    pub async fn list_by_plan_with_query(
+        &self,
+        plan_id: Uuid,
+        query: DecisionRecordListQuery,
+    ) -> Result<Vec<DecisionRecord>, DecisionRecordApplicationError> {
         self.repository
-            .list_by_plan(plan_id)
+            .list_by_plan(plan_id, query)
             .await
             .map_err(Into::into)
     }
@@ -403,6 +459,7 @@ mod tests {
         async fn list_by_plan(
             &self,
             plan_id: Uuid,
+            query: DecisionRecordListQuery,
         ) -> Result<Vec<DecisionRecord>, DecisionRecordRepositoryError> {
             Ok(self
                 .records
@@ -410,6 +467,7 @@ mod tests {
                 .unwrap()
                 .iter()
                 .filter(|record| record.plan_id == plan_id)
+                .take(query.limit().into())
                 .cloned()
                 .collect())
         }
@@ -480,6 +538,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn service_supports_bounded_list_queries() {
+        let repository = Arc::new(FakeRepository::default());
+        let service = DecisionRecordService::new(repository);
+        let plan_id = Uuid::from_u128(7);
+        service.create(input(plan_id)).await.unwrap();
+        service.create(input(plan_id)).await.unwrap();
+
+        let listed = service
+            .list_by_plan_with_query(plan_id, DecisionRecordListQuery::new(1).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(listed.len(), 1);
+    }
+
+    #[tokio::test]
     async fn service_maps_repository_not_found() {
         let service = DecisionRecordService::new(Arc::new(FakeRepository::default()));
 
@@ -530,6 +604,19 @@ mod tests {
                     field: "execution_snapshot"
                 }
             ))
+        );
+    }
+
+    #[test]
+    fn list_query_rejects_unbounded_limits() {
+        assert_eq!(DecisionRecordListQuery::default().limit(), 50);
+        assert_eq!(
+            DecisionRecordListQuery::new(0),
+            Err(DecisionRecordValidationError::InvalidListLimit)
+        );
+        assert_eq!(
+            DecisionRecordListQuery::new(201),
+            Err(DecisionRecordValidationError::InvalidListLimit)
         );
     }
 

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-07-13 23:56 UTC+10
+
+- 执行模型：GPT-5。
+- 变更类型：PR review fix。
+- 涉及文件：
+  - `crates/decision-records/src/lib.rs`
+  - `crates/storage/src/decision_records.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - Review fix：新增 `DecisionRecordListQuery`，为 decision record 历史查询提供默认分页上限，避免 `list_by_plan` 长期无限制返回全部记录。
+  - Review fix：`PostgresDecisionRecordRepository::list_by_plan` 绑定 `LIMIT` 参数，并保留按 `created_at DESC, id DESC` 的稳定排序。
+  - Review fix：将 decision record storage SQL 改为编译期静态常量，避免 `format!()` 拼接查询语句造成 SAST 噪音和运行时分配。
+  - 补充聚焦测试，覆盖 list query 边界、bounded list 服务路径和静态 SQL 中的 `LIMIT` 约束。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check -p decision-records --locked` 通过。
+  - `cargo check -p indexlink-storage --locked` 通过。
+  - `cargo test -p decision-records --locked` 通过。
+  - `cargo test -p indexlink-storage --locked` 通过。
+  - `cargo clippy -p indexlink-storage --all-targets --all-features -- -D warnings` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test --workspace --locked` 通过。
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings` 通过。
+
 ### 2026-07-13 23:22 UTC+10
 
 - 执行模型：GPT-5。
