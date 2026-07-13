@@ -5,8 +5,10 @@ edition.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+decision-records.workspace = true
 investment-plans.workspace = true
 rust_decimal.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 time.workspace = true

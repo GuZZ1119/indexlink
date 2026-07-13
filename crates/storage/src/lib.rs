@@ -5,12 +5,15 @@
 //!
 //! 此 crate 负责连接池的建立、存活检查，以及面向领域 crate 的 outbound adapter。
 
+mod decision_records;
 mod investment_plans;
 
 use std::{str::FromStr, time::Duration};
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
+/// Decision Record repository 的 PostgreSQL adapter。
+pub use decision_records::PostgresDecisionRecordRepository;
 /// Investment Plan repository 的 PostgreSQL adapter。
 pub use investment_plans::PostgresInvestmentPlanRepository;
 

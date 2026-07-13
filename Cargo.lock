@@ -855,8 +855,10 @@ name = "indexlink-storage"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "decision-records",
  "investment-plans",
  "rust_decimal",
+ "serde_json",
  "sqlx",
  "thiserror",
  "time",
