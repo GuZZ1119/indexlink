@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### 2026-07-15 00:51 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：存储启动流程 / PostgreSQL migration 自动应用。
+- 涉及文件：
+  - `Cargo.toml`
+  - `Cargo.lock`
+  - `crates/storage/src/lib.rs`
+  - `apps/server/src/main.rs`
+  - `deployment/Dockerfile`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 启用 SQLx runtime migration 支持；本地 `cargo run` 从根目录读取 `migrations/`，Docker runtime 镜像显式携带同一目录。
+  - 新增 `Storage::migrate()`；执行失败映射为不泄露连接信息的 `StorageError::Migration`。
+  - server 在成功连接 PostgreSQL 后、构建 API router 和监听 HTTP 前执行 migration；失败时直接退出，避免在不完整 schema 上提供服务。
+  - 新增 migration 目录解析的聚焦单元测试，确认 investment plan 与 decision record schema 都可被启动流程读取。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-storage --locked` 通过（15 tests）。
+  - `cargo test -p indexlink-server --locked` 通过（15 tests）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-storage --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo clippy -p indexlink-server --all-targets --all-features --locked -- -D warnings` 通过。
+
+### 2026-07-15 00:51 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：文档 / 当前 Decision Record 持久化实现说明。
+- 涉及文件：
+  - `CHANGE_LOG.md`
+- 当前实现：
+  1. **领域与校验**：`decision-records` crate 定义 `DecisionRecord`、`CreateDecisionRecord`、repository port 与应用服务。创建输入在进入 repository 前执行 `normalize()`：规范化 symbol、currency、金额字符串与 summary，并拒绝空的必需 JSON snapshot。
+  2. **审计数据范围**：每条记录保存 plan ID、symbol、currency、执行状态、可选计划金额，以及 execution、fundamental、trend、可选 sentiment、decision、可选 broker request / ack 的 JSON snapshot、summary 和创建时间。snapshot 约束为可信服务端编排生成，禁止保存 API key、OpenD 密码、account id、token 或其他 secret。
+  3. **本机 PostgreSQL 存储**：migration `20260713093000_create_decision_records.sql` 创建 `decision_records` 表；snapshot 使用 JSONB，`plan_id` 关联 `investment_plans`，并建立 `(plan_id, created_at DESC, id DESC)` 与全局时间索引。
+  4. **adapter 行为**：`PostgresDecisionRecordRepository` 在写入前再次规范化输入；写入时使用 JSONB cast，读取时在 Rust 侧将 UUID、时间与 JSON 文本解析回领域类型。SQL 保持编译期静态常量，历史查询带参数化 `LIMIT`。
+  5. **读取 API**：`GET /investment-plans/:id/decisions?limit=` 先确认计划存在，再按最新优先返回记录；默认 50 条、最大 200 条。`GET /decisions/:id` 返回单条记录。`created_at` 对 API 输出使用 RFC 3339 字符串。
+- 当前限制与运行前提：
+  - `POST /investment-plans/:id/decision-preview` 当前不会自动创建 decision record，因此新数据库的 history 查询会返回空数组。
+  - server 现在会在开始监听 HTTP 前执行 runtime migration；migration 失败时服务不会启动。
+  - history API 是只读审计查询；它不提供由前端直接提交任意 snapshot 的写入入口。
+- 验证：
+  - PR #40 与 PR #41 合并时，server 尚未执行 migration；本次启动流程已补齐该缺口。
+  - 已合并 PR #40（storage adapter）与 PR #41（history query API）代码和既有验证记录可追溯。
+
 ### 2026-07-15 00:36 AEST
 
 - 执行模型：GPT-5。

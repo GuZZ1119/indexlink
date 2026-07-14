@@ -8,7 +8,11 @@
 mod decision_records;
 mod investment_plans;
 
-use std::{str::FromStr, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
@@ -100,10 +104,32 @@ impl Storage {
         Ok(())
     }
 
+    /// 应用迁移目录中的全部 PostgreSQL migration。
+    ///
+    /// 调用方应在开始提供 HTTP 服务前调用此方法；任一 migration 失败时返回
+    /// [`StorageError::Migration`]，以阻止服务运行在不完整 schema 上。
+    pub async fn migrate(&self) -> Result<(), StorageError> {
+        sqlx::migrate::Migrator::new(migration_directory())
+            .await
+            .map_err(StorageError::Migration)?
+            .run(&self.pool)
+            .await
+            .map_err(StorageError::Migration)
+    }
+
     /// 返回底层 PostgreSQL 连接池。
     #[must_use]
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+}
+
+fn migration_directory() -> PathBuf {
+    let workspace_relative = PathBuf::from("migrations");
+    if workspace_relative.is_dir() {
+        workspace_relative
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations")
     }
 }
 
@@ -128,6 +154,9 @@ pub enum StorageError {
     /// 数据库存活检查失败。
     #[error("database ping failed")]
     Ping(#[source] sqlx::Error),
+    /// 数据库 schema migration 执行失败。
+    #[error("failed to apply database migrations")]
+    Migration(#[source] sqlx::migrate::MigrateError),
 }
 
 #[cfg(test)]
@@ -208,6 +237,19 @@ mod tests {
         assert_eq!(error.to_string(), "database ping failed");
     }
 
+    #[tokio::test]
+    async fn migration_directory_contains_plan_and_decision_record_schemas() {
+        let migrator = sqlx::migrate::Migrator::new(migration_directory())
+            .await
+            .expect("workspace migration directory must resolve");
+        let versions = migrator
+            .iter()
+            .map(|migration| migration.version)
+            .collect::<Vec<_>>();
+
+        assert_eq!(versions, vec![20_260_626_064_200, 20_260_713_093_000]);
+    }
+
     #[test]
     fn storage_error_display_is_stable_and_safe() {
         let cases = [
@@ -228,6 +270,10 @@ mod tests {
             (
                 StorageError::Ping(sqlx::Error::PoolClosed),
                 "database ping failed",
+            ),
+            (
+                StorageError::Migration(sqlx::migrate::MigrateError::VersionMismatch(1)),
+                "failed to apply database migrations",
             ),
         ];
 

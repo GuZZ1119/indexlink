@@ -23,6 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.database_connect_timeout,
     )
     .await?;
+    storage.migrate().await?;
+    tracing::info!("database migrations applied");
     let state = ApiState::new(storage, env!("CARGO_PKG_VERSION"));
     let app = build_router_with_cors(state, config.cors_allowed_origins);
     let listener = tokio::net::TcpListener::bind(config.address).await?;
