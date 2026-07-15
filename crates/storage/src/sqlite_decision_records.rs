@@ -133,38 +133,32 @@ fn encode_planned_contribution(value: String) -> Result<String, DecisionRecordRe
 /// 将 SQLite 查询结果转换为已验证的 decision record。
 fn record_from_row(row: SqliteRow) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
     Ok(DecisionRecord {
-        id: parse_uuid(row.try_get("id").map_err(map_sqlx_error)?)?,
-        plan_id: parse_uuid(row.try_get("plan_id").map_err(map_sqlx_error)?)?,
-        symbol: row.try_get("symbol").map_err(map_sqlx_error)?,
-        currency: row.try_get("currency").map_err(map_sqlx_error)?,
-        execution_status: status_from_str(
-            row.try_get("execution_status").map_err(map_sqlx_error)?,
-        )?,
-        planned_contribution: row
-            .try_get::<Option<String>, _>("planned_contribution")
-            .map_err(map_sqlx_error)?
+        id: parse_uuid(column(&row, "id")?)?,
+        plan_id: parse_uuid(column(&row, "plan_id")?)?,
+        symbol: column(&row, "symbol")?,
+        currency: column(&row, "currency")?,
+        execution_status: status_from_str(column(&row, "execution_status")?)?,
+        planned_contribution: column::<Option<String>>(&row, "planned_contribution")?
             .map(decode_planned_contribution)
             .transpose()?,
-        execution_snapshot: parse_json(row.try_get("execution_snapshot").map_err(map_sqlx_error)?)?,
-        fundamental_snapshot: parse_json(
-            row.try_get("fundamental_snapshot")
-                .map_err(map_sqlx_error)?,
-        )?,
-        trend_snapshot: parse_json(row.try_get("trend_snapshot").map_err(map_sqlx_error)?)?,
-        sentiment_snapshot: parse_optional_json(
-            row.try_get("sentiment_snapshot").map_err(map_sqlx_error)?,
-        )?,
-        decision_snapshot: parse_json(row.try_get("decision_snapshot").map_err(map_sqlx_error)?)?,
-        broker_order_request: parse_optional_json(
-            row.try_get("broker_order_request")
-                .map_err(map_sqlx_error)?,
-        )?,
-        broker_order_ack: parse_optional_json(
-            row.try_get("broker_order_ack").map_err(map_sqlx_error)?,
-        )?,
-        summary: row.try_get("summary").map_err(map_sqlx_error)?,
-        created_at: parse_timestamp(row.try_get("created_at").map_err(map_sqlx_error)?)?,
+        execution_snapshot: parse_json(column(&row, "execution_snapshot")?)?,
+        fundamental_snapshot: parse_json(column(&row, "fundamental_snapshot")?)?,
+        trend_snapshot: parse_json(column(&row, "trend_snapshot")?)?,
+        sentiment_snapshot: parse_optional_json(column(&row, "sentiment_snapshot")?)?,
+        decision_snapshot: parse_json(column(&row, "decision_snapshot")?)?,
+        broker_order_request: parse_optional_json(column(&row, "broker_order_request")?)?,
+        broker_order_ack: parse_optional_json(column(&row, "broker_order_ack")?)?,
+        summary: column(&row, "summary")?,
+        created_at: parse_timestamp(column(&row, "created_at")?)?,
     })
+}
+
+/// 从 SQLite row 读取一个列，并将底层错误映射为安全 repository 错误。
+fn column<'row, T>(row: &'row SqliteRow, name: &str) -> Result<T, DecisionRecordRepositoryError>
+where
+    T: sqlx::Decode<'row, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
+{
+    row.try_get(name).map_err(map_sqlx_error)
 }
 
 /// 将 SQLite 固定精度金额文本还原为对 API 安全的字符串。
@@ -233,7 +227,10 @@ fn status_to_str(status: DecisionExecutionStatus) -> &'static str {
 fn map_sqlx_error(error: sqlx::Error) -> DecisionRecordRepositoryError {
     match error {
         sqlx::Error::RowNotFound => DecisionRecordRepositoryError::NotFound,
-        _ => DecisionRecordRepositoryError::Unavailable,
+        other => {
+            tracing::warn!(error = %other, "decision record SQLite operation failed");
+            DecisionRecordRepositoryError::Unavailable
+        }
     }
 }
 

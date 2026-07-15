@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### 2026-07-15 23:01 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：SQLite runtime 审查修正。
+- 涉及文件：
+  - `Cargo.lock`
+  - `apps/server/src/config.rs`
+  - `crates/storage/Cargo.toml`
+  - `crates/storage/src/sqlite_decision_records.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 配置层现在只接受非空 `sqlite:` `DATABASE_URL`，会在启动连接前明确拒绝遗留 `postgres://` URL。
+  - 提炼 SQLite row 列读取助手，统一 `try_get` 的安全错误映射，保留 UUID、金额、时间和 JSON 的原有解析语义。
+  - storage crate 复用 workspace `tracing` 依赖；decision record SQLite adapter 在折叠非 `RowNotFound` SQLx 错误前记录内部 warning，HTTP/领域层仍只得到安全的 `Unavailable`。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-storage --offline` 通过（30 tests）。
+  - `cargo test -p indexlink-server --offline` 通过（15 tests）。
+  - `cargo test -p indexlink-api --offline` 通过（28 tests）。
+  - `cargo test -p core-domain --offline` 通过（13 tests）。
+  - `cargo check --workspace --offline` 通过。
+  - `cargo clippy -p indexlink-storage -p indexlink-api -p indexlink-server --all-targets --all-features --offline -- -D warnings` 通过。
+
 ### 2026-07-15 22:44 AEST
 
 - 执行模型：GPT-5。

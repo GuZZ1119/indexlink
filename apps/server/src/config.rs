@@ -38,7 +38,7 @@ impl Config {
             .map_err(|_| ConfigError::InvalidHost)?;
 
         let database_url = value_or_default(&mut lookup, "DATABASE_URL", DEFAULT_DATABASE_URL);
-        if database_url.trim().is_empty() {
+        if database_url.trim().is_empty() || !database_url.starts_with("sqlite:") {
             return Err(ConfigError::InvalidDatabaseUrl);
         }
 
@@ -116,7 +116,7 @@ fn parse_u64(name: &'static str, value: &str) -> Result<u64, ConfigError> {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
-    #[error("DATABASE_URL must not be blank")]
+    #[error("DATABASE_URL must be a non-blank SQLite URL")]
     InvalidDatabaseUrl,
     #[error("APP_HOST must be a valid IP address")]
     InvalidHost,
@@ -178,6 +178,17 @@ mod tests {
     fn blank_database_url_is_rejected() {
         assert!(matches!(
             parse(&[("DATABASE_URL", "  ")]),
+            Err(ConfigError::InvalidDatabaseUrl)
+        ));
+    }
+
+    #[test]
+    fn non_sqlite_database_url_is_rejected() {
+        assert!(matches!(
+            parse(&[(
+                "DATABASE_URL",
+                "postgres://indexlink:indexlink@localhost/indexlink"
+            )]),
             Err(ConfigError::InvalidDatabaseUrl)
         ));
     }
