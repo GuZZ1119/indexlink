@@ -8,6 +8,7 @@
 mod decision_records;
 mod investment_plans;
 mod sqlite;
+mod sqlite_investment_plans;
 
 use std::{str::FromStr, time::Duration};
 
@@ -19,6 +20,8 @@ pub use decision_records::PostgresDecisionRecordRepository;
 pub use investment_plans::PostgresInvestmentPlanRepository;
 /// SQLite 本地存储连接与 migration runner。
 pub use sqlite::SqliteStorage;
+/// Investment Plan repository 的 SQLite adapter。
+pub use sqlite_investment_plans::SqliteInvestmentPlanRepository;
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

@@ -2,6 +2,7 @@
 
 use std::{str::FromStr, time::Duration};
 
+use rust_decimal::Decimal;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
     SqlitePool,
@@ -10,6 +11,40 @@ use sqlx::{
 use crate::StorageError;
 
 static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/sqlite");
+
+const SQLITE_AMOUNT_INTEGER_DIGITS: usize = 12;
+const SQLITE_AMOUNT_SCALE: u32 = 8;
+
+/// 将正 Decimal 编码为 SQLite schema 所需的固定宽度文本。
+pub(crate) fn encode_amount(value: Decimal) -> Option<String> {
+    if value <= Decimal::ZERO {
+        return None;
+    }
+
+    let mut normalized = value;
+    normalized.rescale(SQLITE_AMOUNT_SCALE);
+    if normalized != value {
+        return None;
+    }
+    let rendered = normalized.to_string();
+    let (integer, fractional) = rendered.split_once('.')?;
+    if integer.len() > SQLITE_AMOUNT_INTEGER_DIGITS
+        || fractional.len() != SQLITE_AMOUNT_SCALE as usize
+        || !integer.bytes().all(|byte| byte.is_ascii_digit())
+        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let padding = "0".repeat(SQLITE_AMOUNT_INTEGER_DIGITS - integer.len());
+    Some(format!("{padding}{integer}.{fractional}"))
+}
+
+/// 将 SQLite schema 的固定宽度金额文本解码为 Decimal。
+pub(crate) fn decode_amount(value: &str) -> Option<Decimal> {
+    let decimal = value.parse().ok()?;
+    (encode_amount(decimal).as_deref() == Some(value)).then_some(decimal)
+}
 
 /// SQLite 本地存储连接。
 ///
