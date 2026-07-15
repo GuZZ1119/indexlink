@@ -1,20 +1,6 @@
 name: indexlink-local
 
 services:
-  postgres:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-indexlink}
-      POSTGRES_USER: ${POSTGRES_USER:-indexlink}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-indexlink}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
   server:
     build:
       context: ..
@@ -23,13 +9,10 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: 8080
       RUST_LOG: ${RUST_LOG:-info,indexlink_server=debug}
-      DATABASE_URL: postgres://${POSTGRES_USER:-indexlink}:${POSTGRES_PASSWORD:-indexlink}@postgres:5432/${POSTGRES_DB:-indexlink}
+      DATABASE_URL: sqlite:///data/indexlink.db?mode=rwc
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
       DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-5}
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/ready"]
       interval: 10s
@@ -37,6 +20,8 @@ services:
       retries: 5
     ports:
       - "${APP_PORT:-8080}:8080"
+    volumes:
+      - sqlite-data:/data
 
 volumes:
-  postgres-data:
+  sqlite-data:

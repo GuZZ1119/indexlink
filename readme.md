@@ -249,12 +249,12 @@ indexlink/
 
 ## 后端基础设施（第一阶段）
 
-当前后端已提供 PostgreSQL 连接池、HTTP 服务、健康检查、就绪检查、结构化日志、优雅停机和本地 Docker Compose 环境。此阶段尚未连接 Qwen、券商、交易、调度或 Decision Engine。
+当前后端默认使用本地 SQLite 文件，已提供 HTTP 服务、启动 migration、健康检查、就绪检查、结构化日志、优雅停机和持久化 Docker Compose 数据卷。旧 PostgreSQL adapter 仍保留为兼容实现，但不再是 MVP 运行时依赖。
 
 ### 本地启动
 
 1. 安装当前 stable Rust 工具链以及 `rustfmt`、`clippy`。
-2. 启动本地 PostgreSQL，并复制示例配置：
+2. 复制示例配置并启动服务。首次启动会自动创建本地 SQLite 文件并执行 migration：
 
    ```bash
    cp .env.example .env
@@ -275,14 +275,14 @@ indexlink/
 | `APP_HOST` | `0.0.0.0` | HTTP 监听地址 |
 | `APP_PORT` | `8080` | HTTP 监听端口 |
 | `RUST_LOG` | `info,indexlink_server=debug` | 日志过滤规则 |
-| `DATABASE_URL` | `postgres://indexlink:indexlink@localhost:5432/indexlink` | PostgreSQL 连接地址；必须设置 |
+| `DATABASE_URL` | `sqlite://indexlink.db?mode=rwc` | SQLite 文件地址；未设置时使用该本地默认值 |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | 逗号分隔的允许来源 |
 | `DATABASE_MAX_CONNECTIONS` | `10` | 连接池上限 |
 | `DATABASE_CONNECT_TIMEOUT_SECONDS` | `5` | 启动连接超时秒数 |
 
 ### Docker Compose
 
-以下默认账号密码只适用于本地开发，不得用于生产环境：
+Compose 会使用名为 `sqlite-data` 的本地 Docker volume 保存数据库；执行 `down` 不会删除该数据，若需要清空演示数据请显式删除该 volume。
 
 ```bash
 docker compose -f deployment/docker-compose.yml up --build -d
@@ -293,4 +293,4 @@ docker compose -f deployment/docker-compose.yml down
 ### 基础端点
 
 - `GET /health`：只检查服务进程是否存活，不访问数据库。
-- `GET /ready`：执行 PostgreSQL 存活检查；数据库不可用时返回 HTTP `503` 和不含内部错误的统一 JSON 响应。
+- `GET /ready`：执行 SQLite 存活检查；数据库不可用时返回 HTTP `503` 和不含内部错误的统一 JSON 响应。

@@ -9,6 +9,7 @@ use axum::http::HeaderValue;
 
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: &str = "8080";
+const DEFAULT_DATABASE_URL: &str = "sqlite://indexlink.db?mode=rwc";
 const DEFAULT_MAX_CONNECTIONS: &str = "10";
 const DEFAULT_CONNECT_TIMEOUT_SECONDS: &str = "5";
 
@@ -36,9 +37,9 @@ impl Config {
             .parse::<IpAddr>()
             .map_err(|_| ConfigError::InvalidHost)?;
 
-        let database_url = lookup("DATABASE_URL").ok_or(ConfigError::MissingDatabaseUrl)?;
+        let database_url = value_or_default(&mut lookup, "DATABASE_URL", DEFAULT_DATABASE_URL);
         if database_url.trim().is_empty() {
-            return Err(ConfigError::MissingDatabaseUrl);
+            return Err(ConfigError::InvalidDatabaseUrl);
         }
 
         let database_max_connections = parse_u32(
@@ -115,8 +116,8 @@ fn parse_u64(name: &'static str, value: &str) -> Result<u64, ConfigError> {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
-    #[error("DATABASE_URL must be set")]
-    MissingDatabaseUrl,
+    #[error("DATABASE_URL must not be blank")]
+    InvalidDatabaseUrl,
     #[error("APP_HOST must be a valid IP address")]
     InvalidHost,
     #[error("{name} must be a valid integer")]
@@ -135,7 +136,7 @@ pub(crate) enum ConfigError {
 mod tests {
     use super::*;
 
-    const DATABASE_URL: &str = "postgres://indexlink:indexlink@localhost/indexlink";
+    const DATABASE_URL: &str = "sqlite://test-indexlink.db?mode=rwc";
 
     fn parse(values: &[(&str, &str)]) -> Result<Config, ConfigError> {
         Config::from_lookup(|name| {
@@ -148,10 +149,10 @@ mod tests {
 
     #[test]
     fn minimal_configuration_uses_documented_defaults() {
-        let config = parse(&[("DATABASE_URL", DATABASE_URL)]).unwrap();
+        let config = parse(&[]).unwrap();
 
         assert_eq!(config.address, "0.0.0.0:8080".parse().unwrap());
-        assert_eq!(config.database_url, DATABASE_URL);
+        assert_eq!(config.database_url, DEFAULT_DATABASE_URL);
         assert_eq!(config.database_max_connections, 10);
         assert_eq!(config.database_connect_timeout, Duration::from_secs(5));
         assert!(config.cors_allowed_origins.is_empty());
@@ -174,15 +175,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_database_url_is_rejected() {
-        assert!(matches!(parse(&[]), Err(ConfigError::MissingDatabaseUrl)));
-    }
-
-    #[test]
     fn blank_database_url_is_rejected() {
         assert!(matches!(
             parse(&[("DATABASE_URL", "  ")]),
-            Err(ConfigError::MissingDatabaseUrl)
+            Err(ConfigError::InvalidDatabaseUrl)
         ));
     }
 

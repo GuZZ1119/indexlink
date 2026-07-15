@@ -347,7 +347,7 @@ GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 
 ### Decision Record 自动存证
 
-Decision record 的 PostgreSQL storage adapter 与只读 history API 已具备；当前尚未在 `POST /investment-plans/:id/decision-preview` 成功后自动写入 record。
+Decision record 的 SQLite 本地 storage adapter 与只读 history API 已具备；当前尚未在 `POST /investment-plans/:id/decision-preview` 成功后自动写入 record。PostgreSQL adapter 保留为兼容实现，默认运行时不使用。
 
 后续需要在受控的服务端编排层创建 record，并保存：
 

@@ -48,8 +48,7 @@ pub(crate) fn decode_amount(value: &str) -> Option<Decimal> {
 
 /// SQLite 本地存储连接。
 ///
-/// 此类型在 SQLite adapter 接入前提供连接、迁移与健康检查基础设施；它不会改变
-/// 现有 PostgreSQL production wiring。
+/// 此类型为本地 SQLite production wiring 提供连接、迁移与健康检查基础设施。
 #[derive(Clone, Debug)]
 pub struct SqliteStorage {
     pool: SqlitePool,

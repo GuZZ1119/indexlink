@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### 2026-07-15 22:30 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：SQLite 本地持久化 / Part 3：Decision Record adapter 与 production runtime wiring。
+- 涉及文件：
+  - `.env.example`
+  - `README.md`
+  - `API_MANAGEMENT.md`
+  - `docs/minimum_mvp.md`
+  - `deployment/Dockerfile`
+  - `deployment/docker-compose.yml`
+  - `apps/server/src/config.rs`
+  - `apps/server/src/main.rs`
+  - `crates/api/src/state.rs`
+  - `crates/storage/src/lib.rs`
+  - `crates/storage/src/sqlite.rs`
+  - `crates/storage/src/sqlite_decision_records.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `SqliteDecisionRecordRepository`，以静态 SQLite 查询实现审计快照的 create、按计划有上限列表查询与单条查询；金额沿用固定精度文本编码，JSON、UUID、时间或状态快照损坏时安全映射为后端不可用。
+  - `ApiState` 生产组合根改用 SQLite plan 与 decision record adapter，旧 PostgreSQL adapter 保留但不再进入默认运行路径。
+  - server 使用 SQLite 默认 URL 连接本地文件，并在 HTTP 监听前执行编译期嵌入的 migration；migration 失败将阻止服务启动。
+  - 配置、示例环境变量、Dockerfile 与 Compose 改为本地 SQLite。Compose 使用 `sqlite-data` volume 保留数据，不再依赖 PostgreSQL 容器。
+  - 更新 MVP 与 API 文档，明确默认本地存储、旧 PostgreSQL adapter 的兼容定位，以及 Decision Preview 自动存证仍是后续工作。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-storage --locked` 通过（30 tests，含 SQLite decision record 的外键、金额精度、UTC `Z` 时间、JSON 快照与 history limit）。
+  - `cargo test -p indexlink-api --locked` 通过（28 tests）。
+  - `cargo test -p indexlink-server --locked` 通过（14 tests）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-storage -p indexlink-api -p indexlink-server --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo doc -p indexlink-storage --no-deps --locked` 通过。
+  - 使用临时 SQLite 文件启动 `indexlink-server`，`GET /ready` 返回 `{"status":"ready","database":"ok"}`；确认 migration 在监听 HTTP 前完成。
+  - 未安装 Docker CLI，未能在本机执行 `docker compose ... config`；Compose 文件仅做静态审查。
+
 ### 2026-07-15 AEST
 
 - 执行模型：GPT-5。

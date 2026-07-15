@@ -7,19 +7,19 @@ use decision_records::{
     DecisionRecordRepositoryError, DecisionRecordService,
 };
 use indexlink_storage::{
-    PostgresDecisionRecordRepository, PostgresInvestmentPlanRepository, Storage,
+    SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository, SqliteStorage,
 };
 use investment_plans::InvestmentPlanService;
 
 enum ReadinessBackend {
-    Storage(Storage),
+    SqliteStorage(SqliteStorage),
     Custom(Arc<dyn ReadinessCheck>),
 }
 
 impl fmt::Debug for ReadinessBackend {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Storage(_) => formatter.write_str("Storage"),
+            Self::SqliteStorage(_) => formatter.write_str("SqliteStorage"),
             Self::Custom(_) => formatter.write_str("CustomReadinessCheck"),
         }
     }
@@ -49,17 +49,17 @@ impl fmt::Debug for ApiState {
 }
 
 impl ApiState {
-    /// 使用生产 PostgreSQL 存储构建应用状态。
+    /// 使用生产 SQLite 本地存储构建应用状态。
     #[must_use]
-    pub fn new(storage: Storage, version: impl Into<Arc<str>>) -> Self {
-        let plans = InvestmentPlanService::new(Arc::new(PostgresInvestmentPlanRepository::new(
+    pub fn new(storage: SqliteStorage, version: impl Into<Arc<str>>) -> Self {
+        let plans = InvestmentPlanService::new(Arc::new(SqliteInvestmentPlanRepository::new(
             storage.pool().clone(),
         )));
         let decision_records = DecisionRecordService::new(Arc::new(
-            PostgresDecisionRecordRepository::new(storage.pool().clone()),
+            SqliteDecisionRecordRepository::new(storage.pool().clone()),
         ));
         Self {
-            readiness: Arc::new(ReadinessBackend::Storage(storage)),
+            readiness: Arc::new(ReadinessBackend::SqliteStorage(storage)),
             plans,
             decision_records,
             broker: Arc::new(MockBroker::paper_only()),
@@ -133,7 +133,7 @@ impl ApiState {
     /// 检查 API 依赖是否可用。
     pub(crate) async fn check_readiness(&self) -> Result<(), ReadinessError> {
         match self.readiness.as_ref() {
-            ReadinessBackend::Storage(storage) => storage
+            ReadinessBackend::SqliteStorage(storage) => storage
                 .ping()
                 .await
                 .map_err(|error| ReadinessError::new(error.to_string())),
@@ -261,7 +261,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::*;
 
@@ -299,22 +299,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_backend_debug_and_error_hide_pool_details() {
-        let pool = PgPoolOptions::new().connect_lazy_with(
-            PgConnectOptions::new()
-                .host("secret-database.internal")
-                .username("secret-user")
-                .password("secret-password")
-                .database("secret-database"),
-        );
+    async fn sqlite_backend_debug_and_error_hide_pool_details() {
+        let pool = SqlitePoolOptions::new()
+            .connect_lazy_with(SqliteConnectOptions::new().filename("secret-database.sqlite"));
         pool.close().await;
-        let state = ApiState::new(Storage::from_pool(pool), "0.1.0");
+        let state = ApiState::new(SqliteStorage::from_pool(pool), "0.1.0");
         let debug = format!("{state:?}");
 
-        assert!(debug.contains("Storage"));
+        assert!(debug.contains("SqliteStorage"));
         assert!(!debug.contains("secret-database"));
-        assert!(!debug.contains("secret-user"));
-        assert!(!debug.contains("secret-password"));
 
         let error = state
             .check_readiness()
