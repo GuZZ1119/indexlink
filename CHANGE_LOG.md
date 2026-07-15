@@ -15,8 +15,8 @@
   - `migrations/sqlite/20260715011000_create_decision_records.sql`
   - `CHANGE_LOG.md`
 - 变更内容：
-  - 新增独立 `SqliteStorage`，为本地 `.db` 文件提供连接、外键、WAL、busy timeout、健康检查和运行时 migration 基础设施；尚未替换现有 PostgreSQL production wiring。
-  - 新增 SQLite 专用 baseline schema：UUID、精确金额、时间和 JSON snapshot 使用 TEXT；外键与 JSON 合法性由 SQLite 约束，金额比较等领域不变量仍由 Rust 领域层与后续 repository adapter 保证。
+  - 新增独立 `SqliteStorage`，为本地 `.db` 文件提供连接、外键、WAL、busy timeout、健康检查和编译期嵌入的 migration 基础设施；尚未替换现有 PostgreSQL production wiring。
+  - 新增 SQLite 专用 baseline schema：UUID、精确金额、时间和 JSON snapshot 使用 TEXT；金额使用固定 12 位整数 + 8 位小数格式，以文本比较保留正数与 `max_single_execution >= base_contribution` 约束；时间强制为 UTC RFC 3339 `Z` 格式。
   - PostgreSQL migration 与 SQLite migration 分目录维护，避免不同数据库执行不兼容 SQL。
 - 三个 PR 计划：
   1. **Part 1（本 PR）**：SQLite 连接与 migration 基础设施、SQLite baseline schema、聚焦迁移测试。
@@ -24,7 +24,7 @@
   3. **Part 3**：实现 SQLite Decision Record repository adapter，并将 server/API/config/Docker 默认 wiring 切换为本地 SQLite 文件；同时移除 MVP 对 PostgreSQL 容器的运行依赖。
 - 验证：
   - `cargo fmt --all -- --check` 通过。
-  - `cargo test -p indexlink-storage --locked` 通过（16 tests，含 SQLite 内存数据库 migration 执行）。
+  - `cargo test -p indexlink-storage --locked` 通过（17 tests，含 SQLite 内存数据库 migration 与金额、时间约束执行）。
   - `cargo test -p core-domain --locked` 通过（13 tests）。
   - `cargo check --workspace --locked` 通过。
   - `cargo clippy -p indexlink-storage --all-targets --all-features --locked -- -D warnings` 通过。

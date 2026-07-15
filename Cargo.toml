@@ -33,7 +33,7 @@ dotenvy = "0.15"
 rust_decimal = { version = "1", default-features = false, features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["migrate", "postgres", "runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["macros", "migrate", "postgres", "runtime-tokio-rustls", "sqlite"] }
 thiserror = "2"
 time = { version = "0.3", default-features = false, features = ["serde", "serde-well-known"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }

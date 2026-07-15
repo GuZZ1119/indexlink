@@ -2,6 +2,7 @@
 --
 -- JSON snapshots remain TEXT and are checked with SQLite JSON functions. The
 -- application validates complete domain snapshots before a repository writes.
+-- Planned contributions use the same fixed-width exact-decimal format as plans.
 
 CREATE TABLE decision_records (
     id TEXT PRIMARY KEY NOT NULL,
@@ -31,6 +32,14 @@ CREATE TABLE decision_records (
         CHECK (currency GLOB '[A-Z][A-Z][A-Z]'),
     CONSTRAINT decision_records_execution_status_check
         CHECK (execution_status IN ('due', 'waiting', 'inactive')),
+    CONSTRAINT decision_records_planned_contribution_check
+        CHECK (
+            planned_contribution IS NULL
+            OR (
+                planned_contribution GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                AND planned_contribution > '000000000000.00000000'
+            )
+        ),
     CONSTRAINT decision_records_execution_snapshot_json_check
         CHECK (json_valid(execution_snapshot)),
     CONSTRAINT decision_records_fundamental_snapshot_json_check
@@ -46,7 +55,12 @@ CREATE TABLE decision_records (
     CONSTRAINT decision_records_broker_order_ack_json_check
         CHECK (broker_order_ack IS NULL OR json_valid(broker_order_ack)),
     CONSTRAINT decision_records_summary_not_blank_check
-        CHECK (summary = trim(summary) AND length(summary) BETWEEN 1 AND 2000)
+        CHECK (summary = trim(summary) AND length(summary) BETWEEN 1 AND 2000),
+    CONSTRAINT decision_records_created_at_utc_check
+        CHECK (
+            strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS NOT NULL
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
+        )
 );
 
 CREATE INDEX decision_records_plan_created_idx

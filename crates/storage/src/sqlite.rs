@@ -1,10 +1,6 @@
 //! SQLite 本地存储基础设施与 migration runner。
 
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
+use std::{str::FromStr, time::Duration};
 
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
@@ -12,6 +8,8 @@ use sqlx::{
 };
 
 use crate::StorageError;
+
+static SQLITE_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/sqlite");
 
 /// SQLite 本地存储连接。
 ///
@@ -73,14 +71,12 @@ impl SqliteStorage {
         Ok(Self { pool })
     }
 
-    /// 执行 SQLite 专用 migration 目录中的全部 migration。
+    /// 执行编译进二进制的全部 SQLite migration。
     ///
     /// 调用方应在开始提供 HTTP 服务前调用此方法；失败时返回
     /// [`StorageError::Migration`]，以阻止服务运行在不完整 schema 上。
     pub async fn migrate(&self) -> Result<(), StorageError> {
-        sqlx::migrate::Migrator::new(sqlite_migration_directory())
-            .await
-            .map_err(StorageError::Migration)?
+        SQLITE_MIGRATOR
             .run(&self.pool)
             .await
             .map_err(StorageError::Migration)
@@ -103,15 +99,6 @@ impl SqliteStorage {
     #[must_use]
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
-    }
-}
-
-fn sqlite_migration_directory() -> PathBuf {
-    let workspace_relative = PathBuf::from("migrations/sqlite");
-    if workspace_relative.is_dir() {
-        workspace_relative
-    } else {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations/sqlite")
     }
 }
 
@@ -165,5 +152,51 @@ mod tests {
                 .expect_err("zero max connections must fail");
 
         assert!(matches!(error, StorageError::InvalidConfiguration(_)));
+    }
+
+    /// 验证 SQLite schema 拒绝非规范金额、错误金额关系和非 UTC 时间文本。
+    #[tokio::test]
+    async fn schema_enforces_amount_and_timestamp_invariants() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .in_memory(true)
+                    .foreign_keys(true),
+            )
+            .await
+            .expect("in-memory SQLite pool must connect");
+        let storage = SqliteStorage::from_pool(pool);
+        storage
+            .migrate()
+            .await
+            .expect("SQLite migration must apply");
+
+        let invalid_amount = sqlx::query(
+            "INSERT INTO investment_plans \
+             (id, name, symbol, base_contribution, currency, schedule_day, max_single_execution) \
+             VALUES ('plan-1', 'Core plan', 'VOO', '1000.00', 'USD', 15, '000000001000.00000000')",
+        )
+        .execute(storage.pool())
+        .await;
+        assert!(invalid_amount.is_err());
+
+        let invalid_relationship = sqlx::query(
+            "INSERT INTO investment_plans \
+             (id, name, symbol, base_contribution, currency, schedule_day, max_single_execution) \
+             VALUES ('plan-2', 'Core plan', 'VOO', '000000001000.00000000', 'USD', 15, '000000000900.00000000')",
+        )
+        .execute(storage.pool())
+        .await;
+        assert!(invalid_relationship.is_err());
+
+        let invalid_timestamp = sqlx::query(
+            "INSERT INTO investment_plans \
+             (id, name, symbol, base_contribution, currency, schedule_day, max_single_execution, created_at, updated_at) \
+             VALUES ('plan-3', 'Core plan', 'VOO', '000000001000.00000000', 'USD', 15, '000000001000.00000000', '2026-07-15T01:02:03.456+00:00', '2026-07-15T01:02:03.456+00:00')",
+        )
+        .execute(storage.pool())
+        .await;
+        assert!(invalid_timestamp.is_err());
     }
 }
