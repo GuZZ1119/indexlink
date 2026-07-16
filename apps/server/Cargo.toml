@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 axum.workspace = true
+ai-client.workspace = true
 dotenvy.workspace = true
 indexlink-api.workspace = true
 indexlink-storage.workspace = true

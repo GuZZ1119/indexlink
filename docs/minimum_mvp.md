@@ -145,18 +145,14 @@ MVP 接入策略：
 
 ## 当前明确缺口
 
-### 阿里云 Qwen 还没接到 API
+### 阿里云 Qwen 已接入独立 API，尚待真实 Key smoke
 
-当前 AI 只是 library-ready，不能直接从 API 演示。
+server 现在可读取可选 `DASHSCOPE_API_KEY` 及 model、base URL、timeout、temperature、max tokens，并将 Qwen provider 与 CNBC RSS 新闻源注入 `ApiState`。`POST /market-sentiment/preview` 返回有界 `score` 与稳定 `label`；未配置 Key 或新闻/AI provider 失败时返回不泄露内部细节的统一 `503`。
 
-MVP 需要补到：
+仍需完成：
 
-- server config 读取 `DASHSCOPE_API_KEY`。
-- 支持配置 Qwen model、base URL、timeout、temperature 和 max tokens。
-- API state 注入 Qwen provider 与 news source。
-- 新增 market sentiment API。
-- 错误响应不暴露 token、URL credential、serde 细节或 provider 内部错误。
-- 至少一次使用真实阿里云 key 的 smoke test。
+- 使用真实阿里云 Key 在本机执行一次网络 smoke。
+- 设计受控 structured output，再补 explanation 与新闻来源摘要；不得直接把未约束的模型自由文本作为 API 契约。
 
 ### Decision Preview API 仍需接真实上游
 
@@ -352,40 +348,34 @@ Content-Type: application/json
 
 ## 后续 PR 建议顺序
 
-1. 阿里云 Qwen API 接入
-   - server config 读取 DashScope 配置。
-   - API state 注入 Qwen provider。
-   - 新增 market sentiment endpoint。
-   - 测试用 fake provider，演示用真实阿里云 key。
-
-2. Futu/Moomoo OpenD paper adapter
+1. Futu/Moomoo OpenD paper adapter
    - 已完成 broker port adapter 和安全闸门。
    - 下一步补真实 OpenD gateway transport。
    - 读取 server OpenD host/port 与 paper mode 配置。
 
-3. Decision Preview API 升级真实上游
+2. Decision Preview API 升级真实上游
    - sentiment 改为接后端 Qwen 输出。
    - paper order 改为接真实 OpenD paper gateway。
    - summary 增加 fundamental/trend/sentiment 的分层解释。
 
-4. 演示级最小前端（Jame 负责）
+3. 演示级最小前端（Jame 负责）
    - 实现计划列表/创建/详情。
    - 实现 execution preview + bucket split 展示。
    - 实现 market sentiment 与 decision summary 展示。
    - 实现 paper order ack 展示。
 
-5. Demo smoke 文档
+4. Demo smoke 文档
    - 给出完整 curl 流程。
    - 给出前端点击演示流程。
    - 写明需要的环境变量。
    - 记录真实阿里云 key 和 Futu/Moomoo paper trading 的手动验证步骤。
 
-6. Decision Record 自动存证
+5. Decision Record 自动存证
    - 已具备 `decision_records` 表、SQLite 本地 storage adapter 和只读 history API；PostgreSQL adapter 保留为兼容实现。
    - 后续在 Decision Preview 成功后，由服务端创建 audit record；不得由前端直接提交未经信任的快照。
    - 记录必须优先保存 fundamental、trend、sentiment、execution 与 decision 的输入/输出快照；不得保存 Qwen key、OpenD 密码、account id 或 token。
 
-7. 可选：受保护 live trading
+6. 可选：受保护 live trading
    - 只在 paper trading demo 稳定后考虑。
    - 需要显式配置、人工确认和更严格审计。
 
@@ -405,4 +395,4 @@ Content-Type: application/json
 - 能返回一段面向用户的最终 summary。
 - 能在演示级前端展示上述完整链路。
 
-当前状态更准确地说是：投资计划与双桶执行层可演示；70% fundamental 可复用；20% trend 已可复用；70/20/10 decision engine 已可复用；broker port、mock broker、OpenD paper adapter 与 Decision Preview API + MockBroker 串联已可复用；decision record 的领域层、本机 SQLite storage 与只读 history API 已具备，但 Decision Preview 尚未自动写入 record；AI 库层可复用但尚未接入 API；阿里云 API 接入、Futu/Moomoo OpenD transport、完整最终 summary 和演示级前端仍是 MVP 缺口。
+当前状态更准确地说是：投资计划与双桶执行层可演示；70% fundamental 可复用；20% trend 已可复用；70/20/10 decision engine 已可复用；broker port、mock broker、OpenD paper adapter 与 Decision Preview API + MockBroker 串联已可复用；decision record 的领域层、本机 SQLite storage 与只读 history API 已具备，但 Decision Preview 尚未自动写入 record；Qwen 已接入独立 market sentiment API，尚待真实 Key 网络 smoke 与 structured explanation；Futu/Moomoo OpenD transport、完整最终 summary 和演示级前端仍是 MVP 缺口。

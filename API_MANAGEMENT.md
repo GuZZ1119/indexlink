@@ -258,31 +258,34 @@ GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 
 按 ID 查询单条 decision record。不存在时返回 `404 not_found`。
 
-## 待补充 API
+## Market Sentiment API
 
 ### 阿里云 Qwen Market Sentiment API
 
-当前 AI library 层已有 DashScope/OpenAI-compatible Qwen client、CNBC RSS 新闻源和 sentiment pipeline，但尚未接入 server config、API state 和 HTTP route。
-
-建议新增：
-
 #### `POST /market-sentiment/preview`
 
-目标：
+后端拉取 CNBC RSS 新闻并调用 DashScope/OpenAI-compatible Qwen，返回可直接接入 70/20/10 决策链路的有界情绪值。设置 `DASHSCOPE_API_KEY` 后由 server 在启动时构造并注入真实 provider；未设置 Key 时 server 仍可启动，但本路由返回统一的 `503 service_unavailable`，不暴露 provider、URL 或凭据细节。
 
-- 后端读取新闻源。
-- 调用阿里云 Qwen。
-- 返回 sentiment score、label、解释和新闻来源摘要。
+响应字段：
 
-暂定响应字段：
+- `score`：`[-1.0, 1.0]` 内的情绪分数。
+- `label`：`positive`、`neutral` 或 `negative`，由分数正负确定。
 
-- `score`
-- `label`
-- `summary`
-- `sources`
-- `provider`
-- `model`
-- `generated_at`
+本阶段刻意不返回 LLM 自由文本解释、新闻正文、Key、provider URL 或模型内部错误。后续 structured-output PR 再补受控 explanation 与来源摘要，避免把未经约束的模型文本直接纳入 API 契约。
+
+本地真实 Key smoke（不要把 Key 写入仓库或终端输出）：
+
+```bash
+DASHSCOPE_API_KEY='<local-secret>' cargo test -p ai-client --test news real_cnbc_with_qwen -- --ignored --nocapture
+```
+
+HTTP smoke：在同一终端环境启动 `cargo run -p indexlink-server` 后，执行：
+
+```bash
+curl -X POST http://127.0.0.1:8080/market-sentiment/preview
+```
+
+## 待补充 API
 
 ### Fundamental Signal API
 

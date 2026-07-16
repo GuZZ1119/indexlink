@@ -1,5 +1,6 @@
 use std::{fmt, sync::Arc};
 
+use ai_client::{fetch_market_sentiment, AiProvider, NewsSource, Sentiment};
 use async_trait::async_trait;
 use broker::{BrokerClient, MockBroker};
 use decision_records::{
@@ -11,9 +12,22 @@ use indexlink_storage::{
 };
 use investment_plans::InvestmentPlanService;
 
+use crate::ApiError;
+
 enum ReadinessBackend {
     SqliteStorage(SqliteStorage),
     Custom(Arc<dyn ReadinessCheck>),
+}
+
+struct MarketSentimentDependencies {
+    news_source: Arc<dyn NewsSource>,
+    provider: Arc<dyn AiProvider>,
+}
+
+impl fmt::Debug for MarketSentimentDependencies {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("MarketSentimentDependencies")
+    }
 }
 
 impl fmt::Debug for ReadinessBackend {
@@ -32,6 +46,7 @@ pub struct ApiState {
     plans: InvestmentPlanService,
     decision_records: DecisionRecordService,
     broker: Arc<dyn BrokerClient>,
+    market_sentiment: Option<Arc<MarketSentimentDependencies>>,
     version: Arc<str>,
 }
 
@@ -43,6 +58,7 @@ impl fmt::Debug for ApiState {
             .field("plans", &"InvestmentPlanService")
             .field("decision_records", &"DecisionRecordService")
             .field("broker", &"BrokerClient")
+            .field("market_sentiment", &self.market_sentiment)
             .field("version", &self.version)
             .finish()
     }
@@ -63,6 +79,7 @@ impl ApiState {
             plans,
             decision_records,
             broker: Arc::new(MockBroker::paper_only()),
+            market_sentiment: None,
             version: version.into(),
         }
     }
@@ -126,8 +143,25 @@ impl ApiState {
             plans,
             decision_records,
             broker,
+            market_sentiment: None,
             version: version.into(),
         }
+    }
+
+    /// 注入市场新闻源与 AI provider，启用真实市场情绪预览。
+    ///
+    /// provider 的凭据必须只由 server 配置层持有，不能进入 HTTP 请求、响应或审计快照。
+    #[must_use]
+    pub fn with_market_sentiment(
+        mut self,
+        news_source: Arc<dyn NewsSource>,
+        provider: Arc<dyn AiProvider>,
+    ) -> Self {
+        self.market_sentiment = Some(Arc::new(MarketSentimentDependencies {
+            news_source,
+            provider,
+        }));
+        self
     }
 
     /// 检查 API 依赖是否可用。
@@ -159,6 +193,20 @@ impl ApiState {
     /// 返回 decision record 应用服务。
     pub(crate) fn decision_records(&self) -> &DecisionRecordService {
         &self.decision_records
+    }
+
+    /// 拉取新闻并调用已配置的 AI provider 生成市场情绪。
+    pub(crate) async fn market_sentiment(&self) -> Result<Sentiment, ApiError> {
+        let dependencies = self
+            .market_sentiment
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        fetch_market_sentiment(
+            dependencies.news_source.as_ref(),
+            dependencies.provider.as_ref(),
+        )
+        .await
+        .map_err(Into::into)
     }
 }
 

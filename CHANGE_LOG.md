@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### 2026-07-16 23:40 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：阿里云 Qwen 市场情绪 API 接入 / OpenD 后续实施计划。
+- 涉及文件：
+  - `.env.example`
+  - `API_MANAGEMENT.md`
+  - `Cargo.lock`
+  - `apps/server/Cargo.toml`
+  - `apps/server/src/config.rs`
+  - `apps/server/src/main.rs`
+  - `crates/ai-client/src/news.rs`
+  - `crates/api/Cargo.toml`
+  - `crates/api/src/error.rs`
+  - `crates/api/src/routes/market_sentiment.rs`
+  - `crates/api/src/routes/mod.rs`
+  - `crates/api/src/state.rs`
+  - `crates/api/tests/market_sentiment.rs`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - server 读取可选的 `DASHSCOPE_API_KEY`、base URL、model、timeout、max tokens 与 temperature；Key 未配置时不阻止本地 SQLite 服务启动，市场情绪路由统一返回安全的 `503`。配置和日志不会输出 Key。
+  - `ApiState` 新增受控的新闻源与 AI provider 注入点；production composition root 使用 `RssNewsSource + QwenClient`，测试使用 fake adapter，不发起网络请求。
+  - 新增 `POST /market-sentiment/preview`，返回 `score` 与稳定 `positive` / `neutral` / `negative` 标签；新闻源和 Qwen 失败统一映射为既有 JSON `service_unavailable` 错误，不向客户端泄露 provider 内部错误。
+  - `ai-client` 的市场情绪管线允许通过 trait object 注入，保持 library 与 HTTP adapter 的六边形边界。
+  - 真实 Key smoke 使用已有忽略式 Qwen 新闻集成测试；API 文档补充启动后 HTTP smoke 命令。真实凭据不进入仓库、日志或测试断言。
+  - OpenD 按三份 PR 实施：
+    1. `opend-01-session-transport`：在 broker adapter 内实现 TCP/SDK transport 边界、连接生命周期、认证与 paper account 选择；以协议 fake 覆盖，不改 server 组合根。
+    2. `opend-02-order-gateway`：实现 market/limit 下单请求与 ack 转换、超时、网络错误和安全脱敏；继续强制 paper-only，不引入 live 下单路径。
+    3. `opend-03-server-wiring-smoke`：从 server 环境变量构造并注入真实 `OpenDPaperBroker`，替换 production 固定 `MockBroker`，保留未配置时的 Mock 回退；使用虚拟账户执行一次真实 smoke 并记录安全操作步骤。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-api --offline` 通过（31 tests，含 fake provider 注入、未配置 provider 与 provider 错误映射）。
+  - `cargo test -p indexlink-server --offline` 通过（19 tests，含可选 Qwen 配置、参数解析与 Key 空值拒绝）。
+  - `cargo test -p core-domain --offline` 通过（13 tests）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p ai-client -p indexlink-api -p indexlink-server --all-targets --all-features --locked -- -D warnings` 通过。
+  - 已尝试 `cargo test -p ai-client --test news real_cnbc_with_qwen -- --ignored --nocapture`；当前环境未设置 `DASHSCOPE_API_KEY`，测试在网络请求前退出。待本机配置 Key 后按 API 文档命令重跑；不得在 CI 或日志中输出凭据。
+
 ### 2026-07-15 23:01 AEST
 
 - 执行模型：GPT-5。

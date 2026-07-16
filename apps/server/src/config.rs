@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use ai_client::AiConfig;
 use axum::http::HeaderValue;
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -12,6 +13,12 @@ const DEFAULT_PORT: &str = "8080";
 const DEFAULT_DATABASE_URL: &str = "sqlite://indexlink.db?mode=rwc";
 const DEFAULT_MAX_CONNECTIONS: &str = "10";
 const DEFAULT_CONNECT_TIMEOUT_SECONDS: &str = "5";
+const DASHSCOPE_API_KEY: &str = "DASHSCOPE_API_KEY";
+const DASHSCOPE_BASE_URL: &str = "DASHSCOPE_BASE_URL";
+const DASHSCOPE_MODEL: &str = "DASHSCOPE_MODEL";
+const DASHSCOPE_TIMEOUT_SECONDS: &str = "DASHSCOPE_TIMEOUT_SECONDS";
+const DASHSCOPE_MAX_TOKENS: &str = "DASHSCOPE_MAX_TOKENS";
+const DASHSCOPE_TEMPERATURE: &str = "DASHSCOPE_TEMPERATURE";
 
 #[derive(Debug)]
 pub(crate) struct Config {
@@ -20,6 +27,7 @@ pub(crate) struct Config {
     pub(crate) database_max_connections: u32,
     pub(crate) database_connect_timeout: Duration,
     pub(crate) cors_allowed_origins: Vec<HeaderValue>,
+    pub(crate) qwen: Option<AiConfig>,
 }
 
 impl Config {
@@ -77,6 +85,7 @@ impl Config {
                     .map_err(|_| ConfigError::InvalidCorsOrigin)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let qwen = qwen_config(&mut lookup)?;
 
         Ok(Self {
             address: SocketAddr::new(ip, port),
@@ -84,7 +93,69 @@ impl Config {
             database_max_connections,
             database_connect_timeout: Duration::from_secs(timeout_seconds),
             cors_allowed_origins,
+            qwen,
         })
+    }
+}
+
+fn qwen_config(
+    lookup: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<Option<AiConfig>, ConfigError> {
+    let Some(api_key) = lookup(DASHSCOPE_API_KEY) else {
+        return Ok(None);
+    };
+    let api_key = non_blank(DASHSCOPE_API_KEY, api_key)?;
+    let defaults = AiConfig::default();
+    let base_url = non_blank(
+        DASHSCOPE_BASE_URL,
+        lookup(DASHSCOPE_BASE_URL).unwrap_or(defaults.base_url),
+    )?;
+    let model = non_blank(
+        DASHSCOPE_MODEL,
+        lookup(DASHSCOPE_MODEL).unwrap_or(defaults.model),
+    )?;
+    let timeout_seconds = parse_u64(
+        DASHSCOPE_TIMEOUT_SECONDS,
+        &lookup(DASHSCOPE_TIMEOUT_SECONDS)
+            .unwrap_or_else(|| defaults.timeout.as_secs().to_string()),
+    )?;
+    if timeout_seconds == 0 {
+        return Err(ConfigError::NonPositive(DASHSCOPE_TIMEOUT_SECONDS));
+    }
+    let max_tokens = parse_u32(
+        DASHSCOPE_MAX_TOKENS,
+        &lookup(DASHSCOPE_MAX_TOKENS).unwrap_or_else(|| defaults.max_tokens.to_string()),
+    )?;
+    if max_tokens == 0 {
+        return Err(ConfigError::NonPositive(DASHSCOPE_MAX_TOKENS));
+    }
+    let temperature = lookup(DASHSCOPE_TEMPERATURE)
+        .unwrap_or_else(|| defaults.temperature.to_string())
+        .parse::<f32>()
+        .map_err(|source| ConfigError::InvalidFloat {
+            name: DASHSCOPE_TEMPERATURE,
+            source,
+        })?;
+    if !temperature.is_finite() || !(0.0..=2.0).contains(&temperature) {
+        return Err(ConfigError::InvalidTemperature);
+    }
+
+    Ok(Some(AiConfig {
+        base_url,
+        api_key,
+        model,
+        timeout: Duration::from_secs(timeout_seconds),
+        max_tokens,
+        temperature,
+    }))
+}
+
+fn non_blank(name: &'static str, value: String) -> Result<String, ConfigError> {
+    let normalized = value.trim().to_owned();
+    if normalized.is_empty() {
+        Err(ConfigError::BlankValue(name))
+    } else {
+        Ok(normalized)
     }
 }
 
@@ -126,6 +197,16 @@ pub(crate) enum ConfigError {
         #[source]
         source: ParseIntError,
     },
+    #[error("{name} must be a valid finite number")]
+    InvalidFloat {
+        name: &'static str,
+        #[source]
+        source: std::num::ParseFloatError,
+    },
+    #[error("DASHSCOPE_TEMPERATURE must be in the range 0.0..=2.0")]
+    InvalidTemperature,
+    #[error("{0} must not be blank")]
+    BlankValue(&'static str),
     #[error("{0} must be greater than zero")]
     NonPositive(&'static str),
     #[error("CORS_ALLOWED_ORIGINS contains an invalid origin")]
@@ -156,6 +237,7 @@ mod tests {
         assert_eq!(config.database_max_connections, 10);
         assert_eq!(config.database_connect_timeout, Duration::from_secs(5));
         assert!(config.cors_allowed_origins.is_empty());
+        assert!(config.qwen.is_none());
     }
 
     #[test]
@@ -346,5 +428,63 @@ mod tests {
         assert_eq!(display, "APP_PORT must be a valid integer");
         assert!(!display.contains(secret_url));
         assert!(!display.contains("private-password"));
+    }
+
+    #[test]
+    fn qwen_configuration_is_optional_and_uses_safe_defaults() {
+        let config = parse(&[(DASHSCOPE_API_KEY, "sk-test-secret")]).unwrap();
+        let qwen = config.qwen.expect("key enables Qwen configuration");
+
+        assert_eq!(
+            qwen.base_url,
+            "https://dashscope.aliyuncs.com/compatible-mode"
+        );
+        assert_eq!(qwen.model, "qwen-plus");
+        assert_eq!(qwen.timeout, Duration::from_secs(30));
+        assert_eq!(qwen.max_tokens, 128);
+        assert_eq!(qwen.temperature, 0.0);
+        assert_eq!(qwen.api_key, "sk-test-secret");
+    }
+
+    #[test]
+    fn qwen_configuration_accepts_explicit_runtime_values() {
+        let config = parse(&[
+            (DASHSCOPE_API_KEY, "sk-test-secret"),
+            (DASHSCOPE_BASE_URL, "https://qwen.example/compatible-mode/"),
+            (DASHSCOPE_MODEL, "qwen-max"),
+            (DASHSCOPE_TIMEOUT_SECONDS, "9"),
+            (DASHSCOPE_MAX_TOKENS, "256"),
+            (DASHSCOPE_TEMPERATURE, "0.2"),
+        ])
+        .unwrap();
+        let qwen = config.qwen.expect("key enables Qwen configuration");
+
+        assert_eq!(qwen.base_url, "https://qwen.example/compatible-mode/");
+        assert_eq!(qwen.model, "qwen-max");
+        assert_eq!(qwen.timeout, Duration::from_secs(9));
+        assert_eq!(qwen.max_tokens, 256);
+        assert_eq!(qwen.temperature, 0.2);
+    }
+
+    #[test]
+    fn blank_qwen_key_is_rejected_without_echoing_the_value() {
+        let error =
+            parse(&[(DASHSCOPE_API_KEY, "  ")]).expect_err("blank configured key must fail fast");
+
+        assert_eq!(error.to_string(), "DASHSCOPE_API_KEY must not be blank");
+    }
+
+    #[test]
+    fn invalid_qwen_temperature_is_rejected() {
+        let error = parse(&[
+            (DASHSCOPE_API_KEY, "sk-test-secret"),
+            (DASHSCOPE_TEMPERATURE, "2.1"),
+        ])
+        .expect_err("temperature above provider range must fail");
+
+        assert_eq!(
+            error.to_string(),
+            "DASHSCOPE_TEMPERATURE must be in the range 0.0..=2.0"
+        );
     }
 }

@@ -6,9 +6,11 @@
 mod config;
 mod shutdown;
 
+use ai_client::{QwenClient, RssNewsSource};
 use config::Config;
 use indexlink_api::{build_router_with_cors, ApiState};
 use indexlink_storage::SqliteStorage;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -25,11 +27,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
     storage.migrate().await?;
     tracing::info!("SQLite migrations applied");
+    let market_sentiment_configured = config.qwen.is_some();
     let state = ApiState::new(storage, env!("CARGO_PKG_VERSION"));
+    let state = match config.qwen {
+        Some(qwen_config) => state.with_market_sentiment(
+            Arc::new(RssNewsSource::new()),
+            Arc::new(QwenClient::new(qwen_config)),
+        ),
+        None => state,
+    };
     let app = build_router_with_cors(state, config.cors_allowed_origins);
     let listener = tokio::net::TcpListener::bind(config.address).await?;
 
-    tracing::info!(address = %config.address, "indexlink server started");
+    tracing::info!(
+        address = %config.address,
+        market_sentiment_configured,
+        "indexlink server started"
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown::signal())
         .await?;

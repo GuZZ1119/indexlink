@@ -1,3 +1,4 @@
+use ai_client::PipelineError;
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use broker::BrokerError;
 use decision_records::DecisionRecordApplicationError;
@@ -115,6 +116,13 @@ impl From<BrokerError> for ApiError {
             | BrokerError::PaperTradingRequired { .. } => Self::BadRequest,
             BrokerError::Unavailable => Self::ServiceUnavailable,
         }
+    }
+}
+
+impl From<PipelineError> for ApiError {
+    /// Convert news-source and AI-provider failures into the safe unavailable envelope.
+    fn from(_: PipelineError) -> Self {
+        Self::ServiceUnavailable
     }
 }
 

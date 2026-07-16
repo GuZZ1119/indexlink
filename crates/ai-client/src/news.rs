@@ -420,8 +420,8 @@ pub enum PipelineError {
 ///
 /// 新闻获取、AI 超时/解析等任一环节失败均返回 [`PipelineError`]。
 pub async fn fetch_market_sentiment(
-    source: &impl NewsSource,
-    provider: &impl AiProvider,
+    source: &(impl NewsSource + ?Sized),
+    provider: &(impl AiProvider + ?Sized),
 ) -> Result<Sentiment, PipelineError> {
     let news = source.fetch().await?;
     debug!(count = news.len(), "fetched news for sentiment analysis");

@@ -23,6 +23,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 http-body-util = "0.1"
 serde_json.workspace = true
 sqlx.workspace = true

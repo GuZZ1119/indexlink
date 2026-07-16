@@ -877,6 +877,7 @@ dependencies = [
  "async-trait",
  "axum",
  "broker",
+ "chrono",
  "core-domain",
  "decision-engine",
  "decision-records",
@@ -901,6 +902,7 @@ dependencies = [
 name = "indexlink-server"
 version = "0.1.0"
 dependencies = [
+ "ai-client",
  "axum",
  "dotenvy",
  "indexlink-api",
