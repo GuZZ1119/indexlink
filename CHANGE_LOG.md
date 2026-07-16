@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### 2026-07-16 23:40 AEST
+### 2026-07-16 23:58 AEST
 
 - 执行模型：GPT-5。
 - 变更类型：阿里云 Qwen 市场情绪 API 接入 / OpenD 后续实施计划。
@@ -26,6 +26,7 @@
   - server 读取可选的 `DASHSCOPE_API_KEY`、base URL、model、timeout、max tokens 与 temperature；Key 未配置时不阻止本地 SQLite 服务启动，市场情绪路由统一返回安全的 `503`。配置和日志不会输出 Key。
   - `ApiState` 新增受控的新闻源与 AI provider 注入点；production composition root 使用 `RssNewsSource + QwenClient`，测试使用 fake adapter，不发起网络请求。
   - 新增 `POST /market-sentiment/preview`，返回 `score` 与稳定 `positive` / `neutral` / `negative` 标签；新闻源和 Qwen 失败统一映射为既有 JSON `service_unavailable` 错误，不向客户端泄露 provider 内部错误。
+  - 审查修正：明确该路由尚未自动串联至 Decision Preview；真实 Key smoke 改为 shell 隐藏输入后 export，避免 Key 写入命令历史；server 将 Qwen 装配提取为 helper 并覆盖已配置/未配置两个分支；API 层在安全映射前记录已脱敏的管线错误，便于排障。
   - `ai-client` 的市场情绪管线允许通过 trait object 注入，保持 library 与 HTTP adapter 的六边形边界。
   - 真实 Key smoke 使用已有忽略式 Qwen 新闻集成测试；API 文档补充启动后 HTTP smoke 命令。真实凭据不进入仓库、日志或测试断言。
   - OpenD 按三份 PR 实施：
@@ -35,7 +36,7 @@
 - 验证：
   - `cargo fmt --all -- --check` 通过。
   - `cargo test -p indexlink-api --offline` 通过（31 tests，含 fake provider 注入、未配置 provider 与 provider 错误映射）。
-  - `cargo test -p indexlink-server --offline` 通过（19 tests，含可选 Qwen 配置、参数解析与 Key 空值拒绝）。
+  - `cargo test -p indexlink-server --locked` 通过（21 tests，含可选 Qwen 配置、参数解析与 Key 空值拒绝，以及 Qwen 装配的已配置/未配置分支）。
   - `cargo test -p core-domain --offline` 通过（13 tests）。
   - `cargo check --workspace --locked` 通过。
   - `cargo clippy -p ai-client -p indexlink-api -p indexlink-server --all-targets --all-features --locked -- -D warnings` 通过。

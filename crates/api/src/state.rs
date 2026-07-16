@@ -206,6 +206,7 @@ impl ApiState {
             dependencies.provider.as_ref(),
         )
         .await
+        .inspect_err(|error| tracing::error!(%error, "market sentiment pipeline failed"))
         .map_err(Into::into)
     }
 }

@@ -264,7 +264,7 @@ GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 
 #### `POST /market-sentiment/preview`
 
-后端拉取 CNBC RSS 新闻并调用 DashScope/OpenAI-compatible Qwen，返回可直接接入 70/20/10 决策链路的有界情绪值。设置 `DASHSCOPE_API_KEY` 后由 server 在启动时构造并注入真实 provider；未设置 Key 时 server 仍可启动，但本路由返回统一的 `503 service_unavailable`，不暴露 provider、URL 或凭据细节。
+后端拉取 CNBC RSS 新闻并调用 DashScope/OpenAI-compatible Qwen，返回可作为后续 70/20/10 决策链路输入的有界情绪值。设置 `DASHSCOPE_API_KEY` 后由 server 在启动时构造并注入真实 provider；未设置 Key 时 server 仍可启动，但本路由返回统一的 `503 service_unavailable`，不暴露 provider、URL 或凭据细节。当前 `Decision Preview` 仍使用调用方传入的 sentiment，尚未自动调用本路由。
 
 响应字段：
 
@@ -276,7 +276,9 @@ GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 本地真实 Key smoke（不要把 Key 写入仓库或终端输出）：
 
 ```bash
-DASHSCOPE_API_KEY='<local-secret>' cargo test -p ai-client --test news real_cnbc_with_qwen -- --ignored --nocapture
+read -r -s DASHSCOPE_API_KEY
+export DASHSCOPE_API_KEY
+cargo test -p ai-client --test news real_cnbc_with_qwen -- --ignored --nocapture
 ```
 
 HTTP smoke：在同一终端环境启动 `cargo run -p indexlink-server` 后，执行：
