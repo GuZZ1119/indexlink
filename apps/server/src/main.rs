@@ -243,7 +243,6 @@ mod tests {
                             "vix_percentile": 0.5,
                             "regime": "neutral"
                         },
-                        "sentiment": {"score": 0.0},
                         "paper_order": {
                             "idempotency_key": idempotency_key,
                             "side": "buy",

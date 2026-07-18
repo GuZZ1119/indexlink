@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 2026-07-19 00:21 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：CI 回归修正 / Qwen 自动 Decision Preview。
+- 涉及文件：
+  - `apps/server/src/main.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 更新 server composition-root 的 Decision Preview 测试请求，移除已经废弃且严格拒绝的手工 `sentiment` DTO 字段；该测试继续验证配置的 broker factory 取代默认 mock，且在 broker 不可用时返回统一 `503`。
+  - 此修正仅作用于你的 Fork `main`；不修改、不合并或推送 Jame `upstream`。
+- 验证：
+  - `cargo test -p indexlink-server --locked` 通过（26 passed、1 ignored）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo llvm-cov --workspace --all-features --summary-only` 通过（总行覆盖率 93.70%）。
+  - `cargo fmt --all -- --check`、`cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-server -p indexlink-api --all-targets --all-features --locked -- -D warnings` 通过。
+
 ### 2026-07-19 00:11 AEST
 
 - 执行模型：GPT-5。
