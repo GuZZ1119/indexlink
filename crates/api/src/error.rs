@@ -113,7 +113,8 @@ impl From<BrokerError> for ApiError {
             BrokerError::Validation(_)
             | BrokerError::LiveTradingDisabled
             | BrokerError::EnvironmentMismatch { .. }
-            | BrokerError::PaperTradingRequired { .. } => Self::BadRequest,
+            | BrokerError::PaperTradingRequired { .. }
+            | BrokerError::Rejected => Self::BadRequest,
             BrokerError::Unavailable => Self::ServiceUnavailable,
         }
     }
@@ -195,5 +196,14 @@ mod tests {
             serde_json::to_value(body).unwrap()["error"]["request_id"],
             json!("request-123")
         );
+    }
+
+    /// Verify a safe broker rejection keeps the public bad-request contract.
+    #[test]
+    fn broker_rejection_maps_to_bad_request() {
+        assert!(matches!(
+            ApiError::from(BrokerError::Rejected),
+            ApiError::BadRequest
+        ));
     }
 }

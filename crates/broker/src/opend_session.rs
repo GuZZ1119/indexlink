@@ -10,6 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 use tokio::{
@@ -20,7 +21,10 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-use crate::{BrokerEnvironment, OpenDConnectionConfig};
+use crate::{
+    BrokerEnvironment, BrokerError, BrokerOrderAck, BrokerOrderRequest, BrokerOrderSide,
+    BrokerOrderStatus, BrokerOrderType, OpenDConnectionConfig, OpenDOrderGateway,
+};
 
 const HEADER_LENGTH: usize = 44;
 const MAX_BODY_LENGTH: usize = 1024 * 1024;
@@ -29,7 +33,10 @@ const INIT_CONNECT_PROTOCOL_ID: u32 = 1001;
 const GET_GLOBAL_STATE_PROTOCOL_ID: u32 = 1002;
 const KEEP_ALIVE_PROTOCOL_ID: u32 = 1004;
 const GET_ACCOUNT_LIST_PROTOCOL_ID: u32 = 2001;
+const PLACE_ORDER_PROTOCOL_ID: u32 = 2202;
 const PAPER_TRADING_ENVIRONMENT: i64 = 0;
+const US_TRADING_MARKET: i64 = 2;
+const US_SECURITY_MARKET: i64 = 2;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 const CLIENT_ID: &str = "indexlink-rust";
 const CLIENT_VERSION: i64 = 1;
@@ -135,6 +142,66 @@ impl OpenDPaperSession {
     pub fn selected_account_id(&self) -> &str {
         &self.selected_account_id
     }
+
+    /// Submit one paper order through this initialized OpenD session.
+    ///
+    /// The MVP intentionally supports only US stocks and ETFs. The request is
+    /// sent only after its paper environment has been checked; the response
+    /// must confirm the selected simulated account and the same US market.
+    pub async fn submit_paper_order(
+        &self,
+        request: &BrokerOrderRequest,
+    ) -> Result<BrokerOrderAck, BrokerError> {
+        if request.environment() != BrokerEnvironment::Paper {
+            return Err(BrokerError::EnvironmentMismatch {
+                configured: BrokerEnvironment::Paper,
+                requested: request.environment(),
+            });
+        }
+
+        let mut transport = self._transport.lock().await;
+        let packet_serial = transport
+            .next_trade_packet_serial()
+            .map_err(map_order_error)?;
+        let response = transport
+            .request(
+                PLACE_ORDER_PROTOCOL_ID,
+                place_order_payload(
+                    self.connection_id,
+                    packet_serial,
+                    &self.selected_account_id,
+                    request,
+                )?,
+            )
+            .await
+            .map_err(map_order_error)?;
+        let payload = successful_payload(&response).map_err(map_order_error)?;
+        order_ack_from_payload(payload, &self.selected_account_id)
+    }
+}
+
+#[async_trait]
+impl OpenDOrderGateway for OpenDPaperSession {
+    async fn submit_paper_order(
+        &self,
+        config: &OpenDConnectionConfig,
+        request: &BrokerOrderRequest,
+    ) -> Result<BrokerOrderAck, BrokerError> {
+        if config.environment() != BrokerEnvironment::Paper || config.live_trading_enabled() {
+            return Err(BrokerError::PaperTradingRequired {
+                configured: config.environment(),
+            });
+        }
+        config.validate_order_environment(request)?;
+        if config
+            .account_id()
+            .is_some_and(|account_id| account_id != self.selected_account_id)
+        {
+            return Err(BrokerError::Rejected);
+        }
+
+        OpenDPaperSession::submit_paper_order(self, request).await
+    }
 }
 
 impl fmt::Debug for OpenDPaperSession {
@@ -157,6 +224,7 @@ impl Drop for OpenDPaperSession {
 struct OpenDTcpTransport {
     stream: TcpStream,
     next_serial: u32,
+    next_trade_packet_serial: u32,
 }
 
 impl OpenDTcpTransport {
@@ -170,7 +238,17 @@ impl OpenDTcpTransport {
         Ok(Self {
             stream,
             next_serial: 1,
+            next_trade_packet_serial: 0,
         })
+    }
+
+    fn next_trade_packet_serial(&mut self) -> Result<u32, OpenDSessionError> {
+        let serial = self.next_trade_packet_serial;
+        self.next_trade_packet_serial = self
+            .next_trade_packet_serial
+            .checked_add(1)
+            .ok_or(OpenDSessionError::InvalidResponse)?;
+        Ok(serial)
     }
 
     async fn request(&mut self, protocol_id: u32, body: Value) -> Result<Value, OpenDSessionError> {
@@ -416,6 +494,98 @@ async fn send_keep_alive(transport: &mut OpenDTcpTransport) -> Result<(), OpenDS
     Ok(())
 }
 
+fn place_order_payload(
+    connection_id: u64,
+    packet_serial: u32,
+    account_id: &str,
+    request: &BrokerOrderRequest,
+) -> Result<Value, BrokerError> {
+    let quantity = decimal_to_f64(request.quantity())?;
+    let price = request
+        .limit_price()
+        .map(decimal_to_f64)
+        .transpose()?
+        .unwrap_or(0.0);
+    let order_type = match request.order_type() {
+        BrokerOrderType::Limit => 1,
+        BrokerOrderType::Market => 2,
+    };
+    let side = match request.side() {
+        BrokerOrderSide::Buy => 1,
+        BrokerOrderSide::Sell => 2,
+    };
+
+    Ok(json!({
+        "c2s": {
+            "packetID": {"connID": connection_id, "serialNo": packet_serial},
+            "header": {
+                "trdEnv": PAPER_TRADING_ENVIRONMENT,
+                "accID": account_id,
+                "trdMarket": US_TRADING_MARKET,
+            },
+            "trdSide": side,
+            "orderType": order_type,
+            "code": request.symbol(),
+            "qty": quantity,
+            "price": price,
+            "secMarket": US_SECURITY_MARKET,
+            "remark": order_remark(request.idempotency_key()),
+        }
+    }))
+}
+
+fn decimal_to_f64(value: rust_decimal::Decimal) -> Result<f64, BrokerError> {
+    value
+        .to_string()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or(BrokerError::Rejected)
+}
+
+fn order_remark(idempotency_key: &str) -> String {
+    format!("indexlink-{:x}", Sha1::digest(idempotency_key.as_bytes()))
+}
+
+fn order_ack_from_payload(
+    payload: &Map<String, Value>,
+    selected_account_id: &str,
+) -> Result<BrokerOrderAck, BrokerError> {
+    let header = payload
+        .get("header")
+        .and_then(Value::as_object)
+        .ok_or(BrokerError::Unavailable)?;
+    if integer_field(header, "trdEnv").map_err(map_order_error)? != PAPER_TRADING_ENVIRONMENT
+        || integer_field(header, "trdMarket").map_err(map_order_error)? != US_TRADING_MARKET
+        || string_field(header, "accID").map_err(map_order_error)? != selected_account_id
+    {
+        return Err(BrokerError::Unavailable);
+    }
+
+    let order_id = non_empty_string_field(payload, "orderIDEx")
+        .or_else(|| non_empty_string_field(payload, "orderID"))
+        .ok_or(BrokerError::Unavailable)?;
+    BrokerOrderAck::new(
+        order_id,
+        BrokerEnvironment::Paper,
+        BrokerOrderStatus::Accepted,
+    )
+    .map_err(|_| BrokerError::Unavailable)
+}
+
+fn non_empty_string_field(payload: &Map<String, Value>, name: &str) -> Option<String> {
+    string_field(payload, name)
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
+fn map_order_error(error: OpenDSessionError) -> BrokerError {
+    match error {
+        OpenDSessionError::Rejected => BrokerError::Rejected,
+        _ => BrokerError::Unavailable,
+    }
+}
+
 fn encode_frame(protocol_id: u32, serial: u32, body: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(HEADER_LENGTH + body.len());
     let body_hash = Sha1::digest(body);
@@ -471,7 +641,7 @@ mod tests {
     use tokio::{io::AsyncWriteExt, net::TcpListener};
 
     use super::*;
-    use crate::{BrokerProvider, OpenDConnectionConfig};
+    use crate::{BrokerOrderRequest, BrokerProvider, OpenDConnectionConfig};
 
     const GOLDEN_KEEP_ALIVE_FRAME: [u8; 46] = [
         b'F', b'T', 0xec, 0x03, 0x00, 0x00, 0x01, 0x00, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
@@ -480,12 +650,18 @@ mod tests {
         b'}',
     ];
 
+    enum PostBootstrapRequest {
+        None,
+        KeepAlive,
+        PlaceOrder { expected: Value, response: Value },
+    }
+
     /// Start a local fake that verifies session requests and returns supplied state.
     async fn spawn_opend(
         trading_logged_in: bool,
         accounts: Vec<Value>,
     ) -> (u16, tokio::task::JoinHandle<()>) {
-        spawn_opend_with_heartbeat(trading_logged_in, accounts, false).await
+        spawn_opend_with_request(trading_logged_in, accounts, PostBootstrapRequest::None, 60).await
     }
 
     /// Start a local fake that can additionally verify the first KeepAlive request.
@@ -493,6 +669,21 @@ mod tests {
         trading_logged_in: bool,
         accounts: Vec<Value>,
         expect_heartbeat: bool,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
+        let request = if expect_heartbeat {
+            PostBootstrapRequest::KeepAlive
+        } else {
+            PostBootstrapRequest::None
+        };
+        spawn_opend_with_request(trading_logged_in, accounts, request, 1).await
+    }
+
+    /// Start a local fake that verifies the next post-bootstrap protocol request.
+    async fn spawn_opend_with_request(
+        trading_logged_in: bool,
+        accounts: Vec<Value>,
+        post_bootstrap_request: PostBootstrapRequest,
+        keep_alive_interval: i64,
     ) -> (u16, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -522,7 +713,7 @@ mod tests {
                     init.serial,
                     &serde_json::to_vec(&json!({
                         "retType": 0,
-                        "s2c": {"connID": "42", "keepAliveInterval": 1}
+                        "s2c": {"connID": "42", "keepAliveInterval": keep_alive_interval}
                     }))
                     .unwrap(),
                 ))
@@ -563,25 +754,46 @@ mod tests {
                 .await
                 .unwrap();
 
-            if expect_heartbeat {
-                let keep_alive = read_frame(&mut stream)
-                    .await
-                    .expect("valid keep-alive frame");
-                assert_eq!(keep_alive.protocol_id, KEEP_ALIVE_PROTOCOL_ID);
-                assert_eq!(keep_alive.serial, 4);
-                assert!(serde_json::from_slice::<Value>(&keep_alive.body)
-                    .unwrap()
-                    .pointer("/c2s/time")
-                    .and_then(Value::as_i64)
-                    .is_some());
-                stream
-                    .write_all(&encode_frame(
-                        KEEP_ALIVE_PROTOCOL_ID,
-                        keep_alive.serial,
-                        &serde_json::to_vec(&json!({"retType": 0, "s2c": {"time": 1}})).unwrap(),
-                    ))
-                    .await
-                    .unwrap();
+            match post_bootstrap_request {
+                PostBootstrapRequest::None => {}
+                PostBootstrapRequest::KeepAlive => {
+                    let keep_alive = read_frame(&mut stream)
+                        .await
+                        .expect("valid keep-alive frame");
+                    assert_eq!(keep_alive.protocol_id, KEEP_ALIVE_PROTOCOL_ID);
+                    assert_eq!(keep_alive.serial, 4);
+                    assert!(serde_json::from_slice::<Value>(&keep_alive.body)
+                        .unwrap()
+                        .pointer("/c2s/time")
+                        .and_then(Value::as_i64)
+                        .is_some());
+                    stream
+                        .write_all(&encode_frame(
+                            KEEP_ALIVE_PROTOCOL_ID,
+                            keep_alive.serial,
+                            &serde_json::to_vec(&json!({"retType": 0, "s2c": {"time": 1}}))
+                                .unwrap(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+                PostBootstrapRequest::PlaceOrder { expected, response } => {
+                    let order = read_frame(&mut stream).await.expect("valid order frame");
+                    assert_eq!(order.protocol_id, PLACE_ORDER_PROTOCOL_ID);
+                    assert_eq!(order.serial, 4);
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&order.body).unwrap(),
+                        expected
+                    );
+                    stream
+                        .write_all(&encode_frame(
+                            PLACE_ORDER_PROTOCOL_ID,
+                            order.serial,
+                            &serde_json::to_vec(&response).unwrap(),
+                        ))
+                        .await
+                        .unwrap();
+                }
             }
         });
 
@@ -709,6 +921,164 @@ mod tests {
             .await
             .expect("keep-alive should arrive before timeout")
             .unwrap();
+    }
+
+    /// Verify a paper market order maps to the official US OpenD request and ack.
+    #[tokio::test]
+    async fn session_submits_us_market_order_and_maps_ack() {
+        let expected = json!({
+            "c2s": {
+                "packetID": {"connID": 42, "serialNo": 0},
+                "header": {"trdEnv": 0, "accID": "paper-account", "trdMarket": 2},
+                "trdSide": 1,
+                "orderType": 2,
+                "code": "VOO",
+                "qty": 1.25,
+                "price": 0.0,
+                "secMarket": 2,
+                "remark": "indexlink-93b20997c68861289ecc064f21e1e7a8ed839a72",
+            }
+        });
+        let response = json!({
+            "retType": 0,
+            "s2c": {
+                "header": {"trdEnv": 0, "accID": "paper-account", "trdMarket": 2},
+                "orderID": "order-42",
+            }
+        });
+        let (port, server) = spawn_opend_with_request(
+            true,
+            vec![json!({"trdEnv": 0, "accID": "paper-account"})],
+            PostBootstrapRequest::PlaceOrder { expected, response },
+            60,
+        )
+        .await;
+        let config = OpenDConnectionConfig::paper(BrokerProvider::Futu, "127.0.0.1", port)
+            .expect("paper config should be valid");
+        let session = OpenDPaperSession::connect(&config)
+            .await
+            .expect("paper session should initialize");
+        let request = BrokerOrderRequest::market(
+            "demo-order-1",
+            "voo",
+            BrokerOrderSide::Buy,
+            "1.25".parse().unwrap(),
+            BrokerEnvironment::Paper,
+        )
+        .expect("market request should be valid");
+
+        let ack = OpenDOrderGateway::submit_paper_order(&session, &config, &request)
+            .await
+            .expect("paper order should be accepted");
+
+        assert_eq!(ack.order_id(), "order-42");
+        assert_eq!(ack.environment(), BrokerEnvironment::Paper);
+        assert_eq!(ack.status(), BrokerOrderStatus::Accepted);
+        server.await.unwrap();
+    }
+
+    /// Verify a limit order preserves its explicit price and uses normal order type.
+    #[test]
+    fn limit_order_payload_preserves_price() {
+        let request = BrokerOrderRequest::limit(
+            "demo-order-2",
+            "VOO",
+            BrokerOrderSide::Sell,
+            "2.5".parse().unwrap(),
+            "400.12".parse().unwrap(),
+            BrokerEnvironment::Paper,
+        )
+        .expect("limit request should be valid");
+
+        assert_eq!(
+            place_order_payload(42, 3, "paper-account", &request).unwrap(),
+            json!({
+                "c2s": {
+                    "packetID": {"connID": 42, "serialNo": 3},
+                    "header": {"trdEnv": 0, "accID": "paper-account", "trdMarket": 2},
+                    "trdSide": 2,
+                    "orderType": 1,
+                    "code": "VOO",
+                    "qty": 2.5,
+                    "price": 400.12,
+                    "secMarket": 2,
+                    "remark": "indexlink-4589de32d6501fc22e1c888d63e9f53aac9e05b1",
+                }
+            })
+        );
+    }
+
+    /// Verify OpenD rejection is preserved without leaking its provider message.
+    #[tokio::test]
+    async fn session_maps_opend_rejection_to_safe_broker_error() {
+        let expected = json!({
+            "c2s": {
+                "packetID": {"connID": 42, "serialNo": 0},
+                "header": {"trdEnv": 0, "accID": "paper-account", "trdMarket": 2},
+                "trdSide": 1,
+                "orderType": 2,
+                "code": "VOO",
+                "qty": 1.25,
+                "price": 0.0,
+                "secMarket": 2,
+                "remark": "indexlink-93b20997c68861289ecc064f21e1e7a8ed839a72",
+            }
+        });
+        let (port, server) = spawn_opend_with_request(
+            true,
+            vec![json!({"trdEnv": 0, "accID": "paper-account"})],
+            PostBootstrapRequest::PlaceOrder {
+                expected,
+                response: json!({"retType": -1, "retMsg": "provider message must not escape"}),
+            },
+            60,
+        )
+        .await;
+        let config = OpenDConnectionConfig::paper(BrokerProvider::Futu, "127.0.0.1", port)
+            .expect("paper config should be valid");
+        let session = OpenDPaperSession::connect(&config)
+            .await
+            .expect("paper session should initialize");
+        let request = BrokerOrderRequest::market(
+            "demo-order-1",
+            "VOO",
+            BrokerOrderSide::Buy,
+            "1.25".parse().unwrap(),
+            BrokerEnvironment::Paper,
+        )
+        .expect("market request should be valid");
+
+        assert_eq!(
+            OpenDOrderGateway::submit_paper_order(&session, &config, &request).await,
+            Err(BrokerError::Rejected)
+        );
+        server.await.unwrap();
+    }
+
+    /// Verify acknowledgements for a different account or environment are rejected.
+    #[test]
+    fn order_ack_requires_selected_paper_account_and_us_market() {
+        let mut payload = Map::new();
+        payload.insert(
+            "header".to_owned(),
+            json!({"trdEnv": 1, "accID": "paper-account", "trdMarket": 2}),
+        );
+        payload.insert("orderID".to_owned(), json!("order-42"));
+
+        assert_eq!(
+            order_ack_from_payload(&payload, "paper-account"),
+            Err(BrokerError::Unavailable)
+        );
+
+        payload.insert(
+            "header".to_owned(),
+            json!({"trdEnv": 0, "accID": "paper-account", "trdMarket": 2}),
+        );
+        payload.insert("orderID".to_owned(), json!(" "));
+        assert_eq!(
+            order_ack_from_payload(&payload, "paper-account"),
+            Err(BrokerError::Unavailable)
+        );
     }
 
     /// Verify a non-authenticated OpenD trading service cannot form a session.

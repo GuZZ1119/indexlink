@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-07-18 21:42 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Futu/Moomoo OpenD / Part 2：paper order gateway。
+- 涉及文件：
+  - `crates/api/src/error.rs`
+  - `crates/broker/src/lib.rs`
+  - `crates/broker/src/opend_session.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `OpenDPaperSession` 现在实现既有 `OpenDOrderGateway`，通过同一条串行 TCP 通道提交 PlaceOrder（2202）；每笔请求携带 OpenD connection id、递增的 anti-replay packet serial、已选模拟账户和 `Paper` 环境。
+  - MVP 明确仅支持美股股票/ETF 订单：普通限价单映射 OpenD `Normal`，市价单映射 `Market`；回执必须确认模拟环境、同一账户和美股市场，才会生成 `BrokerOrderAck::Accepted`。
+  - idempotency key 不直接写入 provider 备注，而是确定性 SHA-1 摘要，控制在 OpenD 64-byte remark 限制内；该备注只用于关联，当前 adapter 不对网络失败自动重试，也不声称跨请求幂等。不把 provider 的拒绝文案、网络细节或账户信息暴露给调用方。
+  - 新增安全 `BrokerError::Rejected`，API 映射为既有统一 `bad_request` envelope；网络、超时、协议畸形或账户/环境不匹配统一映射为 `Unavailable`。
+  - 本 PR 只使用本地协议 fake，不连接真实 OpenD、不提交任何虚拟订单；server 注入和本机虚拟账户 smoke 仍留给 `opend-03-server-wiring-smoke`。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p broker --locked` 通过（31 tests，含 PlaceOrder protocol fake）。
+  - `cargo test -p indexlink-api --locked` 通过（32 tests）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p broker -p indexlink-api --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo doc -p broker --no-deps --locked` 通过。
+
 ### 2026-07-17 23:03 AEST
 
 - 执行模型：GPT-5。

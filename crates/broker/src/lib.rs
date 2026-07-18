@@ -589,6 +589,9 @@ pub enum BrokerError {
         /// Configured adapter environment.
         configured: BrokerEnvironment,
     },
+    /// OpenD rejected a paper-order request without a safe retry guarantee.
+    #[error("paper order was rejected")]
+    Rejected,
     /// Broker adapter or gateway is unavailable.
     #[error("broker is unavailable")]
     Unavailable,
