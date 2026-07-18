@@ -14,6 +14,9 @@ pub enum ApiError {
     /// 请求的资源不存在。
     #[error("not found")]
     NotFound,
+    /// 订单结果尚未确认，客户端不得自动重试。
+    #[error("order outcome is unknown")]
+    OrderOutcomeUnknown,
     /// 依赖服务当前不可用。
     #[error("service unavailable")]
     ServiceUnavailable,
@@ -57,6 +60,16 @@ impl IntoResponse for ApiError {
                     error: ErrorBody {
                         code: "not_found",
                         message: "resource not found",
+                        request_id: None,
+                    },
+                },
+            ),
+            Self::OrderOutcomeUnknown => (
+                StatusCode::CONFLICT,
+                ErrorEnvelope {
+                    error: ErrorBody {
+                        code: "order_outcome_unknown",
+                        message: "order outcome is unknown; do not retry",
                         request_id: None,
                     },
                 },
@@ -113,7 +126,9 @@ impl From<BrokerError> for ApiError {
             BrokerError::Validation(_)
             | BrokerError::LiveTradingDisabled
             | BrokerError::EnvironmentMismatch { .. }
-            | BrokerError::PaperTradingRequired { .. } => Self::BadRequest,
+            | BrokerError::PaperTradingRequired { .. }
+            | BrokerError::Rejected => Self::BadRequest,
+            BrokerError::OutcomeUnknown => Self::OrderOutcomeUnknown,
             BrokerError::Unavailable => Self::ServiceUnavailable,
         }
     }
@@ -194,6 +209,34 @@ mod tests {
         assert_eq!(
             serde_json::to_value(body).unwrap()["error"]["request_id"],
             json!("request-123")
+        );
+    }
+
+    /// Verify a safe broker rejection keeps the public bad-request contract.
+    #[test]
+    fn broker_rejection_maps_to_bad_request() {
+        assert!(matches!(
+            ApiError::from(BrokerError::Rejected),
+            ApiError::BadRequest
+        ));
+    }
+
+    /// Verify an uncertain broker result never becomes a retryable unavailable error.
+    #[tokio::test]
+    async fn broker_outcome_unknown_uses_non_retryable_conflict_contract() {
+        let response = ApiError::from(BrokerError::OutcomeUnknown).into_response();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "error": {
+                    "code": "order_outcome_unknown",
+                    "message": "order outcome is unknown; do not retry"
+                }
+            })
         );
     }
 }

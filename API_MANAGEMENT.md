@@ -8,6 +8,7 @@
 - 金额、比例、数量等 decimal 字段在 JSON 中使用字符串，例如 `"1000.00"`、`"0.80"`、`"1.00"`。
 - UUID 路径参数非法时返回 `400 bad_request`。
 - 资源不存在时返回 `404 not_found`。
+- 已发送订单但未收到可信回执时返回 `409 order_outcome_unknown`；客户端不得自动重试。
 - 服务依赖不可用时返回 `503 service_unavailable`。
 
 统一错误响应：
