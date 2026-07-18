@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### 2026-07-19 00:28 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：MVP 后端收口 / Quant Signal HTTP API / Decision Summary。
+- 涉及文件：
+  - `crates/api/src/routes/signals.rs`
+  - `crates/api/src/routes/mod.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/tests/signals.rs`
+  - `crates/api/tests/decision_preview.rs`
+  - `API_MANAGEMENT.md`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `POST /signals/fundamental/preview` 与 `POST /signals/trend/preview`：复用既有 `quant-engine` 的 60 个有效月度样本、不变量与分位计算，返回基本面/趋势分数、原始审计分位及趋势 regime；JSON 提取、未知字段和领域校验统一映射为安全的 `400 bad_request`。
+  - Decision Preview 的 `summary` 从短句扩展为稳定分层解释，明确 execution 状态、计划金额、已方向规范化的基本面投资适配度、趋势时机和 regime、Qwen 情绪或降级权重、最终分数、倍率/action、双桶拆分与 paper-order 状态。
+  - 更新 API 管理与全项目 MVP 文档：除前端、DashScope Key/真实网络 smoke、OpenD GUI 登录/虚拟账户 smoke，以及由前端或经确认数据源提供的月度行情与估值快照外，MVP 后端代码和默认本地 SQLite 配置均已完成；服务端不会擅自接入未选定的第三方市场数据源或保存其凭据。
+  - 本次仅在你的 Fork `main` 上修改和后续推送；不修改、不合并或推送 Jame `upstream`。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-api --test signals --locked` 通过（3 tests）。
+  - `cargo test -p indexlink-api --test decision_preview --locked` 通过（7 tests）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-api --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo test -p indexlink-server --locked` 通过（26 passed、1 ignored）。
+  - `cargo doc -p indexlink-api --no-deps --locked` 通过。
+  - `cargo llvm-cov --workspace --all-features --summary-only` 通过（总行覆盖率 93.75%）。
+
 ### 2026-07-19 00:21 AEST
 
 - 执行模型：GPT-5。

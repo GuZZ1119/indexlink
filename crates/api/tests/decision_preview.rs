@@ -422,6 +422,11 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(body["decision"]["action"], json!("overweight"));
     assert_eq!(body["decision"]["sentiment_score"], json!(0.7));
     assert_eq!(body["paper_order_ack"]["status"], json!("accepted"));
+    let summary = body["summary"].as_str().unwrap();
+    assert!(summary.contains("fundamental_investability=0.90 (supportive)"));
+    assert!(summary.contains("trend_timing=0.50 (neutral, regime=Neutral)"));
+    assert!(summary.contains("market_sentiment=0.70"));
+    assert!(summary.contains("bucket_split=core=800.00 USD, opportunity=200.00 USD"));
     assert_eq!(broker.accepted_orders().len(), 1);
     let persisted = records.records.lock().unwrap();
     assert_eq!(persisted.len(), 1);
@@ -471,6 +476,10 @@ async fn decision_preview_uses_fallback_weights_when_qwen_is_unavailable() {
         json!("sentiment_unavailable")
     );
     assert!(body["decision"].get("sentiment_score").is_none());
+    assert!(body["summary"]
+        .as_str()
+        .unwrap()
+        .contains("market_sentiment=unavailable"));
     assert!(records.records.lock().unwrap()[0]
         .sentiment_snapshot
         .is_none());

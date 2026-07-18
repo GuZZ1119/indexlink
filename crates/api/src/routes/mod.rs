@@ -4,6 +4,7 @@ mod health;
 mod investment_plans;
 mod market_sentiment;
 mod ready;
+mod signals;
 
 use axum::{routing::get, Router};
 
@@ -17,4 +18,5 @@ pub(crate) fn router() -> Router<ApiState> {
         .merge(decision_records::router())
         .merge(investment_plans::router())
         .merge(market_sentiment::router())
+        .merge(signals::router())
 }

@@ -548,13 +548,32 @@ fn summarize_decision(
     decision: &DecisionSignal,
     ack: Option<&BrokerOrderAck>,
 ) -> String {
-    let action = match decision.action {
-        Action::Overweight => "overweight",
-        Action::Standard => "standard",
-        Action::TacticalDelay => "tactical delay",
-        Action::Underweight => "underweight",
-        Action::Skip => "skip",
+    let execution_status = match execution.status {
+        ExecutionPreviewStatus::Due => "due",
+        ExecutionPreviewStatus::Waiting => "waiting",
+        ExecutionPreviewStatus::Inactive => "inactive",
     };
+    let contribution = execution
+        .planned_contribution
+        .map_or_else(|| "none".to_owned(), |value| value.to_string());
+    let fundamental = score_interpretation(decision.fundamental_score.value());
+    let trend = score_interpretation(decision.trend_score.value());
+    let sentiment = decision.sentiment_score.map_or_else(
+        || "unavailable".to_owned(),
+        |value| format!("{:.2}", value.value()),
+    );
+    let bucket_split = execution.bucket_split.map_or_else(
+        || "none".to_owned(),
+        |split| {
+            format!(
+                "core={} {}, opportunity={} {}",
+                split.core_contribution(),
+                execution.currency,
+                split.opportunity_contribution(),
+                execution.currency,
+            )
+        },
+    );
     let order = match ack.map(BrokerOrderAck::status) {
         Some(BrokerOrderStatus::Accepted) => "paper order accepted",
         Some(BrokerOrderStatus::Duplicate) => "paper order deduplicated",
@@ -562,11 +581,33 @@ fn summarize_decision(
     };
 
     format!(
-        "Decision preview for {} is {:?}: action={}, multiplier={:.2}, {}.",
+        "Decision preview for {}: execution={}; planned_contribution={} {}; fundamental_investability={:.2} ({}); trend_timing={:.2} ({}, regime={:?}); market_sentiment={}; weight_mode={}; final_score={:.2}; multiplier={:.2}; action={}; bucket_split={}; {}.",
         execution.symbol,
-        execution.status,
-        action,
+        execution_status,
+        contribution,
+        execution.currency,
+        decision.fundamental_score.value(),
+        fundamental,
+        decision.trend_score.value(),
+        trend,
+        decision.input.trend.regime,
+        sentiment,
+        weight_mode_label(decision.weight_mode),
+        decision.final_score.value(),
         decision.multiplier.value(),
+        action_label(decision.action),
+        bucket_split,
         order
     )
+}
+
+/// Return a stable, intentionally coarse explanation for a normalized score.
+fn score_interpretation(score: f64) -> &'static str {
+    if score <= 0.33 {
+        "cautious"
+    } else if score >= 0.67 {
+        "supportive"
+    } else {
+        "neutral"
+    }
 }
