@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 2026-07-19 00:11 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Decision Preview 自动 Qwen 情绪编排。
+- 涉及文件：
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/tests/decision_preview.rs`
+  - `API_MANAGEMENT.md`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `POST /investment-plans/:id/decision-preview` 不再接受调用方提供的 `sentiment`；完成计划与 fundamental/trend 输入校验后，自动通过已注入的 RSS + Qwen market-sentiment pipeline 获取情绪，再执行 70/20/10 决策。
+  - Qwen 未配置、新闻源失败或 provider 暂时不可用时，Decision Preview 不伪造情绪值，使用 decision engine 的既有 `90/10/0` fallback，并在响应与决策快照中标记 `sentiment_unavailable`；前端手工 `sentiment` 字段因 DTO 严格拒绝未知字段而安全返回 `400 bad_request`。
+  - 自动情绪成功时，审计记录只保存 `source: market_sentiment` 与有界原始 score；不会保存新闻正文、API key、provider URL、OpenD 凭据或账户信息。
+  - 修正 API 管理与 MVP 文档中已经过时的“自动 Qwen / 自动 decision record 尚未完成”表述，并更新前端请求契约与剩余 MVP 清单。
+- 验证：
+  - `cargo test -p indexlink-api --test decision_preview --locked` 通过（7 tests，含自动 provider、未配置或不可用 fallback、手工 sentiment 拒绝、审计快照和下单前存证）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo test -p indexlink-api --locked` 通过（37 tests）。
+  - `cargo test -p decision-records --locked` 通过（11 tests）。
+  - `cargo test -p indexlink-storage --locked` 通过（31 tests）。
+  - `cargo fmt --all -- --check`、`cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-api -p decision-records -p indexlink-storage --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo doc -p indexlink-api -p decision-records -p indexlink-storage --no-deps --locked` 通过。
+
 ### 2026-07-18 23:53 AEST
 
 - 执行模型：GPT-5。

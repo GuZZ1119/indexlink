@@ -35,6 +35,7 @@ const BROKER_SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Decision preview request DTO.
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct DecisionPreviewRequest {
     /// Month day used by the execution preview.
     day_of_month: i16,
@@ -44,8 +45,6 @@ struct DecisionPreviewRequest {
     fundamental: FundamentalSignalRequest,
     /// Trend signal snapshot.
     trend: TrendSignalRequest,
-    /// Optional AI sentiment score; omitted means sentiment unavailable.
-    sentiment: Option<SentimentRequest>,
     /// Optional paper order to submit when the decision is executable and due.
     paper_order: Option<PaperOrderRequest>,
 }
@@ -85,13 +84,6 @@ struct TrendSignalRequest {
     vix_percentile: f64,
     /// Discrete trend regime.
     regime: TrendRegimeRequest,
-}
-
-/// Sentiment request DTO.
-#[derive(Debug, Deserialize, Serialize)]
-struct SentimentRequest {
-    /// AI sentiment score in `[-1.0, 1.0]`.
-    score: f64,
 }
 
 /// Optional paper order request DTO.
@@ -221,7 +213,8 @@ async fn preview_decision(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
 
     let execution_input = PreviewInvestmentPlanExecution::new(input.day_of_month)?;
-    let decision_input = input.clone_decision_input()?;
+    let fundamental = input.fundamental.clone_signal()?;
+    let trend = input.trend.clone_signal()?;
     let bucket_config = input
         .bucket_allocation
         .clone()
@@ -237,13 +230,20 @@ async fn preview_decision(
         }
         None => state.plans().preview_execution(id, execution_input).await?,
     };
-    let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
-    let decision_response = DecisionResponse::from_signal(&decision);
     let paper_order = input
         .paper_order
         .clone()
         .map(|order| order.into_domain(&execution.symbol))
         .transpose()?;
+    let market_sentiment = market_sentiment_for_decision(&state).await;
+    let decision_input = DecisionInput {
+        fundamental,
+        trend,
+        sentiment: market_sentiment
+            .map_or(DecisionSentiment::Unavailable, DecisionSentiment::Available),
+    };
+    let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
+    let decision_response = DecisionResponse::from_signal(&decision);
     let should_submit = should_submit_paper_order(&execution, &decision, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
     let persisted = state
@@ -289,21 +289,6 @@ async fn preview_decision(
     }))
 }
 
-impl DecisionPreviewRequest {
-    fn clone_decision_input(&self) -> Result<DecisionInput, ApiError> {
-        Ok(DecisionInput {
-            fundamental: self.fundamental.clone_signal()?,
-            trend: self.trend.clone_signal()?,
-            sentiment: self
-                .sentiment
-                .as_ref()
-                .map(SentimentRequest::to_domain)
-                .transpose()?
-                .map_or(DecisionSentiment::Unavailable, DecisionSentiment::Available),
-        })
-    }
-}
-
 impl TwoBucketAllocationRequest {
     fn into_domain(self) -> Result<TwoBucketAllocationConfig, ApiError> {
         TwoBucketAllocationConfig::new(
@@ -333,12 +318,6 @@ impl TrendSignalRequest {
             vix_percentile: percentile(self.vix_percentile)?,
             regime: self.regime.to_domain(),
         })
-    }
-}
-
-impl SentimentRequest {
-    fn to_domain(&self) -> Result<Sentiment, ApiError> {
-        Sentiment::new(self.score).ok_or(ApiError::BadRequest)
     }
 }
 
@@ -453,6 +432,21 @@ async fn submit_paper_order(
     .map_err(Into::into)
 }
 
+/// Fetch Qwen market sentiment and safely fall back to the engine's 90/10/0 mode.
+async fn market_sentiment_for_decision(state: &ApiState) -> Option<Sentiment> {
+    match state.market_sentiment().await {
+        Ok(sentiment) => Some(sentiment),
+        Err(ApiError::ServiceUnavailable) => {
+            tracing::warn!("market sentiment unavailable; decision preview uses fallback weights");
+            None
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "unexpected market sentiment error; decision preview uses fallback weights");
+            None
+        }
+    }
+}
+
 /// Build a complete local audit snapshot before any optional broker side effect.
 fn record_input(
     plan_id: Uuid,
@@ -474,12 +468,25 @@ fn record_input(
         execution_snapshot: snapshot(execution)?,
         fundamental_snapshot: snapshot(&input.fundamental)?,
         trend_snapshot: snapshot(&input.trend)?,
-        sentiment_snapshot: input.sentiment.as_ref().map(snapshot).transpose()?,
+        sentiment_snapshot: decision_market_sentiment_snapshot(decision),
         decision_snapshot: decision_snapshot(decision),
         broker_order_request: paper_order.map(snapshot).transpose()?,
         broker_order_ack: paper_order_ack.map(snapshot).transpose()?,
         summary,
     })
+}
+
+/// Return a stable audit snapshot for an automatically retrieved market sentiment.
+fn market_sentiment_snapshot(sentiment: Sentiment) -> Value {
+    json!({"source": "market_sentiment", "score": sentiment.value()})
+}
+
+/// Return the automatic sentiment input snapshot retained by the decision engine.
+fn decision_market_sentiment_snapshot(decision: &DecisionSignal) -> Option<Value> {
+    match decision.input.sentiment {
+        DecisionSentiment::Available(sentiment) => Some(market_sentiment_snapshot(sentiment)),
+        DecisionSentiment::Unavailable => None,
+    }
 }
 
 /// Convert an execution preview status into its persisted audit representation.

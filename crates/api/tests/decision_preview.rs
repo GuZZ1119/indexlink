@@ -1,11 +1,13 @@
 use std::sync::{Arc, Mutex};
 
+use ai_client::{AiClientError, AiProvider, NewsItem, NewsSource, NewsSourceError, Sentiment};
 use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use broker::MockBroker;
+use chrono::Utc;
 use decision_records::{
     CompleteDecisionRecord, CreateDecisionRecord, DecisionRecord, DecisionRecordListQuery,
     DecisionRecordRepository, DecisionRecordRepositoryError, DecisionRecordService,
@@ -30,6 +32,43 @@ impl ReadinessCheck for Ready {
     /// Always report dependencies as available.
     async fn check(&self) -> Result<(), ReadinessError> {
         Ok(())
+    }
+}
+
+/// Deterministic news source used to verify the automatic sentiment pipeline.
+struct StaticNews;
+
+#[async_trait]
+impl NewsSource for StaticNews {
+    /// Return one news item without network access.
+    async fn fetch(&self) -> Result<Vec<NewsItem>, NewsSourceError> {
+        Ok(vec![NewsItem {
+            title: "Markets rise on improving inflation data".to_owned(),
+            description: "Deterministic decision-preview test news.".to_owned(),
+            pub_date: Utc::now(),
+        }])
+    }
+}
+
+/// AI provider returning a fixed Qwen-equivalent sentiment for route tests.
+struct PositiveAi;
+
+#[async_trait]
+impl AiProvider for PositiveAi {
+    /// Return a bounded positive sentiment without network access.
+    async fn analyze(&self, _prompt: &str) -> Result<Sentiment, AiClientError> {
+        Ok(Sentiment::new(0.4).expect("test sentiment is in range"))
+    }
+}
+
+/// AI provider that models an unavailable automatic Qwen pipeline.
+struct FailingAi;
+
+#[async_trait]
+impl AiProvider for FailingAi {
+    /// Return a private provider failure that must trigger safe fallback weights.
+    async fn analyze(&self, _prompt: &str) -> Result<Sentiment, AiClientError> {
+        Err(AiClientError::EmptyResponse)
     }
 }
 
@@ -269,6 +308,33 @@ fn app_with_decision_records(
     broker: Arc<MockBroker>,
     records: Arc<dyn DecisionRecordRepository>,
 ) -> axum::Router {
+    app_with_sentiment_provider(repository, broker, records, Arc::new(PositiveAi))
+}
+
+/// Build an API app with a selected automatic market-sentiment provider.
+fn app_with_sentiment_provider(
+    repository: Arc<FakeRepository>,
+    broker: Arc<MockBroker>,
+    records: Arc<dyn DecisionRecordRepository>,
+    provider: Arc<dyn AiProvider>,
+) -> axum::Router {
+    let state = ApiState::with_readiness_plans_broker_and_decision_records(
+        Arc::new(Ready),
+        InvestmentPlanService::new(repository),
+        broker,
+        DecisionRecordService::new(records),
+        "0.1.0",
+    )
+    .with_market_sentiment(Arc::new(StaticNews), provider);
+    build_router(state)
+}
+
+/// Build an API app that exercises Decision Preview without a Qwen provider.
+fn app_without_sentiment_provider(
+    repository: Arc<FakeRepository>,
+    broker: Arc<MockBroker>,
+    records: Arc<dyn DecisionRecordRepository>,
+) -> axum::Router {
     build_router(ApiState::with_readiness_plans_broker_and_decision_records(
         Arc::new(Ready),
         InvestmentPlanService::new(repository),
@@ -317,7 +383,6 @@ fn preview_payload(day_of_month: i16, regime: &str) -> Value {
             "vix_percentile": 0.50,
             "regime": regime
         },
-        "sentiment": {"score": 0.80},
         "paper_order": {
             "idempotency_key": "decision-preview-demo-1",
             "side": "buy",
@@ -355,6 +420,7 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
         json!("800.00")
     );
     assert_eq!(body["decision"]["action"], json!("overweight"));
+    assert_eq!(body["decision"]["sentiment_score"], json!(0.7));
     assert_eq!(body["paper_order_ack"]["status"], json!("accepted"));
     assert_eq!(broker.accepted_orders().len(), 1);
     let persisted = records.records.lock().unwrap();
@@ -363,8 +429,81 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(persisted[0].fundamental_snapshot["score"], json!(0.10));
     assert_eq!(persisted[0].trend_snapshot["regime"], json!("neutral"));
     assert_eq!(
+        persisted[0].sentiment_snapshot,
+        Some(json!({"source": "market_sentiment", "score": 0.4}))
+    );
+    assert_eq!(
         persisted[0].broker_order_ack.as_ref().unwrap()["status"],
         json!("accepted")
+    );
+}
+
+/// Verify an unavailable Qwen pipeline uses the documented 90/10/0 fallback.
+#[tokio::test]
+async fn decision_preview_uses_fallback_weights_when_qwen_is_unavailable() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let created = repository.create(create_input()).await.unwrap();
+    let records = Arc::new(FakeDecisionRecordRepository::default());
+    let app = app_with_sentiment_provider(
+        repository,
+        broker,
+        Arc::clone(&records) as Arc<dyn DecisionRecordRepository>,
+        Arc::new(FailingAi),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(preview_payload(16, "neutral").to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(
+        body["decision"]["weight_mode"],
+        json!("sentiment_unavailable")
+    );
+    assert!(body["decision"].get("sentiment_score").is_none());
+    assert!(records.records.lock().unwrap()[0]
+        .sentiment_snapshot
+        .is_none());
+}
+
+/// Verify an absent Qwen configuration uses the same explicit fallback mode.
+#[tokio::test]
+async fn decision_preview_uses_fallback_weights_without_qwen_configuration() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let created = repository.create(create_input()).await.unwrap();
+    let app = app_without_sentiment_provider(
+        repository,
+        broker,
+        Arc::new(FakeDecisionRecordRepository::default()),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(preview_payload(16, "neutral").to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["decision"]["weight_mode"],
+        json!("sentiment_unavailable")
     );
 }
 
@@ -471,6 +610,26 @@ async fn decision_preview_maps_bad_input_to_safe_bad_request() {
         (
             format!("/investment-plans/{}/decision-preview", created.id),
             json!({"day_of_month": 32}).to_string(),
+        ),
+        (
+            format!("/investment-plans/{}/decision-preview", created.id),
+            json!({
+                "day_of_month": 15,
+                "fundamental": {
+                    "score": 0.10,
+                    "cape_percentile": 0.10,
+                    "erp_percentile": 0.90
+                },
+                "trend": {
+                    "score": 0.50,
+                    "ma_distance_percentile": 0.50,
+                    "rsi_percentile": 0.50,
+                    "vix_percentile": 0.50,
+                    "regime": "neutral"
+                },
+                "sentiment": {"score": 0.80}
+            })
+            .to_string(),
         ),
         (
             format!("/investment-plans/{}/decision-preview", created.id),
