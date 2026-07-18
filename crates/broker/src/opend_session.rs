@@ -6,6 +6,7 @@
 
 use std::{
     fmt,
+    net::IpAddr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -449,7 +450,10 @@ fn string_field(payload: &Map<String, Value>, name: &str) -> Result<String, Open
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    host == "127.0.0.1" || host == "::1" || host.eq_ignore_ascii_case("localhost")
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn socket_address(host: &str, port: u16) -> String {
@@ -1298,5 +1302,14 @@ mod tests {
     fn localhost_uses_a_literal_loopback_address() {
         assert_eq!(socket_address("localhost", 11111), "127.0.0.1:11111");
         assert_eq!(socket_address("LOCALHOST", 11111), "127.0.0.1:11111");
+    }
+
+    /// Verify all IP loopback forms remain eligible for a raw local OpenD session.
+    #[test]
+    fn loopback_host_check_uses_ip_semantics() {
+        assert!(is_loopback_host("127.0.0.2"));
+        assert!(is_loopback_host("0:0:0:0:0:0:0:1"));
+        assert!(!is_loopback_host("192.0.2.1"));
+        assert!(!is_loopback_host("opend.example"));
     }
 }

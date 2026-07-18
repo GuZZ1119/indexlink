@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### 2026-07-18 22:30 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Futu/Moomoo OpenD / Part 3：server paper broker 装配与受控 virtual-account smoke。
+- 涉及文件：
+  - `.env.example`
+  - `API_MANAGEMENT.md`
+  - `Cargo.lock`
+  - `apps/server/Cargo.toml`
+  - `apps/server/src/config.rs`
+  - `apps/server/src/main.rs`
+  - `crates/broker/src/opend_session.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/src/state.rs`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - server 仅在显式设置 `OPEND_PROVIDER=futu|moomoo` 时读取 loopback OpenD 的 host、port 与可选 account id，并构造固定 `Paper`、live gate 关闭的 `OpenDConnectionConfig`；未配置时保留 `MockBroker`。没有 live environment 配置项。
+  - 配置 OpenD 后，server 在监听 HTTP 前建立 `OpenDPaperSession` 并注入 `OpenDPaperBroker`；连接、登录状态或模拟账户选择失败会阻止启动，不会悄然退回 mock broker。
+  - `ApiState` 增加受文档约束的 broker 注入入口；`Decision Preview` 的可选订单始终经该 broker port，继续沿用 due/action 门控和安全 API 错误契约。
+  - 新增默认 ignored 的真实 paper-order smoke：必须设置 `OPEND_SMOKE_CONFIRM=submit-paper-order`、显式 `OPEND_ACCOUNT_ID`、唯一 idempotency key、symbol 与 quantity，才会以临时内存 SQLite 计划穿过 production composition root 发送一笔虚拟订单。凭据、账户和订单 ID 不进入日志或断言。
+  - 该提交只提供可执行的本机 smoke 入口；实际虚拟订单将在本机 OpenD 已登录并配置后单独执行与记录。
+  - 审查修正：API 文档中的交互变量读取改用 Bash 兼容的 `read -r -p`；`localhost` 在 server 配置阶段固定规范化为字面 `127.0.0.1`，其他地址必须解析为 `IpAddr` 且满足 `is_loopback()`，同时 raw TCP adapter 复用相同 IP 语义。
+  - 审查修正：server composition root 现在接收可替换的异步 broker factory；非 ignored 测试覆盖 factory session 失败阻止启动，以及 factory 成功后 HTTP Decision Preview 实际调用替换后的 broker，而非默认 mock。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p indexlink-server --locked` 通过（26 passed、1 ignored；含 loopback 边界和 OpenD factory 成功/失败组合根测试）。
+  - `cargo test -p indexlink-api --locked` 通过（33 tests，含 broker 注入替换默认 mock 的聚焦测试）。
+  - `cargo test -p broker --locked` 通过（36 tests，含 raw TCP loopback IP 语义边界）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-server -p indexlink-api -p broker --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo doc -p indexlink-api --no-deps --locked` 通过。
+  - 本机未检测到可执行的 OpenD smoke 配置前，不提交任何虚拟订单；真实 smoke 结果待 OpenD GUI 登录、paper account 与显式确认变量就绪后补记。
+
 ### 2026-07-18 21:42 AEST
 
 - 执行模型：GPT-5。

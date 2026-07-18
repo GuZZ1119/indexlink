@@ -209,7 +209,7 @@ pub(crate) fn router() -> Router<ApiState> {
     )
 }
 
-/// Preview one investment decision and optionally submit a mock paper order.
+/// Preview one investment decision and optionally submit a configured paper order.
 async fn preview_decision(
     State(state): State<ApiState>,
     id: Result<Path<Uuid>, PathRejection>,

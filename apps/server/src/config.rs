@@ -7,6 +7,7 @@ use std::{
 
 use ai_client::AiConfig;
 use axum::http::HeaderValue;
+use broker::{BrokerProvider, OpenDConnectionConfig};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: &str = "8080";
@@ -19,6 +20,12 @@ const DASHSCOPE_MODEL: &str = "DASHSCOPE_MODEL";
 const DASHSCOPE_TIMEOUT_SECONDS: &str = "DASHSCOPE_TIMEOUT_SECONDS";
 const DASHSCOPE_MAX_TOKENS: &str = "DASHSCOPE_MAX_TOKENS";
 const DASHSCOPE_TEMPERATURE: &str = "DASHSCOPE_TEMPERATURE";
+const OPEND_PROVIDER: &str = "OPEND_PROVIDER";
+const OPEND_HOST: &str = "OPEND_HOST";
+const OPEND_PORT: &str = "OPEND_PORT";
+const OPEND_ACCOUNT_ID: &str = "OPEND_ACCOUNT_ID";
+const DEFAULT_OPEND_HOST: &str = "127.0.0.1";
+const DEFAULT_OPEND_PORT: &str = "11111";
 
 #[derive(Debug)]
 pub(crate) struct Config {
@@ -28,6 +35,7 @@ pub(crate) struct Config {
     pub(crate) database_connect_timeout: Duration,
     pub(crate) cors_allowed_origins: Vec<HeaderValue>,
     pub(crate) qwen: Option<AiConfig>,
+    pub(crate) opend: Option<OpenDConnectionConfig>,
 }
 
 impl Config {
@@ -86,6 +94,7 @@ impl Config {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let qwen = qwen_config(&mut lookup)?;
+        let opend = opend_config(&mut lookup)?;
 
         Ok(Self {
             address: SocketAddr::new(ip, port),
@@ -94,8 +103,60 @@ impl Config {
             database_connect_timeout: Duration::from_secs(timeout_seconds),
             cors_allowed_origins,
             qwen,
+            opend,
         })
     }
+}
+
+fn opend_config(
+    lookup: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<Option<OpenDConnectionConfig>, ConfigError> {
+    let Some(provider) = lookup(OPEND_PROVIDER) else {
+        return Ok(None);
+    };
+    let provider = match non_blank(OPEND_PROVIDER, provider)?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "futu" => BrokerProvider::Futu,
+        "moomoo" => BrokerProvider::Moomoo,
+        _ => return Err(ConfigError::InvalidOpenDProvider),
+    };
+    let host = normalize_loopback_opend_host(non_blank(
+        OPEND_HOST,
+        lookup(OPEND_HOST).unwrap_or_else(|| DEFAULT_OPEND_HOST.to_owned()),
+    )?)?;
+    let port = parse_u16(
+        OPEND_PORT,
+        &lookup(OPEND_PORT).unwrap_or_else(|| DEFAULT_OPEND_PORT.to_owned()),
+    )?;
+    let account_id = lookup(OPEND_ACCOUNT_ID)
+        .map(|value| non_blank(OPEND_ACCOUNT_ID, value))
+        .transpose()?;
+
+    let config = match account_id {
+        Some(account_id) => {
+            OpenDConnectionConfig::paper_with_account(provider, host, port, account_id)
+        }
+        None => OpenDConnectionConfig::paper(provider, host, port),
+    }
+    .map_err(|_| ConfigError::InvalidOpenDConfiguration)?;
+
+    Ok(Some(config))
+}
+
+fn normalize_loopback_opend_host(host: String) -> Result<String, ConfigError> {
+    if host.eq_ignore_ascii_case("localhost") {
+        return Ok(DEFAULT_OPEND_HOST.to_owned());
+    }
+    let address = host
+        .parse::<IpAddr>()
+        .map_err(|_| ConfigError::OpenDLoopbackRequired)?;
+    if !address.is_loopback() {
+        return Err(ConfigError::OpenDLoopbackRequired);
+    }
+
+    Ok(address.to_string())
 }
 
 fn qwen_config(
@@ -205,6 +266,12 @@ pub(crate) enum ConfigError {
     },
     #[error("DASHSCOPE_TEMPERATURE must be in the range 0.0..=2.0")]
     InvalidTemperature,
+    #[error("OPEND_PROVIDER must be futu or moomoo")]
+    InvalidOpenDProvider,
+    #[error("OPEND_HOST must be a loopback OpenD address")]
+    OpenDLoopbackRequired,
+    #[error("OpenD paper configuration is invalid")]
+    InvalidOpenDConfiguration,
     #[error("{0} must not be blank")]
     BlankValue(&'static str),
     #[error("{0} must be greater than zero")]
@@ -238,6 +305,7 @@ mod tests {
         assert_eq!(config.database_connect_timeout, Duration::from_secs(5));
         assert!(config.cors_allowed_origins.is_empty());
         assert!(config.qwen.is_none());
+        assert!(config.opend.is_none());
     }
 
     #[test]
@@ -486,5 +554,59 @@ mod tests {
             error.to_string(),
             "DASHSCOPE_TEMPERATURE must be in the range 0.0..=2.0"
         );
+    }
+
+    /// Verify OpenD stays disabled unless a supported provider is explicitly configured.
+    #[test]
+    fn opend_configuration_is_optional_and_paper_only() {
+        let config = parse(&[
+            (OPEND_PROVIDER, "moomoo"),
+            (OPEND_HOST, "localhost"),
+            (OPEND_PORT, "11111"),
+            (OPEND_ACCOUNT_ID, " paper-account "),
+        ])
+        .unwrap();
+        let opend = config.opend.expect("provider enables OpenD configuration");
+
+        assert_eq!(opend.provider(), BrokerProvider::Moomoo);
+        assert_eq!(opend.host(), DEFAULT_OPEND_HOST);
+        assert_eq!(opend.port(), 11111);
+        assert_eq!(opend.account_id(), Some("paper-account"));
+        assert_eq!(opend.environment(), broker::BrokerEnvironment::Paper);
+        assert!(!opend.live_trading_enabled());
+    }
+
+    /// Verify invalid OpenD provider and non-loopback hosts fail before server startup.
+    #[test]
+    fn unsafe_opend_configuration_is_rejected() {
+        assert!(matches!(
+            parse(&[(OPEND_PROVIDER, "other")]),
+            Err(ConfigError::InvalidOpenDProvider)
+        ));
+        assert!(matches!(
+            parse(&[(OPEND_PROVIDER, "futu"), (OPEND_HOST, "opend.example")]),
+            Err(ConfigError::OpenDLoopbackRequired)
+        ));
+    }
+
+    /// Verify every literal loopback form is normalized without hostname resolution.
+    #[test]
+    fn opend_configuration_normalizes_loopback_literals() {
+        for (input, expected) in [
+            ("LOCALHOST", "127.0.0.1"),
+            ("127.0.0.2", "127.0.0.2"),
+            ("0:0:0:0:0:0:0:1", "::1"),
+        ] {
+            let config = parse(&[(OPEND_PROVIDER, "futu"), (OPEND_HOST, input)])
+                .expect("loopback host should be accepted");
+
+            assert_eq!(
+                config
+                    .opend
+                    .expect("provider enables OpenD configuration")
+                    .host(),
+                expected
+            );
+        }
     }
 }
