@@ -6,6 +6,10 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use broker::MockBroker;
+use decision_records::{
+    CompleteDecisionRecord, CreateDecisionRecord, DecisionRecord, DecisionRecordListQuery,
+    DecisionRecordRepository, DecisionRecordRepositoryError, DecisionRecordService,
+};
 use http_body_util::BodyExt;
 use indexlink_api::{build_router, ApiState, ReadinessCheck, ReadinessError};
 use investment_plans::{
@@ -33,6 +37,123 @@ impl ReadinessCheck for Ready {
 #[derive(Default)]
 struct FakeRepository {
     plans: Mutex<Vec<InvestmentPlan>>,
+}
+
+/// In-memory decision-record repository for verifying preview audit writes.
+#[derive(Default)]
+struct FakeDecisionRecordRepository {
+    records: Mutex<Vec<DecisionRecord>>,
+}
+
+/// Decision-record fake that simulates unavailable local persistence.
+struct UnavailableDecisionRecordRepository;
+
+#[async_trait]
+impl DecisionRecordRepository for FakeDecisionRecordRepository {
+    /// Persist the supplied normalized record snapshot.
+    async fn create(
+        &self,
+        input: CreateDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        let mut records = self.records.lock().unwrap();
+        let record = DecisionRecord {
+            id: Uuid::from_u128((records.len() + 1) as u128),
+            plan_id: input.plan_id,
+            symbol: input.symbol,
+            currency: input.currency,
+            execution_status: input.execution_status,
+            planned_contribution: input.planned_contribution,
+            execution_snapshot: input.execution_snapshot,
+            fundamental_snapshot: input.fundamental_snapshot,
+            trend_snapshot: input.trend_snapshot,
+            sentiment_snapshot: input.sentiment_snapshot,
+            decision_snapshot: input.decision_snapshot,
+            broker_order_request: input.broker_order_request,
+            broker_order_ack: input.broker_order_ack,
+            summary: input.summary,
+            created_at: OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+        };
+        records.push(record.clone());
+        Ok(record)
+    }
+
+    /// Complete the stored order-intention audit record.
+    async fn complete_broker_order(
+        &self,
+        id: Uuid,
+        input: CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        let mut records = self.records.lock().unwrap();
+        let record = records
+            .iter_mut()
+            .find(|record| record.id == id)
+            .ok_or(DecisionRecordRepositoryError::NotFound)?;
+        record.broker_order_ack = Some(input.broker_order_ack);
+        record.summary = input.summary;
+        Ok(record.clone())
+    }
+
+    /// Return a bounded snapshot of matching records.
+    async fn list_by_plan(
+        &self,
+        plan_id: Uuid,
+        query: DecisionRecordListQuery,
+    ) -> Result<Vec<DecisionRecord>, DecisionRecordRepositoryError> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| record.plan_id == plan_id)
+            .take(usize::from(query.limit()))
+            .cloned()
+            .collect())
+    }
+
+    /// Fetch one stored record by ID.
+    async fn get(&self, id: Uuid) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|record| record.id == id)
+            .cloned()
+            .ok_or(DecisionRecordRepositoryError::NotFound)
+    }
+}
+
+#[async_trait]
+impl DecisionRecordRepository for UnavailableDecisionRecordRepository {
+    /// Reject creates to model unavailable local persistence before broker submission.
+    async fn create(
+        &self,
+        _input: CreateDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
+    /// Reject completions because the local persistence backend is unavailable.
+    async fn complete_broker_order(
+        &self,
+        _id: Uuid,
+        _input: CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
+    /// Reject list queries because the local persistence backend is unavailable.
+    async fn list_by_plan(
+        &self,
+        _plan_id: Uuid,
+        _query: DecisionRecordListQuery,
+    ) -> Result<Vec<DecisionRecord>, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
+    /// Reject reads because the local persistence backend is unavailable.
+    async fn get(&self, _id: Uuid) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
 }
 
 #[async_trait]
@@ -125,10 +246,34 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
 
 /// Build an API app wired to fake investment plans and a mock broker.
 fn app(repository: Arc<FakeRepository>, broker: Arc<MockBroker>) -> axum::Router {
-    build_router(ApiState::with_readiness_plans_and_broker(
+    app_with_records(repository, broker).0
+}
+
+/// Build an API app and expose its local audit repository for assertions.
+fn app_with_records(
+    repository: Arc<FakeRepository>,
+    broker: Arc<MockBroker>,
+) -> (axum::Router, Arc<FakeDecisionRecordRepository>) {
+    let records = Arc::new(FakeDecisionRecordRepository::default());
+    let app = app_with_decision_records(
+        repository,
+        broker,
+        Arc::clone(&records) as Arc<dyn DecisionRecordRepository>,
+    );
+    (app, records)
+}
+
+/// Build an API app with a caller-selected decision-record persistence port.
+fn app_with_decision_records(
+    repository: Arc<FakeRepository>,
+    broker: Arc<MockBroker>,
+    records: Arc<dyn DecisionRecordRepository>,
+) -> axum::Router {
+    build_router(ApiState::with_readiness_plans_broker_and_decision_records(
         Arc::new(Ready),
         InvestmentPlanService::new(repository),
         broker,
+        DecisionRecordService::new(records),
         "0.1.0",
     ))
 }
@@ -188,7 +333,7 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     let repository = Arc::new(FakeRepository::default());
     let broker = Arc::new(MockBroker::paper_only());
     let created = repository.create(create_input()).await.unwrap();
-    let app = app(repository, Arc::clone(&broker));
+    let (app, records) = app_with_records(repository, Arc::clone(&broker));
 
     let response = app
         .oneshot(
@@ -212,6 +357,15 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(body["decision"]["action"], json!("overweight"));
     assert_eq!(body["paper_order_ack"]["status"], json!("accepted"));
     assert_eq!(broker.accepted_orders().len(), 1);
+    let persisted = records.records.lock().unwrap();
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(persisted[0].execution_snapshot["status"], json!("due"));
+    assert_eq!(persisted[0].fundamental_snapshot["score"], json!(0.10));
+    assert_eq!(persisted[0].trend_snapshot["regime"], json!("neutral"));
+    assert_eq!(
+        persisted[0].broker_order_ack.as_ref().unwrap()["status"],
+        json!("accepted")
+    );
 }
 
 /// Verify non-due previews never submit paper orders.
@@ -266,6 +420,34 @@ async fn decision_preview_tactical_delay_does_not_submit_order() {
     assert_eq!(body["execution"]["status"], json!("due"));
     assert_eq!(body["decision"]["action"], json!("tactical_delay"));
     assert!(body.get("paper_order_ack").is_none());
+    assert!(broker.accepted_orders().is_empty());
+}
+
+/// Verify unavailable audit persistence blocks the broker call before its side effect.
+#[tokio::test]
+async fn decision_preview_does_not_submit_when_audit_persistence_is_unavailable() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let created = repository.create(create_input()).await.unwrap();
+    let app = app_with_decision_records(
+        repository,
+        Arc::clone(&broker),
+        Arc::new(UnavailableDecisionRecordRepository),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(preview_payload(15, "neutral").to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(broker.accepted_orders().is_empty());
 }
 

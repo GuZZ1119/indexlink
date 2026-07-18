@@ -283,6 +283,15 @@ impl DecisionRecordRepository for UnavailableDecisionRecords {
         Err(DecisionRecordRepositoryError::Unavailable)
     }
 
+    /// Reject broker completions because no decision-record backend is configured.
+    async fn complete_broker_order(
+        &self,
+        _id: uuid::Uuid,
+        _input: decision_records::CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
     /// Reject list queries because no decision-record backend is configured.
     async fn list_by_plan(
         &self,

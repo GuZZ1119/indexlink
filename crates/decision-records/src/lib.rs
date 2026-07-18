@@ -151,6 +151,17 @@ pub struct CreateDecisionRecord {
     pub summary: String,
 }
 
+/// Broker result used to complete a previously persisted order intention.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CompleteDecisionRecord {
+    /// Broker acknowledgement snapshot for the already-submitted order.
+    ///
+    /// The snapshot must not contain account credentials or other secrets.
+    pub broker_order_ack: Value,
+    /// Final user-facing summary after the broker acknowledgement.
+    pub summary: String,
+}
+
 /// Query options for listing decision records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecisionRecordListQuery {
@@ -218,6 +229,16 @@ impl CreateDecisionRecord {
             summary,
             ..self
         })
+    }
+}
+
+impl CompleteDecisionRecord {
+    /// Normalize and validate a broker acknowledgement before it completes a record.
+    pub fn normalize(self) -> Result<Self, DecisionRecordValidationError> {
+        validate_snapshot(&self.broker_order_ack, "broker_order_ack")?;
+        let summary = normalize_summary(self.summary)?;
+
+        Ok(Self { summary, ..self })
     }
 }
 
@@ -294,6 +315,13 @@ pub trait DecisionRecordRepository: Send + Sync {
         input: CreateDecisionRecord,
     ) -> Result<DecisionRecord, DecisionRecordRepositoryError>;
 
+    /// Attach the acknowledgement for an order whose intent was already persisted.
+    async fn complete_broker_order(
+        &self,
+        id: Uuid,
+        input: CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError>;
+
     /// List decision records for one investment plan.
     async fn list_by_plan(
         &self,
@@ -329,6 +357,23 @@ impl DecisionRecordService {
     ) -> Result<DecisionRecord, DecisionRecordApplicationError> {
         self.repository
             .create(input.normalize()?)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Complete a persisted broker-order intention with its acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecisionRecordApplicationError::NotFound`] when the record does not exist,
+    /// or [`DecisionRecordApplicationError::Unavailable`] if storage is unavailable.
+    pub async fn complete_broker_order(
+        &self,
+        id: Uuid,
+        input: CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordApplicationError> {
+        self.repository
+            .complete_broker_order(id, input.normalize()?)
             .await
             .map_err(Into::into)
     }
@@ -457,6 +502,21 @@ mod tests {
             Ok(record)
         }
 
+        async fn complete_broker_order(
+            &self,
+            id: Uuid,
+            input: CompleteDecisionRecord,
+        ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+            let mut records = self.records.lock().unwrap();
+            let record = records
+                .iter_mut()
+                .find(|record| record.id == id)
+                .ok_or(DecisionRecordRepositoryError::NotFound)?;
+            record.broker_order_ack = Some(input.broker_order_ack);
+            record.summary = input.summary;
+            Ok(record.clone())
+        }
+
         async fn list_by_plan(
             &self,
             plan_id: Uuid,
@@ -536,6 +596,30 @@ mod tests {
             vec![created.clone()]
         );
         assert_eq!(service.get(created.id).await.unwrap(), created);
+    }
+
+    /// Verify a persisted order intention can be completed with a broker acknowledgement.
+    #[tokio::test]
+    async fn service_completes_persisted_broker_order() {
+        let service = DecisionRecordService::new(Arc::new(FakeRepository::default()));
+        let created = service.create(input(Uuid::from_u128(7))).await.unwrap();
+
+        let completed = service
+            .complete_broker_order(
+                created.id,
+                CompleteDecisionRecord {
+                    broker_order_ack: json!({"status": "accepted"}),
+                    summary: "  paper order accepted  ".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            completed.broker_order_ack,
+            Some(json!({"status": "accepted"}))
+        );
+        assert_eq!(completed.summary, "paper order accepted");
     }
 
     #[tokio::test]

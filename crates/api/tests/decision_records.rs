@@ -113,6 +113,15 @@ impl DecisionRecordRepository for RecordRepository {
         Err(DecisionRecordRepositoryError::Unavailable)
     }
 
+    /// Reject completions because this query-route fake only supports reads.
+    async fn complete_broker_order(
+        &self,
+        _id: Uuid,
+        _input: decision_records::CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
     /// Return newest matching records, bounded by the validated domain query.
     async fn list_by_plan(
         &self,

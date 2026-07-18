@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use decision_records::{
-    CreateDecisionRecord, DecisionExecutionStatus, DecisionRecord, DecisionRecordListQuery,
-    DecisionRecordRepository, DecisionRecordRepositoryError,
+    CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus, DecisionRecord,
+    DecisionRecordListQuery, DecisionRecordRepository, DecisionRecordRepositoryError,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -34,6 +34,12 @@ const GET_RECORD_SQL: &str = concat!(
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
     "decision_snapshot, broker_order_request, broker_order_ack, summary, created_at ",
     "FROM decision_records WHERE id = ?1"
+);
+const COMPLETE_BROKER_ORDER_SQL: &str = concat!(
+    "UPDATE decision_records SET broker_order_ack = ?1, summary = ?2 WHERE id = ?3 ",
+    "RETURNING id, plan_id, symbol, currency, execution_status, planned_contribution, ",
+    "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
+    "decision_snapshot, broker_order_request, broker_order_ack, summary, created_at"
 );
 
 /// SQLite implementation of [`DecisionRecordRepository`].
@@ -88,6 +94,25 @@ impl DecisionRecordRepository for SqliteDecisionRecordRepository {
             .fetch_one(&self.pool)
             .await
             .map_err(map_sqlx_error)?;
+
+        record_from_row(row)
+    }
+
+    /// Attach a broker acknowledgement to an existing decision record.
+    async fn complete_broker_order(
+        &self,
+        id: Uuid,
+        input: CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        let input = input.normalize()?;
+        let row = sqlx::query(COMPLETE_BROKER_ORDER_SQL)
+            .bind(input.broker_order_ack.to_string())
+            .bind(input.summary)
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?
+            .ok_or(DecisionRecordRepositoryError::NotFound)?;
 
         record_from_row(row)
     }
@@ -330,6 +355,46 @@ mod tests {
         assert_eq!(repository.get(created.id).await.unwrap(), created);
     }
 
+    /// Verify SQLite updates only the broker completion fields of an existing record.
+    #[tokio::test]
+    async fn completes_persisted_broker_order() {
+        let (repository, plans) = repositories().await;
+        let created = repository
+            .create(input(create_plan(&plans).await))
+            .await
+            .unwrap();
+
+        let completed = repository
+            .complete_broker_order(
+                created.id,
+                CompleteDecisionRecord {
+                    broker_order_ack: json!({"status": "accepted"}),
+                    summary: "paper order accepted".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            completed.broker_order_ack,
+            Some(json!({"status": "accepted"}))
+        );
+        assert_eq!(completed.summary, "paper order accepted");
+        assert_eq!(completed.execution_snapshot, created.execution_snapshot);
+        assert_eq!(
+            repository
+                .complete_broker_order(
+                    Uuid::new_v4(),
+                    CompleteDecisionRecord {
+                        broker_order_ack: json!({"status": "accepted"}),
+                        summary: "paper order accepted".to_owned(),
+                    },
+                )
+                .await,
+            Err(DecisionRecordRepositoryError::NotFound)
+        );
+    }
+
     /// 验证 SQLite adapter 拒绝超出 schema 金额精度的输入与不存在的记录。
     #[tokio::test]
     async fn rejects_unrepresentable_amounts_and_reports_missing_records() {
@@ -407,11 +472,17 @@ mod tests {
     /// 验证查询保持静态、SQLite 兼容且 history 查询有上限。
     #[test]
     fn query_strings_are_static_and_bounded() {
-        for query in [INSERT_RECORD_SQL, LIST_RECORDS_BY_PLAN_SQL, GET_RECORD_SQL] {
+        for query in [
+            INSERT_RECORD_SQL,
+            LIST_RECORDS_BY_PLAN_SQL,
+            GET_RECORD_SQL,
+            COMPLETE_BROKER_ORDER_SQL,
+        ] {
             assert!(!query.contains('$'));
         }
         assert!(LIST_RECORDS_BY_PLAN_SQL.contains("LIMIT ?2"));
         assert!(GET_RECORD_SQL.contains("WHERE id = ?1"));
+        assert!(COMPLETE_BROKER_ORDER_SQL.contains("WHERE id = ?3"));
     }
 
     /// 验证计划外键约束没有被 repository 绕过。

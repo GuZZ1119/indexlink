@@ -17,6 +17,7 @@ use decision_engine::{
     evaluate_decision, DecisionConfig, DecisionInput, DecisionSentiment, DecisionSignal,
     DecisionWeightMode,
 };
+use decision_records::{CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus};
 use investment_plans::{
     BucketAllocationRatio, ExecutionPreviewStatus, InvestmentPlanExecutionPreview,
     PreviewInvestmentPlanExecution, TwoBucketAllocationConfig,
@@ -24,6 +25,7 @@ use investment_plans::{
 use quant_engine::{FundamentalSignal, TrendRegime, TrendSignal};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -32,7 +34,7 @@ use crate::{ApiError, ApiState};
 const BROKER_SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Decision preview request DTO.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct DecisionPreviewRequest {
     /// Month day used by the execution preview.
     day_of_month: i16,
@@ -49,7 +51,7 @@ struct DecisionPreviewRequest {
 }
 
 /// Bucket allocation request DTO.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct TwoBucketAllocationRequest {
     /// Core bucket ratio.
     #[serde(with = "rust_decimal::serde::str")]
@@ -60,7 +62,7 @@ struct TwoBucketAllocationRequest {
 }
 
 /// Fundamental signal request DTO.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct FundamentalSignalRequest {
     /// Composite fundamental score in `[0.0, 1.0]`.
     score: f64,
@@ -71,7 +73,7 @@ struct FundamentalSignalRequest {
 }
 
 /// Trend signal request DTO.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct TrendSignalRequest {
     /// Composite trend score in `[0.0, 1.0]`.
     score: f64,
@@ -86,14 +88,14 @@ struct TrendSignalRequest {
 }
 
 /// Sentiment request DTO.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct SentimentRequest {
     /// AI sentiment score in `[-1.0, 1.0]`.
     score: f64,
 }
 
 /// Optional paper order request DTO.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct PaperOrderRequest {
     /// Stable idempotency key for this preview-triggered paper order.
     idempotency_key: String,
@@ -110,7 +112,7 @@ struct PaperOrderRequest {
 }
 
 /// API trend regime values.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum TrendRegimeRequest {
     /// Overheated market regime.
@@ -122,7 +124,7 @@ enum TrendRegimeRequest {
 }
 
 /// API broker order side values.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum BrokerOrderSideRequest {
     /// Buy side.
@@ -132,7 +134,7 @@ enum BrokerOrderSideRequest {
 }
 
 /// API broker order type values.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum BrokerOrderTypeRequest {
     /// Market order.
@@ -222,6 +224,7 @@ async fn preview_decision(
     let decision_input = input.clone_decision_input()?;
     let bucket_config = input
         .bucket_allocation
+        .clone()
         .map(TwoBucketAllocationRequest::into_domain)
         .transpose()?;
 
@@ -235,13 +238,52 @@ async fn preview_decision(
         None => state.plans().preview_execution(id, execution_input).await?,
     };
     let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
-    let paper_order_ack =
-        maybe_submit_paper_order(&state, &execution, &decision, input.paper_order).await?;
+    let decision_response = DecisionResponse::from_signal(&decision);
+    let paper_order = input
+        .paper_order
+        .clone()
+        .map(|order| order.into_domain(&execution.symbol))
+        .transpose()?;
+    let should_submit = should_submit_paper_order(&execution, &decision, paper_order.as_ref());
+    let preliminary_summary = summarize_decision(&execution, &decision, None);
+    let persisted = state
+        .decision_records()
+        .create(record_input(
+            id,
+            &input,
+            &execution,
+            &decision,
+            paper_order.as_ref(),
+            None,
+            preliminary_summary,
+        )?)
+        .await?;
+    let paper_order_ack = if should_submit {
+        let request = paper_order.as_ref().ok_or(ApiError::ServiceUnavailable)?;
+        let ack = submit_paper_order(&state, request).await?;
+        let summary = summarize_decision(&execution, &decision, Some(&ack));
+        if let Err(error) = state
+            .decision_records()
+            .complete_broker_order(
+                persisted.id,
+                CompleteDecisionRecord {
+                    broker_order_ack: snapshot(&ack)?,
+                    summary: summary.clone(),
+                },
+            )
+            .await
+        {
+            tracing::error!(error = %error, record_id = %persisted.id, "paper order accepted but decision record completion failed");
+        }
+        Some(ack)
+    } else {
+        None
+    };
     let summary = summarize_decision(&execution, &decision, paper_order_ack.as_ref());
 
     Ok(Json(DecisionPreviewResponse {
         execution,
-        decision: DecisionResponse::from_signal(&decision),
+        decision: decision_response,
         paper_order_ack,
         summary,
     }))
@@ -386,31 +428,112 @@ fn percentile(value: f64) -> Result<Percentile, ApiError> {
     Percentile::new(value).ok_or(ApiError::BadRequest)
 }
 
-async fn maybe_submit_paper_order(
-    state: &ApiState,
+/// Return whether the validated order is safe and eligible to submit.
+fn should_submit_paper_order(
     execution: &InvestmentPlanExecutionPreview,
     decision: &DecisionSignal,
-    paper_order: Option<PaperOrderRequest>,
-) -> Result<Option<BrokerOrderAck>, ApiError> {
-    let request = paper_order
-        .map(|order| order.into_domain(&execution.symbol))
-        .transpose()?;
+    paper_order: Option<&BrokerOrderRequest>,
+) -> bool {
+    paper_order.is_some()
+        && execution.status == ExecutionPreviewStatus::Due
+        && !matches!(decision.action, Action::Skip | Action::TacticalDelay)
+}
 
-    if execution.status != ExecutionPreviewStatus::Due
-        || matches!(decision.action, Action::Skip | Action::TacticalDelay)
-    {
-        return Ok(None);
+/// Submit one already-validated paper order through the configured broker.
+async fn submit_paper_order(
+    state: &ApiState,
+    request: &BrokerOrderRequest,
+) -> Result<BrokerOrderAck, ApiError> {
+    timeout(
+        BROKER_SUBMIT_TIMEOUT,
+        state.broker().submit_order(request.clone()),
+    )
+    .await
+    .map_err(|_| ApiError::ServiceUnavailable)?
+    .map_err(Into::into)
+}
+
+/// Build a complete local audit snapshot before any optional broker side effect.
+fn record_input(
+    plan_id: Uuid,
+    input: &DecisionPreviewRequest,
+    execution: &InvestmentPlanExecutionPreview,
+    decision: &DecisionSignal,
+    paper_order: Option<&BrokerOrderRequest>,
+    paper_order_ack: Option<&BrokerOrderAck>,
+    summary: String,
+) -> Result<CreateDecisionRecord, ApiError> {
+    Ok(CreateDecisionRecord {
+        plan_id,
+        symbol: execution.symbol.clone(),
+        currency: execution.currency.clone(),
+        execution_status: execution_status(execution.status),
+        planned_contribution: execution
+            .planned_contribution
+            .map(|value| value.to_string()),
+        execution_snapshot: snapshot(execution)?,
+        fundamental_snapshot: snapshot(&input.fundamental)?,
+        trend_snapshot: snapshot(&input.trend)?,
+        sentiment_snapshot: input.sentiment.as_ref().map(snapshot).transpose()?,
+        decision_snapshot: decision_snapshot(decision),
+        broker_order_request: paper_order.map(snapshot).transpose()?,
+        broker_order_ack: paper_order_ack.map(snapshot).transpose()?,
+        summary,
+    })
+}
+
+/// Convert an execution preview status into its persisted audit representation.
+fn execution_status(status: ExecutionPreviewStatus) -> DecisionExecutionStatus {
+    match status {
+        ExecutionPreviewStatus::Due => DecisionExecutionStatus::Due,
+        ExecutionPreviewStatus::Waiting => DecisionExecutionStatus::Waiting,
+        ExecutionPreviewStatus::Inactive => DecisionExecutionStatus::Inactive,
     }
+}
 
-    let Some(request) = request else {
-        return Ok(None);
-    };
+/// Serialize one trusted in-process value into a JSON audit snapshot.
+fn snapshot(value: &impl Serialize) -> Result<Value, ApiError> {
+    serde_json::to_value(value).map_err(|error| {
+        tracing::error!(error = %error, "decision preview audit snapshot serialization failed");
+        ApiError::ServiceUnavailable
+    })
+}
 
-    timeout(BROKER_SUBMIT_TIMEOUT, state.broker().submit_order(request))
-        .await
-        .map_err(|_| ApiError::ServiceUnavailable)?
-        .map(Some)
-        .map_err(Into::into)
+/// Build the decision-output snapshot, including the effective weights.
+fn decision_snapshot(decision: &DecisionSignal) -> Value {
+    json!({
+        "final_score": decision.final_score.value(),
+        "multiplier": decision.multiplier.value(),
+        "action": action_label(decision.action),
+        "weight_mode": weight_mode_label(decision.weight_mode),
+        "weights": {
+            "fundamental_weight": decision.weights.fundamental_weight.value(),
+            "trend_weight": decision.weights.trend_weight.value(),
+            "sentiment_weight": decision.weights.sentiment_weight.value(),
+        },
+        "fundamental_score": decision.fundamental_score.value(),
+        "trend_score": decision.trend_score.value(),
+        "sentiment_score": decision.sentiment_score.map(Percentile::value),
+    })
+}
+
+/// Return the stable persisted label for a decision action.
+fn action_label(action: Action) -> &'static str {
+    match action {
+        Action::Overweight => "overweight",
+        Action::Standard => "standard",
+        Action::TacticalDelay => "tactical_delay",
+        Action::Underweight => "underweight",
+        Action::Skip => "skip",
+    }
+}
+
+/// Return the stable persisted label for the selected decision-weight mode.
+fn weight_mode_label(mode: DecisionWeightMode) -> &'static str {
+    match mode {
+        DecisionWeightMode::Normal => "normal",
+        DecisionWeightMode::SentimentUnavailable => "sentiment_unavailable",
+    }
 }
 
 fn summarize_decision(

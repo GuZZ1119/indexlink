@@ -16,6 +16,7 @@ indexlink-storage.workspace = true
 quant-engine.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
@@ -25,7 +26,6 @@ uuid.workspace = true
 [dev-dependencies]
 chrono.workspace = true
 http-body-util = "0.1"
-serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true
 tokio.workspace = true

@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use decision_records::{
-    CreateDecisionRecord, DecisionExecutionStatus, DecisionRecord, DecisionRecordListQuery,
-    DecisionRecordRepository, DecisionRecordRepositoryError,
+    CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus, DecisionRecord,
+    DecisionRecordListQuery, DecisionRecordRepository, DecisionRecordRepositoryError,
 };
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -43,6 +43,12 @@ const GET_RECORD_SQL: &str = concat!(
     "SELECT ",
     record_columns!(),
     " FROM decision_records WHERE id = $1::uuid"
+);
+
+const COMPLETE_BROKER_ORDER_SQL: &str = concat!(
+    "UPDATE decision_records SET broker_order_ack = $1::jsonb, summary = $2 ",
+    "WHERE id = $3::uuid RETURNING ",
+    record_columns!()
 );
 
 /// PostgreSQL implementation of [`DecisionRecordRepository`].
@@ -92,6 +98,25 @@ impl DecisionRecordRepository for PostgresDecisionRecordRepository {
             .fetch_one(&self.pool)
             .await
             .map_err(map_sqlx_error)?;
+
+        record_from_row(row)
+    }
+
+    /// Attach a broker acknowledgement to an existing decision record.
+    async fn complete_broker_order(
+        &self,
+        id: Uuid,
+        input: CompleteDecisionRecord,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        let input = input.normalize()?;
+        let row = sqlx::query(COMPLETE_BROKER_ORDER_SQL)
+            .bind(input.broker_order_ack.to_string())
+            .bind(input.summary)
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?
+            .ok_or(DecisionRecordRepositoryError::NotFound)?;
 
         record_from_row(row)
     }

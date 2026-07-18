@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### 2026-07-18 23:53 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Decision Preview 本地审计持久化 / paper order 安全存证。
+- 涉及文件：
+  - `crates/api/Cargo.toml`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/src/state.rs`
+  - `crates/api/tests/decision_preview.rs`
+  - `crates/api/tests/decision_records.rs`
+  - `crates/decision-records/src/lib.rs`
+  - `crates/storage/src/decision_records.rs`
+  - `crates/storage/src/sqlite_decision_records.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `POST /investment-plans/:id/decision-preview` 现在为每次已验证的预览自动持久化本地 SQLite decision record，保存执行结果、原始基本面/趋势/情绪输入、有效权重与派生决策、可选订单意图和安全摘要；快照不包含 OpenD 账户、凭据或 provider 内部错误。
+  - 可提交的 paper order 采用两步安全存证：先成功写入订单意图，再调用 broker；收到回执后仅补写回执与最终摘要。首写失败时绝不调用 broker；回执补写失败只记录安全服务端日志，不把已确认订单伪装成可重试的失败响应。
+  - decision-record port 新增语义受限的 `complete_broker_order` 操作，SQLite/PostgreSQL adapter 均只更新 broker acknowledgement 与 summary；SQLite 测试覆盖完成、缺失记录与静态查询约束。
+  - Decision Preview 聚焦测试改为真实使用内存 decision-record fake，并验证 due 订单的输入、执行、决策和回执快照均被完整保存。
+- 验证：
+  - `cargo test -p indexlink-api --test decision_preview --locked` 通过（5 tests，含存储不可用时绝不调用 broker）。
+  - `cargo test -p decision-records --locked` 通过（11 tests）。
+  - `cargo test -p indexlink-storage sqlite_decision_records --locked` 通过（7 tests）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo test -p indexlink-api --locked` 通过（35 tests）。
+  - `cargo test -p indexlink-storage --locked` 通过（31 tests）。
+  - `cargo fmt --all -- --check`、`cargo check --workspace --locked` 通过。
+  - `cargo clippy -p indexlink-api -p decision-records -p indexlink-storage --all-targets --all-features --locked -- -D warnings` 通过。
+
 ### 2026-07-18 22:30 AEST
 
 - 执行模型：GPT-5。
