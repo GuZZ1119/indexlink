@@ -164,6 +164,16 @@ impl ApiState {
         self
     }
 
+    /// 注入受配置保护的 broker 实现，替换默认的本地 mock broker。
+    ///
+    /// 生产装配只能传入已验证的 paper-only adapter；凭据和账户标识不得进入
+    /// HTTP 请求、响应、审计快照或日志。
+    #[must_use]
+    pub fn with_broker(mut self, broker: Arc<dyn BrokerClient>) -> Self {
+        self.broker = broker;
+        self
+    }
+
     /// 检查 API 依赖是否可用。
     pub(crate) async fn check_readiness(&self) -> Result<(), ReadinessError> {
         match self.readiness.as_ref() {
@@ -310,6 +320,8 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use broker::{BrokerEnvironment, BrokerError, BrokerOrderRequest, BrokerOrderSide};
+    use rust_decimal::Decimal;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::*;
@@ -318,10 +330,24 @@ mod tests {
         secret: &'static str,
     }
 
+    /// Broker double that proves composition can replace the default mock safely.
+    #[derive(Debug)]
+    struct UnavailableBroker;
+
     #[async_trait]
     impl ReadinessCheck for SecretChecker {
         async fn check(&self) -> Result<(), ReadinessError> {
             Err(ReadinessError::new(self.secret))
+        }
+    }
+
+    #[async_trait]
+    impl BrokerClient for UnavailableBroker {
+        async fn submit_order(
+            &self,
+            _request: BrokerOrderRequest,
+        ) -> Result<broker::BrokerOrderAck, BrokerError> {
+            Err(BrokerError::Unavailable)
         }
     }
 
@@ -364,5 +390,27 @@ mod tests {
             .expect_err("closed pool must fail readiness");
         assert_eq!(error.to_string(), "database ping failed");
         assert!(!error.to_string().contains("secret"));
+    }
+
+    /// Verify a configured adapter replaces the local mock at the broker port.
+    #[tokio::test]
+    async fn with_broker_replaces_default_mock_broker() {
+        let pool =
+            SqlitePoolOptions::new().connect_lazy_with(SqliteConnectOptions::new().in_memory(true));
+        let state = ApiState::new(SqliteStorage::from_pool(pool), "0.1.0")
+            .with_broker(Arc::new(UnavailableBroker));
+        let request = BrokerOrderRequest::market(
+            "configured-broker-test",
+            "VOO",
+            BrokerOrderSide::Buy,
+            Decimal::ONE,
+            BrokerEnvironment::Paper,
+        )
+        .expect("paper order fixture should be valid");
+
+        assert_eq!(
+            state.broker().submit_order(request).await,
+            Err(BrokerError::Unavailable)
+        );
     }
 }

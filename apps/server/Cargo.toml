@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 axum.workspace = true
 ai-client.workspace = true
+broker.workspace = true
 dotenvy.workspace = true
 indexlink-api.workspace = true
 indexlink-storage.workspace = true
@@ -13,3 +14,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tower.workspace = true
