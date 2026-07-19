@@ -12,6 +12,7 @@ export default defineConfig({
       '/signals': 'http://127.0.0.1:8080',
       '/decisions': 'http://127.0.0.1:8080',
       '/market-sentiment': 'http://127.0.0.1:8080',
+      '/paper-portfolio': 'http://127.0.0.1:8080',
     },
   },
   resolve: {

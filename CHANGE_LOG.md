@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 2026-07-19 20:12 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 前端 OpenD 模拟账户代理修复。
+- 涉及文件：
+  - `apps/web/vite.config.ts`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将只读 `/paper-portfolio` 加入 Vite 开发服务器到本机 Rust API `127.0.0.1:8080` 的代理，修复 Dashboard 刷新模拟账户时请求未转发而显示 `request failed` 的问题。
+  - 不改变 OpenD、订单、账户、数据持久化或实盘保护逻辑；该路由仍只读取模拟账户数据。
+- 验证：
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示现有首个 JS bundle 超过 500 kB，未阻断构建。
+  - `git diff --check` 通过。
+
 ### 2026-07-19 20:01 AEST
 
 - 执行模型：GPT-5。
