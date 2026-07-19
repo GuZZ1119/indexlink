@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react'
-import { CalendarClock, Plus } from 'lucide-react'
+import { CalendarClock, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useSnapshot } from 'valtio'
 
-import { useCreatePlan, usePlans } from '@/api/queries'
+import { useCreatePlan, useDeletePlan, usePlans } from '@/api/queries'
 import type { CreateInvestmentPlanRequest } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,6 +28,7 @@ export default function PlansPage() {
   const { selectedPlanId } = useSnapshot(uiStore)
   const { data: plans = [], isPending, error } = usePlans()
   const create = useCreatePlan()
+  const remove = useDeletePlan()
   const [input, setInput] = useState(initialPlan)
   const requestError = create.error ?? error
 
@@ -60,23 +61,13 @@ export default function PlansPage() {
             </p>
           )}
           {plans.map((plan) => (
-            <button
-              type="button"
-              key={plan.id}
-              onClick={() => setSelectedPlanId(plan.id)}
-              className={`w-full rounded-lg border p-4 text-left transition-colors hover:bg-muted/50 ${
-                selectedPlanId === plan.id ? 'border-primary bg-primary/5' : 'border-border'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-semibold">{plan.name}</span>
-                <span className="font-mono text-sm">{plan.symbol}</span>
-              </div>
-              <div className="mt-2 text-sm text-muted-foreground">
-                {plan.currency} {plan.base_contribution} · {t('live.plans.scheduleDay')} {plan.schedule_day} · {t('live.plans.maxExecution')}{' '}
-                {plan.max_single_execution}
-              </div>
-            </button>
+            <div key={plan.id} className={`flex w-full items-start gap-2 rounded-lg border p-1 transition-colors hover:bg-muted/50 ${selectedPlanId === plan.id ? 'border-primary bg-primary/5' : 'border-border'}`}>
+              <button type="button" onClick={() => setSelectedPlanId(plan.id)} className="min-w-0 flex-1 rounded-md p-3 text-left">
+                <div className="flex items-center justify-between gap-3"><span className="font-semibold">{plan.name}</span><span className="font-mono text-sm">{plan.symbol}</span></div>
+                <div className="mt-2 text-sm text-muted-foreground">{plan.currency} {plan.base_contribution} · {t('live.plans.scheduleDay')} {plan.schedule_day} · {t('live.plans.maxExecution')} {plan.max_single_execution}</div>
+              </button>
+              <Button type="button" variant="ghost" size="icon" className="mt-1 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`删除 ${plan.name}`} disabled={remove.isPending} onClick={() => { if (globalThis.confirm(`删除“${plan.name}”及其本地决策、账本和快照记录？此操作不可恢复。`)) { if (selectedPlanId === plan.id) setSelectedPlanId(null); remove.mutate(plan.id) } }}><Trash2 className="size-4" /></Button>
+            </div>
           ))}
         </CardContent>
       </Card>

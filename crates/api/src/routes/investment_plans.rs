@@ -158,7 +158,10 @@ impl TwoBucketAllocationRequest {
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
         .route("/investment-plans", post(create_plan).get(list_plans))
-        .route("/investment-plans/:id", get(get_plan).patch(update_plan))
+        .route(
+            "/investment-plans/:id",
+            get(get_plan).patch(update_plan).delete(delete_plan),
+        )
         .route(
             "/investment-plans/:id/execution-preview",
             post(preview_plan_execution),
@@ -200,6 +203,16 @@ async fn update_plan(
     let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     Ok(Json(state.plans().update(id, input.into()).await?))
+}
+
+/// 删除一个定投标的及其本地关联记录。
+async fn delete_plan(
+    State(state): State<ApiState>,
+    id: Result<Path<Uuid>, PathRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
+    state.plans().delete(id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// 预览 investment plan 在指定日期的执行状态。

@@ -29,7 +29,7 @@ pub use sqlite_investment_plans::SqliteInvestmentPlanRepository;
 /// SQLite local paper-trading performance ledger adapter.
 pub use sqlite_paper_performance::{
     PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
-    SqlitePaperPerformanceRepository,
+    PaperTradeMarker, SqlitePaperPerformanceRepository,
 };
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;

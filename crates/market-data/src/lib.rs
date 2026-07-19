@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, net::IpAddr, time::Duration};
 use async_trait::async_trait;
 use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use thiserror::Error;
@@ -61,11 +62,29 @@ pub struct MarketSignalInput {
     pub vix_current: f64,
 }
 
+/// 一根已验证的美股日线收盘价，用于只读走势与历史回放。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarketPricePoint {
+    /// 交易日，使用 UTC `YYYY-MM-DD`。
+    pub date: String,
+    /// 未调整的日线收盘价。
+    pub close: f64,
+}
+
 /// 自动市场信号快照的可替换读取端口。
 #[async_trait]
 pub trait MarketSignalProvider: Send + Sync {
     /// 为一个美股 ETF/股票读取并计算最新市场信号输入。
     async fn fetch(&self, symbol: &str) -> Result<MarketSignalInput, MarketDataError>;
+
+    /// 为一个已配置标的读取指定天数内的日线收盘价。
+    ///
+    /// 返回按交易日升序排列的真实 OpenD 数据；实现不得补造缺失交易日或价格。
+    async fn fetch_price_history(
+        &self,
+        symbol: &str,
+        lookback_days: i64,
+    ) -> Result<Vec<MarketPricePoint>, MarketDataError>;
 }
 
 /// 自动市场数据读取的安全错误。
@@ -166,6 +185,32 @@ impl MarketSignalProvider for OpenDMarketSignalProvider {
             rsi_history,
             vix_history,
         })
+    }
+
+    async fn fetch_price_history(
+        &self,
+        symbol: &str,
+        lookback_days: i64,
+    ) -> Result<Vec<MarketPricePoint>, MarketDataError> {
+        if !(1..=365 * 7).contains(&lookback_days) {
+            return Err(MarketDataError::InsufficientHistory);
+        }
+        let symbol = normalize_symbol(symbol)?;
+        let (daily, _) = self.fetch_daily_closes(&symbol).await?;
+        let start = Utc::now().date_naive() - ChronoDuration::days(lookback_days);
+        let values: Vec<_> = daily
+            .into_iter()
+            .filter(|(date, _)| *date >= start)
+            .map(|(date, close)| MarketPricePoint {
+                date: date.format("%Y-%m-%d").to_string(),
+                close,
+            })
+            .collect();
+        if values.is_empty() {
+            Err(MarketDataError::InsufficientHistory)
+        } else {
+            Ok(values)
+        }
     }
 }
 

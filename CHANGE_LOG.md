@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### 2026-07-19 21:15 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 多标的长线图、历史回放与定投标的管理。
+- 涉及文件：
+  - `crates/investment-plans/src/lib.rs`
+  - `crates/storage/src/{lib.rs,sqlite_investment_plans.rs,sqlite_paper_performance.rs}`
+  - `crates/market-data/src/lib.rs`
+  - `crates/api/src/{lib.rs,state.rs,routes/{investment_plans.rs,market_data.rs,paper_performance.rs}}`
+  - `crates/api/tests/investment_plans.rs`
+  - `apps/web/src/{api/{queries.ts,types.ts},pages/{dashboard,plans}/index.tsx,i18n/locales/{zh.ts,en.ts}}`
+  - `API_MANAGEMENT.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `DELETE /investment-plans/:id`；SQLite 通过既有外键级联删除该定投标的关联的决策记录、本地账本、成交和快照。前端将“定投计划”收敛为可覆盖股票/ETF 的“定投标的”，并提供二次确认删除入口。
+  - 新增 `GET /paper-performance/actual`：一次只读 OpenD 模拟账户刷新所有启用标的的本机 SQLite 快照，返回每个标的线及按日去重后的总和线；不提交、撤销或修改订单。
+  - 新增 `GET /market-data/holdings?period=3m|6m|1y|3y`：从本机 OpenD 返回所有启用标的的真实日线与本地已确认的模拟买卖标记。多标的前端以区间首日 `100` 归一化同图比较，绿色/红色点只代表本地账本中已观察到的买/卖成交。
+  - 新增 `GET /paper-performance/historical-backtest`：使用三年真实 OpenD 日线、每月末价格与真实 200 日均线距离，回放最近一年普通定投和 `0.5x–1.5x` 有界自适应投入的汇总价值线。历史 Qwen 情绪和宏观快照尚无按月审计来源，因此接口与页面明确声明其为价格规则回放，绝不伪造成完整 70/20/10 历史决策或已实现账户收益。
+  - Dashboard 增加三张长线图：真实组合轨迹（逐标的 + 总和）、可切换三个月/六个月/一年/三年的多标的走势与买卖点、一年普通定投/自适应价格回放。空数据统一显示“等待首次成交 / 暂无数据”。
+  - 已按用户明确授权清空本机 SQLite 的历史计划与关联记录；不删除代码、不改动 `upstream`，只向 Fork `origin/main` 提交。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo test -p investment-plans --locked` 通过（31 tests）、`cargo test -p indexlink-storage --locked` 通过（33 tests，含 SQLite 删除契约）、`cargo test -p indexlink-api --locked` 通过（46 tests，含 HTTP 删除契约）、`cargo test -p core-domain --locked` 通过（13 tests）。
+  - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` 通过。
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示现有首个 JS bundle 超过 500 kB，未阻断构建。
+  - 本机 `indexlink.db` 清理完成：删除前为 4 个定投标的、8 条决策、1 条本地订单、0 条 fill、0 条现金流、5 条快照；清理后上述六类记录均为 0。
+
 ### 2026-07-19 20:24 AEST
 
 - 执行模型：GPT-5。

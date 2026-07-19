@@ -112,6 +112,17 @@ impl InvestmentPlanRepository for FakeRepository {
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
         Err(PlanRepositoryError::Unavailable)
     }
+
+    /// Delete one stored plan for the HTTP deletion contract.
+    async fn delete(&self, id: Uuid) -> Result<(), PlanRepositoryError> {
+        let mut plans = self.plans.lock().unwrap();
+        let index = plans
+            .iter()
+            .position(|plan| plan.id == id)
+            .ok_or(PlanRepositoryError::NotFound)?;
+        plans.remove(index);
+        Ok(())
+    }
 }
 
 /// Convert service input into a stored test plan.
@@ -523,4 +534,36 @@ async fn preview_execution_maps_bad_input_to_safe_bad_request() {
             json!({"error": {"code": "bad_request", "message": "invalid request"}})
         );
     }
+}
+
+/// Verify deleting a holding removes it from subsequent list responses.
+#[tokio::test]
+async fn delete_plan_returns_no_content_and_removes_holding() {
+    let repository = Arc::new(FakeRepository::default());
+    let created = repository.create(create_input()).await.unwrap();
+    let app = app(repository);
+
+    let deleted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/investment-plans/{}", created.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .uri("/investment-plans")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response_json(listed).await, json!([]));
 }

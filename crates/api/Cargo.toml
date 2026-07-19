@@ -8,6 +8,7 @@ async-trait.workspace = true
 axum.workspace = true
 ai-client.workspace = true
 broker.workspace = true
+chrono.workspace = true
 core-domain.workspace = true
 decision-engine.workspace = true
 decision-records.workspace = true

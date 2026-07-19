@@ -7,7 +7,7 @@ export default {
   nav: {
     dashboard: '仪表盘',
     decisions: '决策明细',
-    plans: '定投计划',
+    plans: '定投标的',
   },
   header: {
     toggleSidebar: '收放侧栏',
@@ -27,7 +27,7 @@ export default {
     overview: {
       title: '投资概览',
       description: '展示本地 API 已返回的计划、决策与市场快照；不会用示意收益替代真实成交数据。',
-      selectPlan: '选择计划后显示概览',
+      selectPlan: '选择定投标的后显示概览',
       latestScore: '最近一次决策 · {{date}}',
       awaitingDecision: '尚未运行决策预览',
       schedule: '定投日',
@@ -178,7 +178,7 @@ export default {
     localDemo: '本地演示',
     localOnly: '仅使用本机 Rust API',
     demoSteps: {
-      plan: '创建或选择计划',
+      plan: '创建或选择定投标的',
       signals: '输入或导入信号',
       decision: 'Qwen 与决策结果',
       buckets: '双桶拆分',
@@ -187,8 +187,8 @@ export default {
     decision: {
       title: '实时决策预览',
       description: '调用本机 Rust API；浏览器不会伪造市场数据、收益或信号。',
-      plan: '投资计划',
-      createPlanFirst: '请先创建计划',
+      plan: '定投标的',
+      createPlanFirst: '请先创建定投标的',
       day: '月内日期',
       coreRatio: '核心桶比例',
       opportunityRatio: '机会桶比例',
@@ -240,10 +240,10 @@ export default {
       paperNotSubmitted: '本次请求已要求 paper order，但服务端执行门控未返回回执；请以本次决策摘要为准。',
     },
     plans: {
-      title: '定投计划',
-      description: '选择计划后可在实时决策预览中使用。',
-      empty: '暂无计划。请使用右侧表单创建第一个计划。',
-      create: '创建计划',
+      title: '定投标的',
+      description: '每个标的是一只股票或 ETF，选择后可在实时决策预览中使用。',
+      empty: '暂无定投标的。请使用右侧表单创建第一个标的。',
+      create: '创建定投标的',
       creating: '创建中…',
       name: '名称',
       symbol: '标的代码',

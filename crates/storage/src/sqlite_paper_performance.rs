@@ -43,6 +43,23 @@ pub struct PaperPerformancePoint {
     pub net_contributions: Decimal,
 }
 
+/// 一笔已由本地账本确认的模拟成交标记。
+#[derive(Debug, Clone, Serialize)]
+pub struct PaperTradeMarker {
+    /// 本地归属的定投标的 ID。
+    pub plan_id: Uuid,
+    /// 买入或卖出方向。
+    pub side: String,
+    /// 成交量。
+    #[serde(with = "rust_decimal::serde::str")]
+    pub quantity: Decimal,
+    /// 本地观察到的成交均价。
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    /// 本地观察到成交状态变化的 UTC RFC3339 时间。
+    pub observed_at: String,
+}
+
 /// Current local paper-performance result for one plan.
 #[derive(Debug, Clone, Serialize)]
 pub struct PaperPerformance {
@@ -210,6 +227,50 @@ impl SqlitePaperPerformanceRepository {
             total_return,
             points: self.points(plan.id).await?,
         })
+    }
+
+    /// 返回一个计划的完整本地快照序列，不读取 broker。
+    pub async fn history(
+        &self,
+        plan_id: Uuid,
+    ) -> Result<Vec<PaperPerformancePoint>, PaperPerformanceError> {
+        self.points(plan_id).await
+    }
+
+    /// 返回本地账本已确认的成交标记，不读取或伪造 provider 成交历史。
+    pub async fn trade_markers(
+        &self,
+        plan_id: Uuid,
+    ) -> Result<Vec<PaperTradeMarker>, PaperPerformanceError> {
+        let rows = sqlx::query(
+            "SELECT paper_orders.plan_id, paper_orders.side, paper_fills.quantity, \
+             paper_fills.price, paper_fills.observed_at \
+             FROM paper_fills JOIN paper_orders ON paper_orders.order_id = paper_fills.order_id \
+             WHERE paper_orders.plan_id = ?1 ORDER BY paper_fills.observed_at, paper_fills.id",
+        )
+        .bind(plan_id.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PaperTradeMarker {
+                    plan_id: row
+                        .try_get::<String, _>("plan_id")
+                        .map_err(map_sqlx)?
+                        .parse()
+                        .map_err(|_| PaperPerformanceError::Unavailable)?,
+                    side: row.try_get("side").map_err(map_sqlx)?,
+                    quantity: decode_non_negative(
+                        row.try_get::<String, _>("quantity").map_err(map_sqlx)?,
+                    )?,
+                    price: decode_non_negative(
+                        row.try_get::<String, _>("price").map_err(map_sqlx)?,
+                    )?,
+                    observed_at: row.try_get("observed_at").map_err(map_sqlx)?,
+                })
+            })
+            .collect()
     }
 
     async fn sync_orders(

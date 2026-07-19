@@ -48,6 +48,7 @@ const SET_ACTIVE_SQL: &str = "UPDATE investment_plans SET \
     WHERE id = ?1 \
     RETURNING id, name, symbol, base_contribution, currency, schedule_kind, schedule_day, \
     max_single_execution, is_active, created_at, updated_at";
+const DELETE_PLAN_SQL: &str = "DELETE FROM investment_plans WHERE id = ?1";
 
 /// SQLite implementation of [`InvestmentPlanRepository`].
 #[derive(Clone, Debug)]
@@ -185,6 +186,19 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .ok_or(PlanRepositoryError::NotFound)?;
 
         plan_from_row(row)
+    }
+
+    /// Delete one plan and rely on SQLite foreign-key cascades for its local records.
+    async fn delete(&self, id: Uuid) -> Result<(), PlanRepositoryError> {
+        let result = sqlx::query(DELETE_PLAN_SQL)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 {
+            return Err(PlanRepositoryError::NotFound);
+        }
+        Ok(())
     }
 }
 
@@ -406,6 +420,21 @@ mod tests {
         );
     }
 
+    /// 验证删除计划后 SQLite 不再返回该记录。
+    #[tokio::test]
+    async fn deletes_existing_plan_and_reports_missing_id() {
+        let repository = repository().await;
+        let created = repository.create(input()).await.unwrap();
+
+        repository.delete(created.id).await.unwrap();
+
+        assert_eq!(repository.list().await.unwrap(), Vec::new());
+        assert_eq!(
+            repository.delete(created.id).await,
+            Err(PlanRepositoryError::NotFound)
+        );
+    }
+
     /// 验证固定精度金额编码拒绝零、负数和超出整数范围的值。
     #[test]
     fn amount_codec_enforces_sqlite_representation() {
@@ -474,6 +503,7 @@ mod tests {
             SELECT_UPDATE_AMOUNTS_SQL,
             UPDATE_PLAN_SQL,
             SET_ACTIVE_SQL,
+            DELETE_PLAN_SQL,
         ] {
             assert!(!query.contains('$'));
         }

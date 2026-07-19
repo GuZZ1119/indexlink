@@ -110,6 +110,53 @@ export interface PaperPerformance {
   points: PaperPerformancePoint[]
 }
 
+/** One real local-paper series for a recurring holding, or the explicit total line. */
+export interface ActualPerformanceSeries {
+  plan_id: string
+  name: string
+  symbol: string
+  points: PaperPerformancePoint[]
+}
+
+/** Combined local-paper trajectory across every active recurring holding. */
+export interface ActualPerformance {
+  currency: string
+  series: ActualPerformanceSeries[]
+  total_points: PaperPerformancePoint[]
+}
+
+/** One local paper fill placed on a historical price chart. */
+export interface PaperTradeMarker {
+  plan_id: string
+  side: 'buy' | 'sell'
+  quantity: string
+  price: string
+  observed_at: string
+}
+
+/** OpenD prices and locally confirmed paper fills for one active recurring holding. */
+export interface HoldingPriceHistory {
+  plan_id: string
+  name: string
+  symbol: string
+  prices: Array<{ date: string; close: number }>
+  trades: PaperTradeMarker[]
+}
+
+/** One value point in the transparent one-year historical replay. */
+export interface HistoricalBacktestPoint {
+  date: string
+  plain_dca_value: number
+  adaptive_value: number
+}
+
+/** Explicitly scoped historical comparison, not an account return claim. */
+export interface HistoricalBacktest {
+  currency: string
+  methodology: string
+  points: HistoricalBacktestPoint[]
+}
+
 /** Request accepted by the composed Decision Preview endpoint. */
 export interface DecisionPreviewRequest {
   day_of_month: number

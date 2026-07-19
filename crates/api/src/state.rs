@@ -5,16 +5,21 @@ use async_trait::async_trait;
 use broker::{
     BrokerClient, BrokerOrderAck, BrokerOrderRequest, MockBroker, PaperPortfolioSnapshot,
 };
+use chrono::Datelike;
 use decision_records::{
     DecisionRecord, DecisionRecordListQuery, DecisionRecordRepository,
     DecisionRecordRepositoryError, DecisionRecordService,
 };
 use indexlink_storage::{
-    PaperPerformance, PaperPerformanceError, PaperPerformancePlan, SqliteDecisionRecordRepository,
-    SqliteInvestmentPlanRepository, SqlitePaperPerformanceRepository, SqliteStorage,
+    PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
+    PaperTradeMarker, SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository,
+    SqlitePaperPerformanceRepository, SqliteStorage,
 };
 use investment_plans::InvestmentPlanService;
-use market_data::{MarketDataError, MarketSignalInput, MarketSignalProvider};
+use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
+use rust_decimal::{prelude::ToPrimitive, Decimal};
+use serde::Serialize;
+use std::collections::BTreeMap;
 
 use crate::ApiError;
 
@@ -26,6 +31,67 @@ enum ReadinessBackend {
 struct MarketSentimentDependencies {
     news_source: Arc<dyn NewsSource>,
     provider: Arc<dyn AiProvider>,
+}
+
+/// One real local-paper series belonging to a configured recurring holding.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ActualPerformanceSeries {
+    /// Local holding identifier.
+    pub plan_id: uuid::Uuid,
+    /// User-facing holding name.
+    pub name: String,
+    /// Normalized symbol.
+    pub symbol: String,
+    /// Local snapshot points in chronological order.
+    pub points: Vec<PaperPerformancePoint>,
+}
+
+/// Combined real local-paper trajectory across all configured recurring holdings.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ActualPerformance {
+    /// Shared display currency. MVP only aggregates one currency at a time.
+    pub currency: String,
+    /// Per-holding trajectories.
+    pub series: Vec<ActualPerformanceSeries>,
+    /// Sum of per-holding adaptive values at each shared observation timestamp.
+    pub total_points: Vec<PaperPerformancePoint>,
+}
+
+/// Read-only price history and local trade markers for one configured holding.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HoldingPriceHistory {
+    /// Local holding identifier.
+    pub plan_id: uuid::Uuid,
+    /// User-facing holding name.
+    pub name: String,
+    /// Normalized symbol.
+    pub symbol: String,
+    /// Actual OpenD daily closes in the requested window.
+    pub prices: Vec<MarketPricePoint>,
+    /// Locally confirmed paper fills within the requested window.
+    pub trades: Vec<PaperTradeMarker>,
+}
+
+/// One monthly point from the transparent historical price-only DCA replay.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HistoricalBacktestPoint {
+    /// Last available trading date in the replay month.
+    pub date: String,
+    /// Value of equal scheduled contributions without adaptation.
+    pub plain_dca_value: f64,
+    /// Value of the same schedule after the documented price-distance adjustment.
+    pub adaptive_value: f64,
+}
+
+/// One-year historical comparison of plain and adaptive contribution schedules.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HistoricalBacktest {
+    /// Shared display currency. MVP only aggregates one currency at a time.
+    pub currency: String,
+    /// Explains the exact first-version replay boundary without presenting it as realised return.
+    pub methodology: &'static str,
+    /// Monthly points, oldest first.
+    pub points: Vec<HistoricalBacktestPoint>,
 }
 
 impl fmt::Debug for MarketSentimentDependencies {
@@ -275,6 +341,234 @@ impl ApiState {
             .await
             .inspect_err(|error| tracing::error!(%error, "paper performance refresh failed"))
             .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// Refresh every configured holding from one read-only paper-account snapshot and return
+    /// their local trajectories plus an explicitly summed total line.
+    pub(crate) async fn actual_performance(&self) -> Result<ActualPerformance, ApiError> {
+        let plans = self.plans().list().await?;
+        let active: Vec<_> = plans.into_iter().filter(|plan| plan.is_active).collect();
+        let currency = active
+            .first()
+            .map(|plan| plan.currency.clone())
+            .unwrap_or_else(|| "USD".to_owned());
+        if active.iter().any(|plan| plan.currency != currency) {
+            return Err(ApiError::BadRequest);
+        }
+        if active.is_empty() {
+            return Ok(ActualPerformance {
+                currency,
+                series: Vec::new(),
+                total_points: Vec::new(),
+            });
+        }
+        let portfolio = self.paper_portfolio().await?;
+        let repository = self
+            .paper_performance
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        let mut series = Vec::with_capacity(active.len());
+        for plan in active {
+            repository
+                .refresh(
+                    &PaperPerformancePlan {
+                        id: plan.id,
+                        symbol: plan.symbol.clone(),
+                        currency: plan.currency,
+                        base_contribution: plan.base_contribution,
+                    },
+                    &portfolio,
+                )
+                .await
+                .inspect_err(|error| tracing::error!(%error, "actual performance refresh failed"))
+                .map_err(|_| ApiError::ServiceUnavailable)?;
+            series.push(ActualPerformanceSeries {
+                plan_id: plan.id,
+                name: plan.name,
+                symbol: plan.symbol,
+                points: repository
+                    .history(plan.id)
+                    .await
+                    .map_err(|_| ApiError::ServiceUnavailable)?,
+            });
+        }
+        let mut daily = BTreeMap::<String, BTreeMap<uuid::Uuid, PaperPerformancePoint>>::new();
+        for item in &series {
+            for point in &item.points {
+                let day = point
+                    .observed_at
+                    .get(..10)
+                    .unwrap_or(&point.observed_at)
+                    .to_owned();
+                // A manual refresh may create several same-day snapshots.  Keep the newest
+                // point per holding so the aggregate is never a sum of duplicate states.
+                daily
+                    .entry(day)
+                    .or_default()
+                    .insert(item.plan_id, point.clone());
+            }
+        }
+        let total_points = daily
+            .into_iter()
+            .map(|(day, per_plan)| {
+                let (adaptive_value, plain_dca_value, net_contributions) =
+                    per_plan.into_values().fold(
+                        (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO),
+                        |total, point| {
+                            (
+                                total.0 + point.adaptive_value,
+                                total.1 + point.plain_dca_value,
+                                total.2 + point.net_contributions,
+                            )
+                        },
+                    );
+                PaperPerformancePoint {
+                    observed_at: format!("{day}T00:00:00.000Z"),
+                    adaptive_value,
+                    plain_dca_value,
+                    net_contributions,
+                }
+            })
+            .collect();
+        Ok(ActualPerformance {
+            currency,
+            series,
+            total_points,
+        })
+    }
+
+    /// Return read-only price histories and local buy/sell markers for all active holdings.
+    pub(crate) async fn holding_price_history(
+        &self,
+        lookback_days: i64,
+    ) -> Result<Vec<HoldingPriceHistory>, ApiError> {
+        let provider = self
+            .market_data
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        let repository = self
+            .paper_performance
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(lookback_days);
+        let mut output = Vec::new();
+        for plan in self
+            .plans()
+            .list()
+            .await?
+            .into_iter()
+            .filter(|plan| plan.is_active)
+        {
+            let prices = provider
+                .fetch_price_history(&plan.symbol, lookback_days)
+                .await
+                .inspect_err(|error| tracing::error!(%error, symbol = %plan.symbol, "price history refresh failed"))
+                .map_err(|_| ApiError::ServiceUnavailable)?;
+            let trades = repository
+                .trade_markers(plan.id)
+                .await
+                .map_err(|_| ApiError::ServiceUnavailable)?
+                .into_iter()
+                .filter(|trade| {
+                    chrono::DateTime::parse_from_rfc3339(&trade.observed_at)
+                        .is_ok_and(|at| at.with_timezone(&chrono::Utc) >= cutoff)
+                })
+                .collect();
+            output.push(HoldingPriceHistory {
+                plan_id: plan.id,
+                name: plan.name,
+                symbol: plan.symbol,
+                prices,
+                trades,
+            });
+        }
+        Ok(output)
+    }
+
+    /// Simulate one historical year for all active holdings using actual OpenD prices.
+    ///
+    /// This first MVP replay deliberately does not invent unavailable historical AI output or
+    /// macro snapshots.  It applies a bounded contribution adjustment from each symbol's
+    /// real 200-day moving-average distance and compares it with the same-date plain schedule.
+    pub(crate) async fn historical_backtest(&self) -> Result<HistoricalBacktest, ApiError> {
+        let provider = self
+            .market_data
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        let plans: Vec<_> = self
+            .plans()
+            .list()
+            .await?
+            .into_iter()
+            .filter(|plan| plan.is_active)
+            .collect();
+        let currency = plans
+            .first()
+            .map(|plan| plan.currency.clone())
+            .unwrap_or_else(|| "USD".to_owned());
+        if plans.iter().any(|plan| plan.currency != currency) {
+            return Err(ApiError::BadRequest);
+        }
+        let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::days(366);
+        let mut totals = BTreeMap::<String, (f64, f64)>::new();
+        for plan in plans {
+            let prices = provider
+                .fetch_price_history(&plan.symbol, 365 * 3 + 1)
+                .await
+                .inspect_err(|error| tracing::error!(%error, symbol = %plan.symbol, "historical replay data refresh failed"))
+                .map_err(|_| ApiError::ServiceUnavailable)?;
+            let parsed: Vec<_> = prices
+                .iter()
+                .filter_map(|point| {
+                    chrono::NaiveDate::parse_from_str(&point.date, "%Y-%m-%d")
+                        .ok()
+                        .map(|date| (date, point.close))
+                })
+                .collect();
+            if parsed.len() < 201 {
+                return Err(ApiError::ServiceUnavailable);
+            }
+            let mut monthly = BTreeMap::<(i32, u32), (usize, chrono::NaiveDate, f64)>::new();
+            for (index, (date, close)) in parsed.iter().enumerate() {
+                if *date >= cutoff && index >= 199 {
+                    monthly.insert((date.year(), date.month()), (index, *date, *close));
+                }
+            }
+            let mut plain_units = 0.0;
+            let mut adaptive_units = 0.0;
+            let base = plan
+                .base_contribution
+                .to_f64()
+                .ok_or(ApiError::BadRequest)?;
+            for (_, (index, date, close)) in monthly {
+                let average = parsed[index + 1 - 200..=index]
+                    .iter()
+                    .map(|(_, value)| *value)
+                    .sum::<f64>()
+                    / 200.0;
+                let distance = close / average - 1.0;
+                let multiplier = (1.0 - distance * 2.5).clamp(0.5, 1.5);
+                plain_units += base / close;
+                adaptive_units += base * multiplier / close;
+                let entry = totals
+                    .entry(date.format("%Y-%m-%d").to_string())
+                    .or_insert((0.0, 0.0));
+                entry.0 += plain_units * close;
+                entry.1 += adaptive_units * close;
+            }
+        }
+        Ok(HistoricalBacktest {
+            currency,
+            methodology: "一年前开始的真实 OpenD 日线月度回放；普通定投每月固定投入，自适应定投仅按当月相对 MA200 距离在 0.5x–1.5x 调整。历史 AI 情绪与宏观快照未被伪造，因此这不是已实现收益，也不是完整 70/20/10 审计回放。",
+            points: totals
+                .into_iter()
+                .map(|(date, (plain_dca_value, adaptive_value))| HistoricalBacktestPoint {
+                    date,
+                    plain_dca_value,
+                    adaptive_value,
+                })
+                .collect(),
+        })
     }
 
     /// 记录已被 broker 接受的订单意图，供后续只读对账生成本地成交账本。

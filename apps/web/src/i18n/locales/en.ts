@@ -7,7 +7,7 @@ export default {
   nav: {
     dashboard: 'Dashboard',
     decisions: 'Decisions',
-    plans: 'Plans',
+    plans: 'Recurring holdings',
   },
   header: {
     toggleSidebar: 'Toggle sidebar',
@@ -27,7 +27,7 @@ export default {
     overview: {
       title: 'Investment Overview',
       description: 'Shows plan, decision, and market snapshots returned by the local API; it never substitutes illustrative returns for real fills.',
-      selectPlan: 'Select a plan to show the overview',
+      selectPlan: 'Select a recurring holding to show the overview',
       latestScore: 'Latest decision · {{date}}',
       awaitingDecision: 'No decision preview has run yet',
       schedule: 'Schedule',
@@ -178,7 +178,7 @@ export default {
     localDemo: 'Local demo',
     localOnly: 'Uses the local Rust API only',
     demoSteps: {
-      plan: 'Create or select plan',
+      plan: 'Create or select recurring holding',
       signals: 'Enter or import signals',
       decision: 'Qwen and decision',
       buckets: 'Bucket split',
@@ -187,8 +187,8 @@ export default {
     decision: {
       title: 'Live decision preview',
       description: 'Uses your local Rust API. The browser does not fabricate market data, returns, or signals.',
-      plan: 'Investment plan',
-      createPlanFirst: 'Create a plan first',
+      plan: 'Recurring holding',
+      createPlanFirst: 'Create a recurring holding first',
       day: 'Day of month',
       coreRatio: 'Core ratio',
       opportunityRatio: 'Opportunity ratio',

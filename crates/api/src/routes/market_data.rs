@@ -1,18 +1,42 @@
 //! Automatic market-signal input route.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::get,
     Json, Router,
 };
 use market_data::MarketSignalInput;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{ApiError, ApiState};
 
 /// Build automatic market-signal input routes.
 pub(crate) fn router() -> Router<ApiState> {
-    Router::new().route("/signals/market-input/:symbol", get(fetch_market_input))
+    Router::new()
+        .route("/signals/market-input/:symbol", get(fetch_market_input))
+        .route("/market-data/holdings", get(fetch_holding_prices))
+}
+
+/// Request window for read-only price charts.
+#[derive(Debug, Deserialize)]
+struct HoldingPriceQuery {
+    /// One of `3m`, `6m`, `1y`, or `3y`; defaults to one year.
+    period: Option<String>,
+}
+
+/// Fetch all active holdings' actual price lines and locally confirmed buy/sell markers.
+async fn fetch_holding_prices(
+    State(state): State<ApiState>,
+    Query(query): Query<HoldingPriceQuery>,
+) -> Result<Json<Vec<crate::state::HoldingPriceHistory>>, ApiError> {
+    let days = match query.period.as_deref().unwrap_or("1y") {
+        "3m" => 92,
+        "6m" => 183,
+        "1y" => 366,
+        "3y" => 365 * 3 + 1,
+        _ => return Err(ApiError::BadRequest),
+    };
+    Ok(Json(state.holding_price_history(days).await?))
 }
 
 /// Fetch a source-labelled automatic signal input for one selected plan symbol.

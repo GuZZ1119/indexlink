@@ -11,6 +11,9 @@ import type {
   MarketSignalInput,
   PaperPortfolioSnapshot,
   PaperPerformance,
+  ActualPerformance,
+  HistoricalBacktest,
+  HoldingPriceHistory,
   TrendPreviewRequest,
   TrendSignal,
 } from './types'
@@ -38,6 +41,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await response.json().catch(() => null)) as ErrorEnvelope | null
     throw new ApiRequestError(body?.error?.message ?? 'request failed')
   }
+  if (response.status === 204) {
+    return undefined as T
+  }
   return (await response.json()) as T
 }
 
@@ -49,6 +55,11 @@ export function fetchPlans(): Promise<InvestmentPlan[]> {
 /** Create one normalized investment plan through the Rust API. */
 export function createPlan(input: CreateInvestmentPlanRequest): Promise<InvestmentPlan> {
   return request('/investment-plans', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/** Delete one recurring holding and its local-only dependent records. */
+export async function deletePlan(planId: string): Promise<void> {
+  await request(`/investment-plans/${encodeURIComponent(planId)}`, { method: 'DELETE' })
 }
 
 /** Calculate a 70% fundamental signal from caller-provided historical data. */
@@ -80,6 +91,21 @@ export function fetchPaperPortfolio(): Promise<PaperPortfolioSnapshot> {
 /** Refresh one plan's local paper ledger from read-only OpenD account data. */
 export function fetchPaperPerformance(planId: string): Promise<PaperPerformance> {
   return request(`/investment-plans/${encodeURIComponent(planId)}/paper-performance`)
+}
+
+/** Refresh and read every active holding's real local-paper trajectory. */
+export function fetchActualPerformance(): Promise<ActualPerformance> {
+  return request('/paper-performance/actual')
+}
+
+/** Read one transparent year of price-only historical plain-versus-adaptive replay. */
+export function fetchHistoricalBacktest(): Promise<HistoricalBacktest> {
+  return request('/paper-performance/historical-backtest')
+}
+
+/** Read actual OpenD price lines plus local paper buy/sell markers for every active holding. */
+export function fetchHoldingPriceHistory(period: '3m' | '6m' | '1y' | '3y'): Promise<HoldingPriceHistory[]> {
+  return request(`/market-data/holdings?period=${period}`)
 }
 
 /** Store a user-confirmed local opening balance used only for return calculations. */
@@ -124,6 +150,17 @@ export function useCreatePlan() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: createPlan,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['plans'] })
+    },
+  })
+}
+
+/** Delete a recurring holding and invalidate every plan-backed view. */
+export function useDeletePlan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: deletePlan,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['plans'] })
     },

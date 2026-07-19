@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { BarChart3, Bot, ClipboardCheck, FileJson, Plus, RefreshCw, Send, Upload } from 'lucide-react'
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useSnapshot } from 'valtio'
 
 import {
   ApiRequestError,
+  fetchActualPerformance,
+  fetchHistoricalBacktest,
+  fetchHoldingPriceHistory,
   fetchMarketSignalInput,
   fetchPaperPerformance,
   fetchPaperPortfolio,
@@ -25,6 +28,9 @@ import type {
   DecisionPreviewResponse,
   InvestmentPlan,
   MarketSignalInput,
+  ActualPerformance,
+  HistoricalBacktest,
+  HoldingPriceHistory,
   PaperPortfolioSnapshot,
   PaperPerformance,
 } from '@/api/types'
@@ -187,6 +193,7 @@ export default function DashboardPage() {
   const [importError, setImportError] = useState<string | null>(null)
   const [marketRefresh, setMarketRefresh] = useState<MarketSignalInput | null>(null)
   const [planFormOpen, setPlanFormOpen] = useState(false)
+  const [pricePeriod, setPricePeriod] = useState<'3m' | '6m' | '1y' | '3y'>('1y')
 
   useEffect(() => {
     if (selectedPlanId === null && plans[0]) {
@@ -281,6 +288,11 @@ export default function DashboardPage() {
     },
     onSuccess: () => paperPerformanceMutation.mutate(),
   })
+  const actualPerformanceMutation = useMutation({ mutationFn: fetchActualPerformance })
+  const historicalBacktestMutation = useMutation({ mutationFn: fetchHistoricalBacktest })
+  const priceHistoryMutation = useMutation({
+    mutationFn: () => fetchHoldingPriceHistory(pricePeriod),
+  })
 
   const updateSignal = (key: keyof SignalFields, value: string) => {
     setSignals((current) => ({ ...current, [key]: value }))
@@ -312,6 +324,9 @@ export default function DashboardPage() {
     ?? paperPortfolioMutation.error
     ?? paperPerformanceMutation.error
     ?? openingBalanceMutation.error
+    ?? actualPerformanceMutation.error
+    ?? historicalBacktestMutation.error
+    ?? priceHistoryMutation.error
     ?? createPlan.error
     ?? plansError
     ?? decisionRecordsError
@@ -334,6 +349,17 @@ export default function DashboardPage() {
         performanceRefreshing={paperPerformanceMutation.isPending || openingBalanceMutation.isPending}
         onRefreshPerformance={() => paperPerformanceMutation.mutate()}
         onSetOpeningBalance={(input) => openingBalanceMutation.mutate(input)}
+        actualPerformance={actualPerformanceMutation.data ?? null}
+        actualRefreshing={actualPerformanceMutation.isPending}
+        onRefreshActual={() => actualPerformanceMutation.mutate()}
+        historicalBacktest={historicalBacktestMutation.data ?? null}
+        historicalRefreshing={historicalBacktestMutation.isPending}
+        onRefreshHistorical={() => historicalBacktestMutation.mutate()}
+        priceHistory={priceHistoryMutation.data ?? null}
+        priceRefreshing={priceHistoryMutation.isPending}
+        pricePeriod={pricePeriod}
+        onPricePeriodChange={setPricePeriod}
+        onRefreshPrices={() => priceHistoryMutation.mutate()}
       />
 
       <Card>
@@ -583,6 +609,17 @@ function DashboardOverview({
   performanceRefreshing,
   onRefreshPerformance,
   onSetOpeningBalance,
+  actualPerformance,
+  actualRefreshing,
+  onRefreshActual,
+  historicalBacktest,
+  historicalRefreshing,
+  onRefreshHistorical,
+  priceHistory,
+  priceRefreshing,
+  pricePeriod,
+  onPricePeriodChange,
+  onRefreshPrices,
 }: {
   plan: InvestmentPlan | null
   decision: OverviewDecision | null
@@ -594,6 +631,17 @@ function DashboardOverview({
   performanceRefreshing: boolean
   onRefreshPerformance: () => void
   onSetOpeningBalance: (input: { amount: string; occurred_at: string }) => void
+  actualPerformance: ActualPerformance | null
+  actualRefreshing: boolean
+  onRefreshActual: () => void
+  historicalBacktest: HistoricalBacktest | null
+  historicalRefreshing: boolean
+  onRefreshHistorical: () => void
+  priceHistory: HoldingPriceHistory[] | null
+  priceRefreshing: boolean
+  pricePeriod: '3m' | '6m' | '1y' | '3y'
+  onPricePeriodChange: (period: '3m' | '6m' | '1y' | '3y') => void
+  onRefreshPrices: () => void
 }) {
   const { t } = useTranslation()
   const currency = plan?.currency ?? 'USD'
@@ -819,6 +867,30 @@ function DashboardOverview({
         onRefresh={onRefreshPerformance}
         onSetOpeningBalance={onSetOpeningBalance}
       />
+
+      <Card>
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><CardTitle>真实组合收益轨迹</CardTitle><CardDescription>从本机 SQLite 的已观察模拟成交开始，显示每个定投标的与总和；刷新只读 OpenD。</CardDescription></div>
+          <Button variant="outline" disabled={actualRefreshing} onClick={onRefreshActual}><RefreshCw className={cn('size-4', actualRefreshing && 'animate-spin')} />刷新真实轨迹</Button>
+        </CardHeader>
+        <CardContent>{actualPerformance?.total_points.length ? <ActualPerformanceChart performance={actualPerformance} /> : <EmptyState text="等待首次成交 / 暂无数据。先为定投标的设置起始资金并完成模拟成交，再刷新真实轨迹。" />}</CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><CardTitle>定投标的历史走势与成交点</CardTitle><CardDescription>实际 OpenD 日线。多标的会归一化到 100，便于在同一张图比较；圆点仅代表本地已确认的模拟买卖成交。</CardDescription></div>
+          <div className="flex flex-wrap items-center gap-2"><select className="h-9 rounded-md border bg-background px-2 text-sm" value={pricePeriod} onChange={(event) => onPricePeriodChange(event.target.value as '3m' | '6m' | '1y' | '3y')}><option value="3m">近 3 个月</option><option value="6m">近 6 个月</option><option value="1y">近 1 年</option><option value="3y">近 3 年</option></select><Button variant="outline" disabled={priceRefreshing} onClick={onRefreshPrices}><RefreshCw className={cn('size-4', priceRefreshing && 'animate-spin')} />拉取走势</Button></div>
+        </CardHeader>
+        <CardContent>{priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text="选择或创建定投标的后，点击“拉取走势”。不会生成虚构的历史价格。" />}</CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><CardTitle>一年历史模拟对比</CardTitle><CardDescription>将所有启用的定投标的聚合为两条曲线。该回放使用真实日线，不把历史 AI 或宏观信号伪造成已知事实。</CardDescription></div>
+          <Button variant="outline" disabled={historicalRefreshing} onClick={onRefreshHistorical}><RefreshCw className={cn('size-4', historicalRefreshing && 'animate-spin')} />运行一年回放</Button>
+        </CardHeader>
+        <CardContent>{historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text="需要至少一只启用的定投标的以及足够的 OpenD 历史日线，才能运行一年历史回放。" />}</CardContent>
+      </Card>
     </section>
   )
 }
@@ -845,6 +917,61 @@ function PerformanceChart({ performance }: { performance: PaperPerformance }) {
       </ResponsiveContainer>
     </div>
   )
+}
+
+/** Render every locally tracked holding and the explicit total on one real paper-performance chart. */
+function ActualPerformanceChart({ performance }: { performance: ActualPerformance }) {
+  const data = useMemo(() => {
+    const rows = new Map<string, Record<string, string | number>>()
+    for (const point of performance.total_points) {
+      rows.set(point.observed_at.slice(0, 10), { date: formatLocalDate(point.observed_at), total: Number(point.adaptive_value) })
+    }
+    for (const series of performance.series) {
+      for (const point of series.points) {
+        const key = point.observed_at.slice(0, 10)
+        const row = rows.get(key) ?? { date: formatLocalDate(point.observed_at) }
+        row[series.plan_id] = Number(point.adaptive_value)
+        rows.set(key, row)
+      }
+    }
+    return [...rows.values()]
+  }, [performance])
+  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} /><YAxis tickLine={false} axisLine={false} width={72} /><Tooltip formatter={(value) => typeof value === 'number' ? formatCurrency(value, performance.currency) : '—'} /><Line type="monotone" dataKey="total" name="全部定投标的总和" stroke="#111827" strokeWidth={3} dot={false} />{performance.series.map((series, index) => <Line key={series.plan_id} type="monotone" dataKey={series.plan_id} name={`${series.name} · ${series.symbol}`} stroke={chartColor(index)} strokeWidth={2} dot={false} connectNulls />)}</LineChart></ResponsiveContainer><p className="mt-2 text-xs text-muted-foreground">黑线为总和；其余线仅显示已在本机 SQLite 留下快照的定投标的。</p></div>
+}
+
+/** Render one normalized multi-symbol OpenD price chart and place only locally verified fills. */
+function HoldingPriceChart({ holdings }: { holdings: HoldingPriceHistory[] }) {
+  const { data, keys, markers } = useMemo(() => {
+    const rows = new Map<string, Record<string, string | number>>()
+    const markers: Array<{ key: string; date: string; value: number; side: 'buy' | 'sell' }> = []
+    const keys = holdings.filter((holding) => holding.prices.length > 0).map((holding) => holding.plan_id)
+    for (const holding of holdings) {
+      const base = holding.prices[0]?.close
+      if (!base) continue
+      for (const point of holding.prices) {
+        const row = rows.get(point.date) ?? { date: point.date }
+        row[holding.plan_id] = point.close / base * 100
+        rows.set(point.date, row)
+      }
+      for (const trade of holding.trades) {
+        const date = trade.observed_at.slice(0, 10)
+        markers.push({ key: holding.plan_id, date, value: Number(trade.price) / base * 100, side: trade.side })
+      }
+    }
+    return { data: [...rows.values()], keys, markers }
+  }, [holdings])
+  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={42} /><YAxis domain={['auto', 'auto']} tickLine={false} axisLine={false} width={56} tickFormatter={(value) => `${Number(value).toFixed(0)}`} /><Tooltip formatter={(value) => typeof value === 'number' ? `${value.toFixed(2)} (起点=100)` : '—'} />{keys.map((key, index) => { const holding = holdings.find((item) => item.plan_id === key); return <Line key={key} type="monotone" dataKey={key} name={`${holding?.symbol ?? key} 指数化走势`} stroke={chartColor(index)} strokeWidth={2} dot={false} connectNulls /> })}{markers.map((marker, index) => <ReferenceDot key={`${marker.key}-${marker.date}-${index}`} x={marker.date} y={marker.value} r={5} fill={marker.side === 'buy' ? '#16a34a' : '#dc2626'} stroke="white" />)}</LineChart></ResponsiveContainer><p className="mt-2 text-xs text-muted-foreground">所有价格以区间首日=100 归一化；绿色点为本地确认买入，红色点为本地确认卖出。</p></div>
+}
+
+/** Render the clearly scoped one-year plain-versus-adaptive historical replay. */
+function HistoricalBacktestChart({ backtest }: { backtest: HistoricalBacktest }) {
+  const data = backtest.points.map((point) => ({ date: point.date, plain: point.plain_dca_value, adaptive: point.adaptive_value }))
+  return <div className="space-y-3"><div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} /><YAxis tickLine={false} axisLine={false} width={72} /><Tooltip formatter={(value) => typeof value === 'number' ? formatCurrency(value, backtest.currency) : '—'} /><Line type="monotone" dataKey="plain" name="普通定投" stroke="#64748b" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="adaptive" name="自适应定投" stroke="#16a34a" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div><p className="rounded-lg border border-dashed bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">{backtest.methodology}</p></div>
+}
+
+/** Return a stable contrast-friendly series colour without persisting UI state. */
+function chartColor(index: number): string {
+  return ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2'][index % 6]
 }
 
 /** Render local ledger status, return summary, and the explicit opening-balance setup. */

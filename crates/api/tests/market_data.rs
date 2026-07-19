@@ -7,7 +7,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use indexlink_api::{build_router, ApiState, ReadinessCheck, ReadinessError};
-use market_data::{MarketDataError, MarketSignalInput, MarketSignalProvider};
+use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -44,6 +44,18 @@ impl MarketSignalProvider for StaticMarketData {
             vix_history: values,
             vix_current: 1.0,
         })
+    }
+
+    /// Return a short deterministic price fixture for the independent chart endpoint.
+    async fn fetch_price_history(
+        &self,
+        _symbol: &str,
+        _lookback_days: i64,
+    ) -> Result<Vec<MarketPricePoint>, MarketDataError> {
+        Ok(vec![MarketPricePoint {
+            date: "2026-07-17".to_owned(),
+            close: 100.0,
+        }])
     }
 }
 

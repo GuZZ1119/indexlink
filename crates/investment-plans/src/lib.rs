@@ -440,6 +440,11 @@ pub trait InvestmentPlanRepository: Send + Sync {
         id: Uuid,
         is_active: bool,
     ) -> Result<InvestmentPlan, PlanRepositoryError>;
+
+    /// 删除一个投资计划及其由持久化层级联管理的本地记录。
+    async fn delete(&self, _id: Uuid) -> Result<(), PlanRepositoryError> {
+        Err(PlanRepositoryError::Unavailable)
+    }
 }
 
 /// Repository port 的安全错误。
@@ -512,6 +517,14 @@ impl InvestmentPlanService {
             .set_active(id, is_active)
             .await
             .map_err(Into::into)
+    }
+
+    /// 删除一个投资计划。
+    ///
+    /// 本服务只发起删除；关联的决策、账本与快照由 repository 的原子持久化边界
+    /// 负责级联清理，避免留下脱离计划的本地审计记录。
+    pub async fn delete(&self, id: Uuid) -> Result<(), PlanApplicationError> {
+        self.repository.delete(id).await.map_err(Into::into)
     }
 
     /// 预览计划在指定月内日期的执行状态。
@@ -819,6 +832,20 @@ mod tests {
             plan.is_active = is_active;
             plan.updated_at = OffsetDateTime::from_unix_timestamp(1_700_000_001).unwrap();
             Ok(plan.clone())
+        }
+
+        /// 从内存集合中删除一个计划。
+        async fn delete(&self, id: Uuid) -> Result<(), PlanRepositoryError> {
+            if self.fail {
+                return Err(PlanRepositoryError::Unavailable);
+            }
+            let mut plans = self.plans.lock().unwrap();
+            let index = plans
+                .iter()
+                .position(|plan| plan.id == id)
+                .ok_or(PlanRepositoryError::NotFound)?;
+            plans.remove(index);
+            Ok(())
         }
     }
 
