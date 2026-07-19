@@ -4,6 +4,7 @@ mod health;
 mod investment_plans;
 mod market_data;
 mod market_sentiment;
+mod paper_portfolio;
 mod ready;
 mod signals;
 
@@ -20,5 +21,6 @@ pub(crate) fn router() -> Router<ApiState> {
         .merge(investment_plans::router())
         .merge(market_sentiment::router())
         .merge(market_data::router())
+        .merge(paper_portfolio::router())
         .merge(signals::router())
 }

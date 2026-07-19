@@ -338,6 +338,14 @@ curl -X POST http://127.0.0.1:8080/market-sentiment/preview
 
 真实 OpenD 下单暂不需要单独 HTTP endpoint；它复用 `POST /investment-plans/:id/decision-preview` 的 `paper_order`，以确保订单必须经过计划、执行日和决策保护。
 
+#### `GET /paper-portfolio`
+
+读取当前已配置 OpenD 模拟账户的 USD 资金、当前美股持仓和近期美股订单状态，供 Dashboard 展示账户净资产、现金、证券市值、持仓盈亏、持仓与订单。它只调用 OpenD 的资金、持仓和订单读取协议；不会下单、撤单、改价、解锁交易，也不会返回 account id、登录凭据或 provider 原始错误。
+
+请求需要已配置并成功初始化 `OPEND_PROVIDER`。未配置、OpenD 不可用、返回账户/环境不匹配或响应不完整时统一返回 `503 service_unavailable`。路由使用 OpenD 的强制缓存刷新读取最新状态，应只由用户点击“刷新模拟账户”触发，而不是高频轮询。
+
+当前限制：OpenD 模拟账户不支持订单成交列表读取；`GET /paper-portfolio` 因此只展示 provider 当前持仓和订单状态，不把 `accepted` 伪装为成交，也不计算历史总收益、已实现收益或普通定投对比曲线。这些需要后续以本地订单/成交账本持续积累。
+
 本地启用配置：
 
 ```bash

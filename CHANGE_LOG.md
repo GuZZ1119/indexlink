@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### 2026-07-19 19:18 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork main OpenD 模拟账户真实读取 / Dashboard 去 Mock。
+- 涉及文件：
+  - crates/broker/src/{lib.rs,opend_session.rs}
+  - crates/api/src/{state.rs,routes/{mod.rs,paper_portfolio.rs}}
+  - crates/api/tests/paper_portfolio.rs
+  - apps/web/src/{api/{queries,types}.ts,pages/dashboard/index.tsx,i18n/locales/{zh,en}.ts}
+  - API_MANAGEMENT.md
+  - CHANGE_LOG.md
+- 变更内容：
+  - 新增只读 GET /paper-portfolio：经既有 paper-only OpenD session 读取资金（2101）、美股持仓（2102）和近期美股订单（2201），严格核验模拟环境与已选择账户；不暴露 account id、原始 provider 文案或凭据。
+  - OpenDPaperBroker 新增只读 portfolio port；MockBroker 不制造账户结果，未配置真实 OpenD 时仍返回统一 503 service_unavailable。
+  - Dashboard 的账户净资产、可用现金、证券市值、持仓盈亏、持仓和近期订单改为显式刷新真实本机 API 数据，不再使用固定 SPY 数字或伪随机收益；刷新操作不下单、撤单、改价或解锁交易。
+  - OpenD 模拟账户不支持成交列表读取，且本地尚未积累完整成交/现金流账本；历史总收益、已实现收益和普通定投对比曲线继续诚实显示“等待首次成交 / 暂无数据”，不伪造数值。
+- 验证：
+  - cargo test -p broker --locked 通过（37 tests；TCP fake 在本机 loopback 运行）。
+  - cargo test -p indexlink-api --test paper_portfolio --locked 通过（2 tests）。
+  - cargo check --workspace --locked 通过。
+  - pnpm --dir apps/web lint 与 pnpm --dir apps/web build 通过；Vite 仅提示首个 JS bundle 超过 500 kB，未阻断构建。
+  - 本机已登录 OpenD 的只读 smoke 成功：GET /paper-portfolio 返回 USD 资金、空持仓及近期 VOO 模拟订单；未发送、修改或撤销订单。
+
 ### 2026-07-19 18:18 AEST
 
 - 执行模型：GPT-5。

@@ -132,6 +132,39 @@ export interface BrokerOrderAck {
   status: 'accepted' | 'duplicate'
 }
 
+/** Read-only snapshot of the configured OpenD paper account. */
+export interface PaperPortfolioSnapshot {
+  currency: string
+  cash: string
+  buying_power: string
+  total_assets: string
+  market_value: string
+  positions: PaperPosition[]
+  orders: PaperOrder[]
+}
+
+/** One current paper-account position returned by OpenD. */
+export interface PaperPosition {
+  symbol: string
+  name?: string
+  quantity: string
+  price: string
+  cost_price: string
+  market_value: string
+  unrealized_pnl: string
+}
+
+/** One recent normalized paper-order state returned by OpenD. */
+export interface PaperOrder {
+  order_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  state: 'pending' | 'partially_filled' | 'filled' | 'closed' | 'unknown'
+  quantity: string
+  filled_quantity: string
+  average_fill_price: string
+}
+
 /** Composed Decision Preview response. */
 export interface DecisionPreviewResponse {
   execution: ExecutionPreview

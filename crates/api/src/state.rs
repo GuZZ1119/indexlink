@@ -2,7 +2,7 @@ use std::{fmt, sync::Arc};
 
 use ai_client::{fetch_market_sentiment, AiProvider, NewsSource, Sentiment};
 use async_trait::async_trait;
-use broker::{BrokerClient, MockBroker};
+use broker::{BrokerClient, MockBroker, PaperPortfolioSnapshot};
 use decision_records::{
     DecisionRecord, DecisionRecordListQuery, DecisionRecordRepository,
     DecisionRecordRepositoryError, DecisionRecordService,
@@ -215,6 +215,18 @@ impl ApiState {
     /// 返回受配置保护的 broker port。
     pub(crate) fn broker(&self) -> &dyn BrokerClient {
         self.broker.as_ref()
+    }
+
+    /// 从已配置的 paper broker 读取账户、持仓和订单快照。
+    ///
+    /// 读取失败仅对客户端返回统一不可用错误；OpenD 协议细节、账户标识和
+    /// provider 错误文本只保留在服务端日志中。
+    pub(crate) async fn paper_portfolio(&self) -> Result<PaperPortfolioSnapshot, ApiError> {
+        self.broker
+            .read_paper_portfolio()
+            .await
+            .inspect_err(|error| tracing::error!(%error, "paper portfolio refresh failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
     }
 
     /// 返回 decision record 应用服务。

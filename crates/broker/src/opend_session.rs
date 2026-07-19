@@ -7,11 +7,13 @@
 use std::{
     fmt,
     net::IpAddr,
+    str::FromStr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
+use rust_decimal::Decimal;
 use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 use tokio::{
@@ -23,8 +25,9 @@ use tokio::{
 };
 
 use crate::{
-    BrokerEnvironment, BrokerError, BrokerOrderAck, BrokerOrderRequest, BrokerOrderSide,
-    BrokerOrderStatus, BrokerOrderType, OpenDConnectionConfig, OpenDOrderGateway,
+    normalize_symbol, BrokerEnvironment, BrokerError, BrokerOrderAck, BrokerOrderRequest,
+    BrokerOrderSide, BrokerOrderStatus, BrokerOrderType, OpenDConnectionConfig, OpenDOrderGateway,
+    PaperOrder, PaperOrderState, PaperPortfolioSnapshot, PaperPosition,
 };
 
 const HEADER_LENGTH: usize = 44;
@@ -34,6 +37,9 @@ const INIT_CONNECT_PROTOCOL_ID: u32 = 1001;
 const GET_GLOBAL_STATE_PROTOCOL_ID: u32 = 1002;
 const KEEP_ALIVE_PROTOCOL_ID: u32 = 1004;
 const GET_ACCOUNT_LIST_PROTOCOL_ID: u32 = 2001;
+const GET_FUNDS_PROTOCOL_ID: u32 = 2101;
+const GET_POSITION_LIST_PROTOCOL_ID: u32 = 2102;
+const GET_ORDER_LIST_PROTOCOL_ID: u32 = 2201;
 const PLACE_ORDER_PROTOCOL_ID: u32 = 2202;
 const PAPER_TRADING_ENVIRONMENT: i64 = 0;
 const US_TRADING_MARKET: i64 = 2;
@@ -182,6 +188,50 @@ impl OpenDPaperSession {
         let payload = successful_payload(&response).map_err(map_order_error)?;
         order_ack_from_payload(payload, &self.selected_account_id)
     }
+
+    /// Read funds, positions, and recent orders from the selected paper account.
+    ///
+    /// This operation uses only OpenD read protocols. It does not unlock
+    /// trading, submit an order, or expose the selected account identifier.
+    pub async fn read_paper_portfolio(&self) -> Result<PaperPortfolioSnapshot, BrokerError> {
+        let mut transport = self._transport.lock().await;
+        let funds = transport
+            .request(
+                GET_FUNDS_PROTOCOL_ID,
+                paper_account_request(&self.selected_account_id),
+            )
+            .await
+            .map_err(map_portfolio_error)?;
+        let positions = transport
+            .request(
+                GET_POSITION_LIST_PROTOCOL_ID,
+                paper_position_request(&self.selected_account_id),
+            )
+            .await
+            .map_err(map_portfolio_error)?;
+        let orders = transport
+            .request(
+                GET_ORDER_LIST_PROTOCOL_ID,
+                paper_order_request(&self.selected_account_id),
+            )
+            .await
+            .map_err(map_portfolio_error)?;
+
+        let funds = successful_payload(&funds).map_err(map_portfolio_error)?;
+        let positions = successful_payload(&positions).map_err(map_portfolio_error)?;
+        let orders = successful_payload(&orders).map_err(map_portfolio_error)?;
+        funds_from_payload(funds, &self.selected_account_id).and_then(|funds| {
+            Ok(PaperPortfolioSnapshot {
+                currency: "USD".to_owned(),
+                cash: funds.cash,
+                buying_power: funds.buying_power,
+                total_assets: funds.total_assets,
+                market_value: funds.market_value,
+                positions: positions_from_payload(positions, &self.selected_account_id)?,
+                orders: orders_from_payload(orders, &self.selected_account_id)?,
+            })
+        })
+    }
 }
 
 #[async_trait]
@@ -205,6 +255,24 @@ impl OpenDOrderGateway for OpenDPaperSession {
         }
 
         OpenDPaperSession::submit_paper_order(self, request).await
+    }
+
+    async fn read_paper_portfolio(
+        &self,
+        config: &OpenDConnectionConfig,
+    ) -> Result<PaperPortfolioSnapshot, BrokerError> {
+        if config.environment() != BrokerEnvironment::Paper || config.live_trading_enabled() {
+            return Err(BrokerError::PaperTradingRequired {
+                configured: config.environment(),
+            });
+        }
+        if config
+            .account_id()
+            .is_some_and(|account_id| account_id != self.selected_account_id)
+        {
+            return Err(BrokerError::Rejected);
+        }
+        OpenDPaperSession::read_paper_portfolio(self).await
     }
 }
 
@@ -402,6 +470,221 @@ fn successful_payload(response: &Value) -> Result<&Map<String, Value>, OpenDSess
         .ok_or(OpenDSessionError::InvalidResponse)
 }
 
+fn paper_account_request(account_id: &str) -> Value {
+    json!({
+        "c2s": {
+            "header": paper_trading_header(account_id),
+            "refreshCache": true,
+        }
+    })
+}
+
+fn paper_position_request(account_id: &str) -> Value {
+    json!({
+        "c2s": {
+            "header": paper_trading_header(account_id),
+            "filterConditions": {"trdMarket": US_TRADING_MARKET},
+            "refreshCache": true,
+        }
+    })
+}
+
+fn paper_order_request(account_id: &str) -> Value {
+    json!({
+        "c2s": {
+            "header": paper_trading_header(account_id),
+            "filterConditions": {"trdMarket": US_TRADING_MARKET},
+            "refreshCache": true,
+        }
+    })
+}
+
+fn paper_trading_header(account_id: &str) -> Value {
+    json!({
+        "trdEnv": PAPER_TRADING_ENVIRONMENT,
+        "accID": account_id,
+        "trdMarket": US_TRADING_MARKET,
+    })
+}
+
+struct PaperFunds {
+    cash: Decimal,
+    buying_power: Decimal,
+    total_assets: Decimal,
+    market_value: Decimal,
+}
+
+fn funds_from_payload(
+    payload: &Map<String, Value>,
+    selected_account_id: &str,
+) -> Result<PaperFunds, BrokerError> {
+    let funds = payload
+        .get("funds")
+        .and_then(Value::as_object)
+        .ok_or(BrokerError::Unavailable)?;
+    validate_paper_header(payload, selected_account_id)?;
+    Ok(PaperFunds {
+        cash: first_decimal_field(funds, &["usCash", "cash"])?,
+        buying_power: first_decimal_field(
+            funds,
+            &["usNetCashPower", "netCashPower", "availableFunds", "power"],
+        )?,
+        total_assets: first_decimal_field(funds, &["totalAssets", "usAssets"])?,
+        market_value: first_decimal_field(funds, &["marketVal", "usAssets"])?,
+    })
+}
+
+fn positions_from_payload(
+    payload: &Map<String, Value>,
+    selected_account_id: &str,
+) -> Result<Vec<PaperPosition>, BrokerError> {
+    validate_paper_header(payload, selected_account_id)?;
+    let positions = payload
+        .get("positionList")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    positions
+        .iter()
+        .map(|position| paper_position_from_value(position, selected_account_id))
+        .collect()
+}
+
+fn orders_from_payload(
+    payload: &Map<String, Value>,
+    selected_account_id: &str,
+) -> Result<Vec<PaperOrder>, BrokerError> {
+    validate_paper_header(payload, selected_account_id)?;
+    let orders = payload
+        .get("orderList")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    orders
+        .iter()
+        .map(|order| paper_order_from_value(order, selected_account_id))
+        .collect()
+}
+
+fn validate_paper_header(
+    payload: &Map<String, Value>,
+    selected_account_id: &str,
+) -> Result<(), BrokerError> {
+    let header = payload
+        .get("header")
+        .and_then(Value::as_object)
+        .ok_or(BrokerError::Unavailable)?;
+    if integer_field(header, "trdEnv").map_err(map_portfolio_error)? != PAPER_TRADING_ENVIRONMENT
+        || string_field(header, "accID").map_err(map_portfolio_error)? != selected_account_id
+    {
+        return Err(BrokerError::Unavailable);
+    }
+    if let Some(market) = integer_value(header.get("trdMarket")) {
+        if market != 0 && market != US_TRADING_MARKET {
+            return Err(BrokerError::Unavailable);
+        }
+    }
+    Ok(())
+}
+
+fn paper_position_from_value(
+    value: &Value,
+    _selected_account_id: &str,
+) -> Result<PaperPosition, BrokerError> {
+    let position = value.as_object().ok_or(BrokerError::Unavailable)?;
+    if integer_field(position, "secMarket").map_err(map_portfolio_error)? != US_SECURITY_MARKET {
+        return Err(BrokerError::Unavailable);
+    }
+    Ok(PaperPosition {
+        symbol: normalize_symbol(string_field(position, "code").map_err(map_portfolio_error)?)
+            .map_err(BrokerError::Validation)?,
+        name: safe_optional_name(position.get("name")),
+        quantity: decimal_field(position, "qty")?,
+        price: decimal_field(position, "price")?,
+        cost_price: decimal_field(position, "costPrice")?,
+        market_value: decimal_field(position, "val")?,
+        unrealized_pnl: signed_decimal_field(position, "plVal")?,
+    })
+}
+
+fn paper_order_from_value(
+    value: &Value,
+    _selected_account_id: &str,
+) -> Result<PaperOrder, BrokerError> {
+    let order = value.as_object().ok_or(BrokerError::Unavailable)?;
+    if integer_field(order, "secMarket").map_err(map_portfolio_error)? != US_SECURITY_MARKET {
+        return Err(BrokerError::Unavailable);
+    }
+    let side = match integer_field(order, "trdSide").map_err(map_portfolio_error)? {
+        1 => BrokerOrderSide::Buy,
+        2 => BrokerOrderSide::Sell,
+        _ => return Err(BrokerError::Unavailable),
+    };
+    Ok(PaperOrder {
+        order_id: safe_provider_id(order, "orderIDEx")
+            .or_else(|| safe_provider_id(order, "orderID"))
+            .ok_or(BrokerError::Unavailable)?,
+        symbol: normalize_symbol(string_field(order, "code").map_err(map_portfolio_error)?)
+            .map_err(BrokerError::Validation)?,
+        side,
+        state: paper_order_state(integer_field(order, "orderStatus").map_err(map_portfolio_error)?),
+        quantity: decimal_field(order, "qty")?,
+        filled_quantity: decimal_field(order, "fillQty")?,
+        average_fill_price: signed_decimal_field(order, "fillAvgPrice")?,
+    })
+}
+
+fn paper_order_state(value: i64) -> PaperOrderState {
+    match value {
+        1..=5 | 12 | 13 => PaperOrderState::Pending,
+        10 => PaperOrderState::PartiallyFilled,
+        11 => PaperOrderState::Filled,
+        14 | 15 | 21..=23 => PaperOrderState::Closed,
+        _ => PaperOrderState::Unknown,
+    }
+}
+
+fn first_decimal_field(
+    payload: &Map<String, Value>,
+    names: &[&str],
+) -> Result<Decimal, BrokerError> {
+    names
+        .iter()
+        .find_map(|name| decimal_value(payload.get(*name)))
+        .ok_or(BrokerError::Unavailable)
+}
+
+fn decimal_field(payload: &Map<String, Value>, name: &str) -> Result<Decimal, BrokerError> {
+    decimal_value(payload.get(name)).ok_or(BrokerError::Unavailable)
+}
+
+fn signed_decimal_field(payload: &Map<String, Value>, name: &str) -> Result<Decimal, BrokerError> {
+    decimal_value(payload.get(name)).ok_or(BrokerError::Unavailable)
+}
+
+fn decimal_value(value: Option<&Value>) -> Option<Decimal> {
+    match value? {
+        Value::Number(number) => Decimal::from_str(&number.to_string()).ok(),
+        Value::String(value) => Decimal::from_str(value).ok(),
+        _ => None,
+    }
+}
+
+fn safe_optional_name(value: Option<&Value>) -> Option<String> {
+    let value = value?.as_str()?.trim();
+    (!value.is_empty()
+        && value.len() <= 128
+        && value.is_ascii()
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_owned())
+}
+
+fn safe_provider_id(payload: &Map<String, Value>, name: &str) -> Option<String> {
+    let value = string_field(payload, name).ok()?;
+    (value.len() <= 128 && value.is_ascii() && !value.chars().any(char::is_control))
+        .then_some(value)
+}
+
 fn u64_field(payload: &Map<String, Value>, name: &str) -> Result<u64, OpenDSessionError> {
     let value = payload
         .get(name)
@@ -589,6 +872,14 @@ fn map_order_error(error: OpenDSessionError) -> BrokerError {
     match error {
         OpenDSessionError::Rejected => BrokerError::Rejected,
         OpenDSessionError::OutcomeUnknown => BrokerError::OutcomeUnknown,
+        _ => BrokerError::Unavailable,
+    }
+}
+
+fn map_portfolio_error(error: OpenDSessionError) -> BrokerError {
+    match error {
+        OpenDSessionError::Rejected => BrokerError::Rejected,
+        OpenDSessionError::OutcomeUnknown => BrokerError::Unavailable,
         _ => BrokerError::Unavailable,
     }
 }
@@ -853,6 +1144,81 @@ mod tests {
             positive_seconds(&payload, "keepAliveInterval"),
             Err(OpenDSessionError::InvalidResponse)
         );
+    }
+
+    /// Verify paper-account payload parsers accept only the selected US simulation account.
+    #[test]
+    fn paper_portfolio_payloads_are_normalized_and_account_scoped() {
+        let header = json!({"trdEnv": 0, "accID": "paper-account", "trdMarket": 2});
+        let funds = json!({
+            "header": header,
+            "funds": {
+                "usCash": 800,
+                "usNetCashPower": 800,
+                "totalAssets": 1000,
+                "marketVal": 200
+            }
+        });
+        let positions = json!({
+            "header": {"trdEnv": 0, "accID": "paper-account", "trdMarket": 2},
+            "positionList": [{
+                "secMarket": 2,
+                "code": "voo",
+                "name": "Vanguard",
+                "qty": 1,
+                "price": 200,
+                "costPrice": 190,
+                "val": 200,
+                "plVal": 10
+            }]
+        });
+        let orders = json!({
+            "header": {"trdEnv": 0, "accID": "paper-account", "trdMarket": 2},
+            "orderList": [{
+                "secMarket": 2,
+                "orderID": "123",
+                "code": "voo",
+                "trdSide": 1,
+                "orderStatus": 11,
+                "qty": 1,
+                "fillQty": 1,
+                "fillAvgPrice": 200
+            }]
+        });
+
+        let funds = funds_from_payload(
+            funds.as_object().expect("funds fixture must be an object"),
+            "paper-account",
+        )
+        .expect("selected paper funds must parse");
+        let positions = positions_from_payload(
+            positions
+                .as_object()
+                .expect("positions fixture must be an object"),
+            "paper-account",
+        )
+        .expect("selected US positions must parse");
+        let orders = orders_from_payload(
+            orders
+                .as_object()
+                .expect("orders fixture must be an object"),
+            "paper-account",
+        )
+        .expect("selected US orders must parse");
+
+        assert_eq!(funds.cash, Decimal::new(800, 0));
+        assert_eq!(positions[0].symbol, "VOO");
+        assert_eq!(orders[0].state, PaperOrderState::Filled);
+        assert!(funds_from_payload(
+            &json!({
+                "header": {"trdEnv": 0, "accID": "different-account", "trdMarket": 2},
+                "funds": {"usCash": 1, "usNetCashPower": 1, "totalAssets": 1, "marketVal": 0}
+            })
+            .as_object()
+            .expect("fixture must be an object"),
+            "paper-account",
+        )
+        .is_err());
     }
 
     /// Verify a raw frame with a corrupted SHA-1 digest is rejected.

@@ -9,6 +9,7 @@ import type {
   FundamentalSignal,
   InvestmentPlan,
   MarketSignalInput,
+  PaperPortfolioSnapshot,
   TrendPreviewRequest,
   TrendSignal,
 } from './types'
@@ -68,6 +69,11 @@ export function previewTrend(input: TrendPreviewRequest): Promise<TrendSignal> {
 /** Read one automatic, source-labelled signal snapshot from the local Rust API. */
 export function fetchMarketSignalInput(symbol: string): Promise<MarketSignalInput> {
   return request(`/signals/market-input/${encodeURIComponent(symbol)}`)
+}
+
+/** Read funds, positions, and recent orders from the configured local paper account. */
+export function fetchPaperPortfolio(): Promise<PaperPortfolioSnapshot> {
+  return request('/paper-portfolio')
 }
 
 /** Compose a decision, persist its audit record, and optionally submit a paper order. */

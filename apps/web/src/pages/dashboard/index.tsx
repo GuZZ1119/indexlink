@@ -7,6 +7,7 @@ import { useSnapshot } from 'valtio'
 import {
   ApiRequestError,
   fetchMarketSignalInput,
+  fetchPaperPortfolio,
   previewDecision,
   previewFundamental,
   previewTrend,
@@ -21,6 +22,7 @@ import type {
   DecisionPreviewResponse,
   InvestmentPlan,
   MarketSignalInput,
+  PaperPortfolioSnapshot,
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -254,6 +256,9 @@ export default function DashboardPage() {
       setResult(null)
     },
   })
+  const paperPortfolioMutation = useMutation({
+    mutationFn: fetchPaperPortfolio,
+  })
 
   const updateSignal = (key: keyof SignalFields, value: string) => {
     setSignals((current) => ({ ...current, [key]: value }))
@@ -282,6 +287,7 @@ export default function DashboardPage() {
   }
   const error = marketRefreshMutation.error
     ?? decisionMutation.error
+    ?? paperPortfolioMutation.error
     ?? createPlan.error
     ?? plansError
     ?? decisionRecordsError
@@ -297,6 +303,9 @@ export default function DashboardPage() {
         plan={selectedPlan}
         decision={overviewDecision}
         marketRefresh={marketRefresh}
+        portfolio={paperPortfolioMutation.data ?? null}
+        portfolioRefreshing={paperPortfolioMutation.isPending}
+        onRefreshPortfolio={() => paperPortfolioMutation.mutate()}
       />
 
       <Card>
@@ -537,10 +546,16 @@ function DashboardOverview({
   plan,
   decision,
   marketRefresh,
+  portfolio,
+  portfolioRefreshing,
+  onRefreshPortfolio,
 }: {
   plan: InvestmentPlan | null
   decision: OverviewDecision | null
   marketRefresh: MarketSignalInput | null
+  portfolio: PaperPortfolioSnapshot | null
+  portfolioRefreshing: boolean
+  onRefreshPortfolio: () => void
 }) {
   const { t } = useTranslation()
   const currency = plan?.currency ?? 'USD'
@@ -641,10 +656,24 @@ function DashboardOverview({
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <UnavailableMetric label={t('dashboard.returns.total')} />
-            <UnavailableMetric label={t('dashboard.returns.position')} />
-            <UnavailableMetric label={t('dashboard.returns.realized')} />
-            <UnavailableMetric label={t('dashboard.returns.invested')} />
+            <PortfolioMetric
+              label={t('dashboard.portfolio.totalAssets')}
+              value={portfolio ? formatCurrency(Number(portfolio.total_assets), portfolio.currency) : null}
+            />
+            <PortfolioMetric
+              label={t('dashboard.portfolio.cash')}
+              value={portfolio ? formatCurrency(Number(portfolio.cash), portfolio.currency) : null}
+            />
+            <PortfolioMetric
+              label={t('dashboard.portfolio.positionPnl')}
+              value={portfolio
+                ? formatCurrency(sumPositionPnl(portfolio), portfolio.currency)
+                : null}
+            />
+            <PortfolioMetric
+              label={t('dashboard.portfolio.marketValue')}
+              value={portfolio ? formatCurrency(Number(portfolio.market_value), portfolio.currency) : null}
+            />
           </div>
 
           <Card className="min-h-80">
@@ -717,6 +746,22 @@ function DashboardOverview({
           )}
         </CardContent>
       </Card>
+
+      <Card className="border-primary/30">
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>{t('dashboard.portfolio.title')}</CardTitle>
+            <CardDescription>{t('dashboard.portfolio.description')}</CardDescription>
+          </div>
+          <Button size="lg" disabled={portfolioRefreshing} onClick={onRefreshPortfolio}>
+            <RefreshCw className={cn('size-4', portfolioRefreshing && 'animate-spin')} />
+            {portfolioRefreshing ? t('dashboard.portfolio.refreshing') : t('dashboard.portfolio.refresh')}
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {portfolio ? <PaperPortfolioDetails portfolio={portfolio} /> : <EmptyState text={t('dashboard.portfolio.empty')} />}
+        </CardContent>
+      </Card>
     </section>
   )
 }
@@ -762,17 +807,63 @@ function ScoreCard({
 }
 
 /** Render a financial metric that awaits real fills and portfolio accounting. */
-function UnavailableMetric({ label }: { label: string }) {
+function PortfolioMetric({ label, value }: { label: string; value: string | null }) {
   const { t } = useTranslation()
   return (
     <Card size="sm">
       <CardHeader><CardTitle>{label}</CardTitle></CardHeader>
       <CardContent>
-        <div className="text-3xl font-semibold">—</div>
-        <p className="mt-2 text-sm text-muted-foreground">{t('dashboard.unavailable.awaitingFill')}</p>
+        <div className="text-3xl font-semibold">{value ?? '—'}</div>
+        {value === null && <p className="mt-2 text-sm text-muted-foreground">{t('dashboard.unavailable.awaitingFill')}</p>}
       </CardContent>
     </Card>
   )
+}
+
+/** Render the provider-backed paper positions and recent order states. */
+function PaperPortfolioDetails({ portfolio }: { portfolio: PaperPortfolioSnapshot }) {
+  const { t } = useTranslation()
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div>
+        <h3 className="mb-2 text-sm font-semibold">{t('dashboard.portfolio.positions')}</h3>
+        {portfolio.positions.length === 0 ? <EmptyState text={t('dashboard.portfolio.noPositions')} /> : (
+          <div className="space-y-2">
+            {portfolio.positions.map((position) => (
+              <div key={position.symbol} className="grid grid-cols-2 gap-2 rounded-lg border p-3 text-sm sm:grid-cols-4">
+                <span className="font-semibold">{position.symbol}</span>
+                <span>{position.quantity} {t('dashboard.portfolio.shares')}</span>
+                <span>{formatCurrency(Number(position.market_value), portfolio.currency)}</span>
+                <span className={Number(position.unrealized_pnl) < 0 ? 'text-destructive' : 'text-semantic-positive'}>
+                  {formatCurrency(Number(position.unrealized_pnl), portfolio.currency)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div>
+        <h3 className="mb-2 text-sm font-semibold">{t('dashboard.portfolio.orders')}</h3>
+        {portfolio.orders.length === 0 ? <EmptyState text={t('dashboard.portfolio.noOrders')} /> : (
+          <div className="space-y-2">
+            {portfolio.orders.slice(0, 8).map((order) => (
+              <div key={order.order_id} className="grid grid-cols-2 gap-2 rounded-lg border p-3 text-sm sm:grid-cols-4">
+                <span className="font-semibold">{order.symbol}</span>
+                <span>{t(`dashboard.portfolio.side.${order.side}`)}</span>
+                <span>{order.filled_quantity} / {order.quantity}</span>
+                <span className="font-mono text-xs text-muted-foreground">{t(`dashboard.portfolio.state.${order.state}`)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Sum OpenD's position-level unrealized P&L without inventing realized P&L. */
+function sumPositionPnl(portfolio: PaperPortfolioSnapshot): number {
+  return portfolio.positions.reduce((total, position) => total + Number(position.unrealized_pnl), 0)
 }
 
 /** Render a clear empty-state instead of silently substituting fictional data. */

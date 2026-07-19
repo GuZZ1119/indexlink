@@ -15,7 +15,7 @@ use std::{fmt, sync::Mutex};
 
 use async_trait::async_trait;
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Paper-only raw TCP session for a locally running Futu/Moomoo OpenD gateway.
 pub use opend_session::{OpenDPaperSession, OpenDSessionError};
@@ -186,7 +186,7 @@ impl fmt::Debug for OpenDConnectionConfig {
 }
 
 /// Broker order side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrokerOrderSide {
     /// Buy the instrument.
@@ -409,6 +409,99 @@ pub trait BrokerClient: Send + Sync {
         &self,
         request: BrokerOrderRequest,
     ) -> Result<BrokerOrderAck, BrokerError>;
+
+    /// Read the selected paper account without mutating broker state.
+    ///
+    /// Adapters that do not implement read support return a safe unavailable
+    /// error rather than manufacturing an account snapshot.
+    async fn read_paper_portfolio(&self) -> Result<PaperPortfolioSnapshot, BrokerError> {
+        Err(BrokerError::Unavailable)
+    }
+}
+
+/// One read-only paper-account snapshot returned by a broker adapter.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PaperPortfolioSnapshot {
+    /// Account currency used for the displayed funds and positions.
+    pub currency: String,
+    /// Cash available in the selected account currency.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub cash: Decimal,
+    /// Provider-reported cash buying power in the selected account currency.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub buying_power: Decimal,
+    /// Provider-reported total net assets.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub total_assets: Decimal,
+    /// Provider-reported securities market value.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub market_value: Decimal,
+    /// Open US positions in the selected simulated account.
+    pub positions: Vec<PaperPosition>,
+    /// Recent US paper-order states known to OpenD.
+    pub orders: Vec<PaperOrder>,
+}
+
+/// One paper-account position supplied by the broker.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PaperPosition {
+    /// Normalized US symbol.
+    pub symbol: String,
+    /// Provider display name when supplied.
+    pub name: Option<String>,
+    /// Current quantity.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub quantity: Decimal,
+    /// Latest provider-reported market price.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    /// Provider-reported diluted cost price.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub cost_price: Decimal,
+    /// Current position market value.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub market_value: Decimal,
+    /// Unrealized profit or loss reported by the provider.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub unrealized_pnl: Decimal,
+}
+
+/// Safe, display-oriented state for a paper order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaperOrderState {
+    /// OpenD has not reached a terminal order outcome yet.
+    Pending,
+    /// The order was partially filled.
+    PartiallyFilled,
+    /// The order was fully filled.
+    Filled,
+    /// The order was cancelled, rejected, failed, or otherwise terminal.
+    Closed,
+    /// The provider supplied a state not mapped by this adapter version.
+    Unknown,
+}
+
+/// One recent paper order supplied by OpenD.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PaperOrder {
+    /// Provider order identifier.
+    pub order_id: String,
+    /// Normalized US symbol.
+    pub symbol: String,
+    /// Submitted side.
+    pub side: BrokerOrderSide,
+    /// Safe normalized provider order state.
+    pub state: PaperOrderState,
+    /// Requested quantity.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub quantity: Decimal,
+    /// Filled quantity currently reported by OpenD.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub filled_quantity: Decimal,
+    /// Average fill price when OpenD has one; zero means no reported fill.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub average_fill_price: Decimal,
 }
 
 /// OpenD order gateway implemented by a TCP or SDK transport.
@@ -420,6 +513,14 @@ pub trait OpenDOrderGateway: Send + Sync {
         config: &OpenDConnectionConfig,
         request: &BrokerOrderRequest,
     ) -> Result<BrokerOrderAck, BrokerError>;
+
+    /// Read the configured paper account through OpenD without mutating it.
+    async fn read_paper_portfolio(
+        &self,
+        _config: &OpenDConnectionConfig,
+    ) -> Result<PaperPortfolioSnapshot, BrokerError> {
+        Err(BrokerError::Unavailable)
+    }
 }
 
 /// Paper-trading broker adapter for Futu/Moomoo OpenD.
@@ -467,6 +568,17 @@ where
         self.gateway
             .submit_paper_order(&self.config, &request)
             .await
+    }
+
+    async fn read_paper_portfolio(&self) -> Result<PaperPortfolioSnapshot, BrokerError> {
+        if self.config.environment() != BrokerEnvironment::Paper
+            || self.config.live_trading_enabled()
+        {
+            return Err(BrokerError::PaperTradingRequired {
+                configured: self.config.environment(),
+            });
+        }
+        self.gateway.read_paper_portfolio(&self.config).await
     }
 }
 
@@ -702,6 +814,32 @@ mod tests {
             )
             .map_err(Into::into)
         }
+
+        async fn read_paper_portfolio(
+            &self,
+            _config: &OpenDConnectionConfig,
+        ) -> Result<PaperPortfolioSnapshot, BrokerError> {
+            if self.fail {
+                return Err(BrokerError::Unavailable);
+            }
+            Ok(PaperPortfolioSnapshot {
+                currency: "USD".to_owned(),
+                cash: money("800.00"),
+                buying_power: money("800.00"),
+                total_assets: money("1000.00"),
+                market_value: money("200.00"),
+                positions: vec![PaperPosition {
+                    symbol: "VOO".to_owned(),
+                    name: Some("Vanguard S&P 500 ETF".to_owned()),
+                    quantity: money("1"),
+                    price: money("200.00"),
+                    cost_price: money("190.00"),
+                    market_value: money("200.00"),
+                    unrealized_pnl: money("10.00"),
+                }],
+                orders: Vec::new(),
+            })
+        }
     }
 
     impl FakeOpenDGateway {
@@ -755,6 +893,23 @@ mod tests {
             broker.gateway().calls(),
             vec!["Moomoo:127.0.0.1:demo-opend-1"]
         );
+    }
+
+    /// Verify the paper adapter exposes only the gateway's read-only account snapshot.
+    #[tokio::test]
+    async fn opend_paper_broker_reads_paper_portfolio() {
+        let broker = OpenDPaperBroker::new(
+            OpenDConnectionConfig::paper(BrokerProvider::Moomoo, "127.0.0.1", 11111).unwrap(),
+            FakeOpenDGateway::default(),
+        )
+        .unwrap();
+
+        let snapshot = broker.read_paper_portfolio().await.unwrap();
+
+        assert_eq!(snapshot.currency, "USD");
+        assert_eq!(snapshot.cash, money("800.00"));
+        assert_eq!(snapshot.positions[0].symbol, "VOO");
+        assert!(snapshot.orders.is_empty());
     }
 
     /// Verify OpenD paper adapter rejects non-paper configuration.
