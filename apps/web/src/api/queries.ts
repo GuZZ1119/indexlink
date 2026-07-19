@@ -10,6 +10,7 @@ import type {
   InvestmentPlan,
   MarketSignalInput,
   PaperPortfolioSnapshot,
+  PaperPerformance,
   TrendPreviewRequest,
   TrendSignal,
 } from './types'
@@ -74,6 +75,22 @@ export function fetchMarketSignalInput(symbol: string): Promise<MarketSignalInpu
 /** Read funds, positions, and recent orders from the configured local paper account. */
 export function fetchPaperPortfolio(): Promise<PaperPortfolioSnapshot> {
   return request('/paper-portfolio')
+}
+
+/** Refresh one plan's local paper ledger from read-only OpenD account data. */
+export function fetchPaperPerformance(planId: string): Promise<PaperPerformance> {
+  return request(`/investment-plans/${encodeURIComponent(planId)}/paper-performance`)
+}
+
+/** Store a user-confirmed local opening balance used only for return calculations. */
+export function setPaperOpeningBalance(
+  planId: string,
+  input: { amount: string; occurred_at: string },
+): Promise<void> {
+  return request(`/investment-plans/${encodeURIComponent(planId)}/paper-performance/opening-balance`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
 }
 
 /** Compose a decision, persist its audit record, and optionally submit a paper order. */

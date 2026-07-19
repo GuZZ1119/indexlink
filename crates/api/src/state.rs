@@ -2,13 +2,16 @@ use std::{fmt, sync::Arc};
 
 use ai_client::{fetch_market_sentiment, AiProvider, NewsSource, Sentiment};
 use async_trait::async_trait;
-use broker::{BrokerClient, MockBroker, PaperPortfolioSnapshot};
+use broker::{
+    BrokerClient, BrokerOrderAck, BrokerOrderRequest, MockBroker, PaperPortfolioSnapshot,
+};
 use decision_records::{
     DecisionRecord, DecisionRecordListQuery, DecisionRecordRepository,
     DecisionRecordRepositoryError, DecisionRecordService,
 };
 use indexlink_storage::{
-    SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository, SqliteStorage,
+    PaperPerformance, PaperPerformanceError, PaperPerformancePlan, SqliteDecisionRecordRepository,
+    SqliteInvestmentPlanRepository, SqlitePaperPerformanceRepository, SqliteStorage,
 };
 use investment_plans::InvestmentPlanService;
 use market_data::{MarketDataError, MarketSignalInput, MarketSignalProvider};
@@ -49,6 +52,7 @@ pub struct ApiState {
     broker: Arc<dyn BrokerClient>,
     market_sentiment: Option<Arc<MarketSentimentDependencies>>,
     market_data: Option<Arc<dyn MarketSignalProvider>>,
+    paper_performance: Option<SqlitePaperPerformanceRepository>,
     version: Arc<str>,
 }
 
@@ -74,12 +78,11 @@ impl ApiState {
     /// 使用生产 SQLite 本地存储构建应用状态。
     #[must_use]
     pub fn new(storage: SqliteStorage, version: impl Into<Arc<str>>) -> Self {
-        let plans = InvestmentPlanService::new(Arc::new(SqliteInvestmentPlanRepository::new(
-            storage.pool().clone(),
-        )));
-        let decision_records = DecisionRecordService::new(Arc::new(
-            SqliteDecisionRecordRepository::new(storage.pool().clone()),
-        ));
+        let pool = storage.pool().clone();
+        let plans =
+            InvestmentPlanService::new(Arc::new(SqliteInvestmentPlanRepository::new(pool.clone())));
+        let decision_records =
+            DecisionRecordService::new(Arc::new(SqliteDecisionRecordRepository::new(pool.clone())));
         Self {
             readiness: Arc::new(ReadinessBackend::SqliteStorage(storage)),
             plans,
@@ -87,6 +90,7 @@ impl ApiState {
             broker: Arc::new(MockBroker::paper_only()),
             market_sentiment: None,
             market_data: None,
+            paper_performance: Some(SqlitePaperPerformanceRepository::new(pool)),
             version: version.into(),
         }
     }
@@ -152,6 +156,7 @@ impl ApiState {
             broker,
             market_sentiment: None,
             market_data: None,
+            paper_performance: None,
             version: version.into(),
         }
     }
@@ -227,6 +232,67 @@ impl ApiState {
             .await
             .inspect_err(|error| tracing::error!(%error, "paper portfolio refresh failed"))
             .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// 保存一个由用户确认的本地模拟账户起始资金基准。
+    pub(crate) async fn set_paper_opening_balance(
+        &self,
+        plan_id: uuid::Uuid,
+        amount: rust_decimal::Decimal,
+        occurred_at: &str,
+    ) -> Result<(), ApiError> {
+        self.plans().get(plan_id).await?;
+        self.paper_performance
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?
+            .set_opening_balance(plan_id, amount, occurred_at)
+            .await
+            .map_err(|error| match error {
+                PaperPerformanceError::InvalidInput => ApiError::BadRequest,
+                PaperPerformanceError::Unavailable => ApiError::ServiceUnavailable,
+            })
+    }
+
+    /// 刷新并返回一个计划的本地模拟账户收益与对比曲线。
+    pub(crate) async fn paper_performance(
+        &self,
+        plan_id: uuid::Uuid,
+    ) -> Result<PaperPerformance, ApiError> {
+        let plan = self.plans().get(plan_id).await?;
+        let portfolio = self.paper_portfolio().await?;
+        self.paper_performance
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?
+            .refresh(
+                &PaperPerformancePlan {
+                    id: plan.id,
+                    symbol: plan.symbol,
+                    currency: plan.currency,
+                    base_contribution: plan.base_contribution,
+                },
+                &portfolio,
+            )
+            .await
+            .inspect_err(|error| tracing::error!(%error, "paper performance refresh failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// 记录已被 broker 接受的订单意图，供后续只读对账生成本地成交账本。
+    pub(crate) async fn record_accepted_paper_order(
+        &self,
+        plan_id: uuid::Uuid,
+        acknowledgement: &BrokerOrderAck,
+        request: &BrokerOrderRequest,
+    ) {
+        let Some(repository) = &self.paper_performance else {
+            return;
+        };
+        if let Err(error) = repository
+            .record_accepted_order(plan_id, acknowledgement, request)
+            .await
+        {
+            tracing::error!(%error, order_id = %acknowledgement.order_id(), "accepted paper order was not added to local ledger");
+        }
     }
 
     /// 返回 decision record 应用服务。

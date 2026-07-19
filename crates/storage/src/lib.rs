@@ -10,6 +10,7 @@ mod investment_plans;
 mod sqlite;
 mod sqlite_decision_records;
 mod sqlite_investment_plans;
+mod sqlite_paper_performance;
 
 use std::{str::FromStr, time::Duration};
 
@@ -25,6 +26,11 @@ pub use sqlite::SqliteStorage;
 pub use sqlite_decision_records::SqliteDecisionRecordRepository;
 /// Investment Plan repository 的 SQLite adapter。
 pub use sqlite_investment_plans::SqliteInvestmentPlanRepository;
+/// SQLite local paper-trading performance ledger adapter.
+pub use sqlite_paper_performance::{
+    PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
+    SqlitePaperPerformanceRepository,
+};
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

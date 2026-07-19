@@ -344,7 +344,31 @@ curl -X POST http://127.0.0.1:8080/market-sentiment/preview
 
 请求需要已配置并成功初始化 `OPEND_PROVIDER`。未配置、OpenD 不可用、返回账户/环境不匹配或响应不完整时统一返回 `503 service_unavailable`。路由使用 OpenD 的强制缓存刷新读取最新状态，应只由用户点击“刷新模拟账户”触发，而不是高频轮询。
 
-当前限制：OpenD 模拟账户不支持订单成交列表读取；`GET /paper-portfolio` 因此只展示 provider 当前持仓和订单状态，不把 `accepted` 伪装为成交，也不计算历史总收益、已实现收益或普通定投对比曲线。这些需要后续以本地订单/成交账本持续积累。
+OpenD 模拟账户不支持独立成交列表与现金流记录；IndexLink 因此不把 `accepted` 伪装为成交，而是在本地账本中根据后续订单的累计成交数量、累计均价和订单状态增量生成可审计的本地 fill。该来源会在 Dashboard 明确标记，且只覆盖账本启用后由 IndexLink 接受并持续观察的订单。
+
+#### `PUT /investment-plans/:id/paper-performance/opening-balance`
+
+保存用户确认的本地模拟账户起始资金基准。请求体：
+
+```json
+{
+  "amount": "10000.00",
+  "occurred_at": "2026-07-19T10:00:00.000Z"
+}
+```
+
+金额必须为非负 decimal 字符串；时间必须为 UTC RFC3339 毫秒格式。它只写入本机 SQLite 的 `cash_flows`，不会访问 OpenD、下单或修改模拟账户资金。每个 plan 仅保留一条可覆盖的 `opening_balance`；没有该基准时服务不会声称计算了总收益。
+
+#### `GET /investment-plans/:id/paper-performance`
+
+只读刷新 OpenD 资金、持仓和近期订单状态，然后将已知订单的成交增量、FIFO 持仓成本和本次估值写入本机 SQLite。响应包含：
+
+- `net_contributions`、`realized_pnl`、`unrealized_pnl`、`total_return`；
+- `adaptive_value` 与同一执行价下的 `plain_dca_value`；
+- 用于 Dashboard 曲线的本地 `points`；
+- `data_complete`，只有本地观察到的 FIFO 数量与当前 provider 持仓数量一致且已配置起始基准时才为 `true`。
+
+普通定投基准为每个已观察到的买入订单，在该订单首次成交价按计划 `base_contribution` 买入的假想仓位；它不使用未来价格，也不伪造未观察到的历史成交。当前限制仍然是：历史数据从本地账本启用后开始积累，不能反推出启用前的完整模拟账户交易/入金历史；多计划共享同一模拟账户时，需分别持续追踪各计划发出的订单，不能把整个账户余额随意归因给某一计划。
 
 本地启用配置：
 

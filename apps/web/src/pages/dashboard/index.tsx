@@ -2,15 +2,18 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { BarChart3, Bot, ClipboardCheck, FileJson, Plus, RefreshCw, Send, Upload } from 'lucide-react'
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useSnapshot } from 'valtio'
 
 import {
   ApiRequestError,
   fetchMarketSignalInput,
+  fetchPaperPerformance,
   fetchPaperPortfolio,
   previewDecision,
   previewFundamental,
   previewTrend,
+  setPaperOpeningBalance,
   useCreatePlan,
   useDecisionRecords,
   usePlans,
@@ -23,6 +26,7 @@ import type {
   InvestmentPlan,
   MarketSignalInput,
   PaperPortfolioSnapshot,
+  PaperPerformance,
 } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -259,6 +263,24 @@ export default function DashboardPage() {
   const paperPortfolioMutation = useMutation({
     mutationFn: fetchPaperPortfolio,
   })
+  const paperPerformanceMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedPlan) {
+        throw new ApiRequestError('select a plan before refreshing performance')
+      }
+      return fetchPaperPerformance(selectedPlan.id)
+    },
+  })
+  const openingBalanceMutation = useMutation({
+    mutationFn: async (input: { amount: string; occurred_at: string }) => {
+      if (!selectedPlan) {
+        throw new ApiRequestError('select a plan before setting an opening balance')
+      }
+      await setPaperOpeningBalance(selectedPlan.id, input)
+      return fetchPaperPerformance(selectedPlan.id)
+    },
+    onSuccess: () => paperPerformanceMutation.mutate(),
+  })
 
   const updateSignal = (key: keyof SignalFields, value: string) => {
     setSignals((current) => ({ ...current, [key]: value }))
@@ -288,6 +310,8 @@ export default function DashboardPage() {
   const error = marketRefreshMutation.error
     ?? decisionMutation.error
     ?? paperPortfolioMutation.error
+    ?? paperPerformanceMutation.error
+    ?? openingBalanceMutation.error
     ?? createPlan.error
     ?? plansError
     ?? decisionRecordsError
@@ -306,6 +330,10 @@ export default function DashboardPage() {
         portfolio={paperPortfolioMutation.data ?? null}
         portfolioRefreshing={paperPortfolioMutation.isPending}
         onRefreshPortfolio={() => paperPortfolioMutation.mutate()}
+        performance={paperPerformanceMutation.data ?? null}
+        performanceRefreshing={paperPerformanceMutation.isPending || openingBalanceMutation.isPending}
+        onRefreshPerformance={() => paperPerformanceMutation.mutate()}
+        onSetOpeningBalance={(input) => openingBalanceMutation.mutate(input)}
       />
 
       <Card>
@@ -549,6 +577,10 @@ function DashboardOverview({
   portfolio,
   portfolioRefreshing,
   onRefreshPortfolio,
+  performance,
+  performanceRefreshing,
+  onRefreshPerformance,
+  onSetOpeningBalance,
 }: {
   plan: InvestmentPlan | null
   decision: OverviewDecision | null
@@ -556,6 +588,10 @@ function DashboardOverview({
   portfolio: PaperPortfolioSnapshot | null
   portfolioRefreshing: boolean
   onRefreshPortfolio: () => void
+  performance: PaperPerformance | null
+  performanceRefreshing: boolean
+  onRefreshPerformance: () => void
+  onSetOpeningBalance: (input: { amount: string; occurred_at: string }) => void
 }) {
   const { t } = useTranslation()
   const currency = plan?.currency ?? 'USD'
@@ -681,13 +717,15 @@ function DashboardOverview({
               <CardTitle>{t('dashboard.chart.title')}</CardTitle>
               <CardDescription>{t('dashboard.chart.subtitle')}</CardDescription>
             </CardHeader>
-            <CardContent className="flex min-h-56 items-center justify-center rounded-lg border border-dashed bg-muted/20">
-              <div className="max-w-md space-y-2 px-6 text-center">
-                <p className="font-medium">{t('dashboard.emptyPerformance.title')}</p>
-                <p className="text-sm leading-relaxed text-muted-foreground">
-                  {t('dashboard.emptyPerformance.description')}
-                </p>
-              </div>
+            <CardContent>
+              {performance?.points.length ? <PerformanceChart performance={performance} /> : (
+                <div className="flex min-h-56 items-center justify-center rounded-lg border border-dashed bg-muted/20">
+                  <div className="max-w-md space-y-2 px-6 text-center">
+                    <p className="font-medium">{t('dashboard.emptyPerformance.title')}</p>
+                    <p className="text-sm leading-relaxed text-muted-foreground">{t('dashboard.emptyPerformance.description')}</p>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -762,7 +800,76 @@ function DashboardOverview({
           {portfolio ? <PaperPortfolioDetails portfolio={portfolio} /> : <EmptyState text={t('dashboard.portfolio.empty')} />}
         </CardContent>
       </Card>
+
+      <PaperPerformanceDetails
+        performance={performance}
+        refreshing={performanceRefreshing}
+        currency={currency}
+        onRefresh={onRefreshPerformance}
+        onSetOpeningBalance={onSetOpeningBalance}
+      />
     </section>
+  )
+}
+
+/** Render locally persisted adaptive-versus-plain-DCA values without synthesizing points. */
+function PerformanceChart({ performance }: { performance: PaperPerformance }) {
+  const { t } = useTranslation()
+  const data = performance.points.map((point) => ({
+    date: formatLocalDate(point.observed_at),
+    adaptive: Number(point.adaptive_value),
+    plain: Number(point.plain_dca_value),
+  }))
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} />
+        <YAxis tickLine={false} axisLine={false} width={64} />
+        <Tooltip formatter={(value) => (typeof value === 'number' ? formatCurrency(value, performance.currency) : '—')} />
+        <Line type="monotone" dataKey="adaptive" name={t('dashboard.performance.adaptive')} stroke="#16a34a" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="plain" name={t('dashboard.performance.plain')} stroke="#64748b" strokeWidth={2} dot={false} />
+      </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+/** Render local ledger status, return summary, and the explicit opening-balance setup. */
+function PaperPerformanceDetails({ performance, refreshing, currency, onRefresh, onSetOpeningBalance }: {
+  performance: PaperPerformance | null
+  refreshing: boolean
+  currency: string
+  onRefresh: () => void
+  onSetOpeningBalance: (input: { amount: string; occurred_at: string }) => void
+}) {
+  const { t } = useTranslation()
+  const [amount, setAmount] = useState('')
+  return (
+    <Card className="border-primary/30">
+      <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div><CardTitle>{t('dashboard.performance.title')}</CardTitle><CardDescription>{t('dashboard.performance.description')}</CardDescription></div>
+        <Button disabled={refreshing} onClick={onRefresh}><RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />{t('dashboard.performance.refresh')}</Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!performance?.has_opening_balance && (
+          <form className="flex flex-wrap items-end gap-3 rounded-lg border border-dashed p-3" onSubmit={(event) => { event.preventDefault(); onSetOpeningBalance({ amount, occurred_at: new Date().toISOString() }) }}>
+            <label className="grid gap-1 text-sm font-medium"><span>{t('dashboard.performance.openingBalance')}</span><Input required inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="10000.00" /></label>
+            <Button type="submit" disabled={!amount || refreshing}>{t('dashboard.performance.saveBaseline')}</Button>
+          </form>
+        )}
+        {performance ? <div className="space-y-3">
+          {!performance.data_complete && <p className="rounded-lg border border-amber-400/50 bg-amber-100/50 p-3 text-sm text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{t('dashboard.performance.incomplete')}</p>}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <OverviewFact label={t('dashboard.performance.netContributions')} value={formatCurrency(Number(performance.net_contributions), currency)} />
+            <OverviewFact label={t('dashboard.performance.totalReturn')} value={performance.total_return === undefined ? '—' : formatCurrency(Number(performance.total_return), currency)} />
+            <OverviewFact label={t('dashboard.performance.realized')} value={formatCurrency(Number(performance.realized_pnl), currency)} />
+            <OverviewFact label={t('dashboard.performance.unrealized')} value={formatCurrency(Number(performance.unrealized_pnl), currency)} />
+          </div>
+        </div> : <EmptyState text={t('dashboard.performance.empty')} />}
+      </CardContent>
+    </Card>
   )
 }
 

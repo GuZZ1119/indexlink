@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 2026-07-19 20:01 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 本地模拟账户账本、收益对账与真实曲线。
+- 涉及文件：
+  - `migrations/sqlite/20260719194000_create_paper_performance_ledger.sql`
+  - `crates/storage/src/{lib.rs,sqlite.rs,sqlite_paper_performance.rs}`、`crates/storage/Cargo.toml`
+  - `crates/api/src/{state.rs,routes/{mod.rs,decision_preview.rs,paper_performance.rs}}`
+  - `apps/web/src/{api/{queries.ts,types.ts},pages/dashboard/index.tsx,i18n/locales/{zh.ts,en.ts}}`
+  - `Cargo.lock`、`API_MANAGEMENT.md`、`CHANGE_LOG.md`
+- 变更内容：
+  - 新增仅本机 SQLite 的 `cash_flows`、`paper_orders`、`paper_fills`、`portfolio_snapshots` migration；金额固定精度存储，时间统一 UTC RFC3339 `Z`，不上传或写入云端。
+  - 新增用户确认起始模拟资金接口，以及收益刷新接口；订单被 broker 接受后记录本地意图，后续只读 OpenD 刷新根据累计成交量/均价增量生成幂等 fill，使用 FIFO 计算已实现/未实现收益和本地估值点。
+  - 新增自适应定投与普通定投的同执行价基准计算：普通定投仅在本地观察到买入执行后，按计划基准金额建立假想仓位；不补造启用账本前的历史数据。
+  - Dashboard 增加起始资金确认、本地账本刷新、净投入/总收益/已实现和未实现收益，以及响应式真实曲线；本地账本与 provider 持仓不一致时明确显示不可完全核验提示。
+  - 已完成的 MVP 后端闭环：本地计划、自动/手动信号、Qwen 情绪、70/20/10 决策、双桶、真实 OpenD 模拟订单、订单/持仓读取、决策审计与本地收益账本。前端不再以 mock 数值伪装收益。
+  - MVP 仍需手动条件：本机 OpenD 登录并保持虚拟账户可用、配置 Qwen Key、确认每个计划的起始模拟资金；账本只能从启用后持续观测，无法反推既有完整交易/现金流历史。真实交易、云端同步、多用户认证、税费/分红/汇率处理、完整历史成交回补与多计划共享账户精确归因均不属于当前最小 MVP。
+- 验证：
+  - `cargo test -p indexlink-storage --offline` 通过（32 tests，覆盖 migration、FIFO fill 对账与幂等刷新）。
+  - `cargo test -p indexlink-api --offline` 通过（45 tests）。
+  - `cargo test -p core-domain --offline` 通过（13 tests）。
+  - `cargo test --workspace --offline` 通过；仅跳过需要网络、真实 OpenD 或明确提交模拟订单确认的既有 smoke tests。
+  - `cargo clippy --workspace --all-targets --all-features --offline -- -D warnings` 通过。
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过；Vite 仅提示现有首个 JS bundle 超过 500 kB，未阻断构建。
+
 ### 2026-07-19 19:27 AEST
 
 - 执行模型：GPT-5。

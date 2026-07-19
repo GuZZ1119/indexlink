@@ -275,6 +275,7 @@ async fn preview_decision(
         {
             tracing::error!(error = %error, record_id = %persisted.id, "paper order accepted but decision record completion failed");
         }
+        state.record_accepted_paper_order(id, &ack, request).await;
         Some(ack)
     } else {
         None

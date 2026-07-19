@@ -171,8 +171,12 @@ mod tests {
             tables,
             vec![
                 "_sqlx_migrations".to_owned(),
+                "cash_flows".to_owned(),
                 "decision_records".to_owned(),
                 "investment_plans".to_owned(),
+                "paper_fills".to_owned(),
+                "paper_orders".to_owned(),
+                "portfolio_snapshots".to_owned(),
             ]
         );
     }

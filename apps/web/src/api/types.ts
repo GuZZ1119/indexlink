@@ -88,6 +88,28 @@ export interface PaperOrderRequest {
   limit_price?: string
 }
 
+/** Locally persisted performance point reconstructed from paper-account observations. */
+export interface PaperPerformancePoint {
+  observed_at: string
+  adaptive_value: string
+  plain_dca_value: string
+  net_contributions: string
+}
+
+/** Local paper-account return summary and chart series for one investment plan. */
+export interface PaperPerformance {
+  currency: string
+  has_opening_balance: boolean
+  data_complete: boolean
+  net_contributions: string
+  adaptive_value: string
+  plain_dca_value: string
+  realized_pnl: string
+  unrealized_pnl: string
+  total_return?: string
+  points: PaperPerformancePoint[]
+}
+
 /** Request accepted by the composed Decision Preview endpoint. */
 export interface DecisionPreviewRequest {
   day_of_month: number
