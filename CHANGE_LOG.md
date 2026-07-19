@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-07-20 01:35 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Alibaba Cloud ECS 可复现部署入口。
+- 涉及文件：
+  - `deployment/docker-compose.yml`
+  - `deployment/aliyun/ecs-deploy.sh`
+  - `deployment/aliyun/README.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - Compose 从仓库根目录、受 Git 忽略的 `.env` 读取 Qwen 等运行时配置，继续以 named volume 持久化 SQLite；密钥不进入镜像、脚本或版本库。
+  - 增加 ECS 部署脚本：校验 Docker 和本地 `.env`，构建并后台启动服务，再通过 `/ready` 轮询确认可用。
+  - 增加阿里云部署说明与竞赛证明路径，指向实际 DashScope/Qwen provider 实现；明确公网 ECS 不配置 OpenD 或任何交易凭据。
+  - 将 Compose 的本地 Vite CORS 默认端口从过时的 `3000` 校正为 `5173`。
+- 验证：
+  - `bash -n deployment/aliyun/ecs-deploy.sh` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+
 ### 2026-07-20 00:40 AEST
 
 - 执行模型：GPT-5。
