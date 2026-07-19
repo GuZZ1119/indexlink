@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(req.messages[1].role, "user");
         assert_eq!(req.messages[1].content, "沪深300指数今日大幅上涨");
         assert_eq!(req.temperature, 0.0);
-        assert_eq!(req.max_tokens, 128);
+        assert_eq!(req.max_tokens, 256);
     }
 
     #[test]

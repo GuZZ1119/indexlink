@@ -108,6 +108,6 @@ fn config_default_uses_qwen_dashscope() {
     assert!(config.base_url.contains("dashscope.aliyuncs.com"));
     assert_eq!(config.model, "qwen-plus");
     assert_eq!(config.timeout.as_secs(), 30);
-    assert_eq!(config.max_tokens, 128);
+    assert_eq!(config.max_tokens, 256);
     assert_eq!(config.temperature, 0.0);
 }

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 2026-07-19 23:45 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Qwen 结构化情绪输出容量修复。
+- 涉及文件：
+  - `crates/ai-client/src/{provider.rs,client.rs}`
+  - `crates/ai-client/tests/provider.rs`
+  - `apps/server/src/config.rs`
+  - `.env.example`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 Qwen `max_tokens` 默认值及本地示例配置从 `128` 提升到 `256`，为 `score`、`rationale` 与最多五条 `warnings` 的结构化输出保留足够空间。
+  - 根因验证：DashScope Key 与 CNBC RSS 均可用；旧上限下完整解释可能在 JSON 闭合前被截断，解析器按安全契约拒绝并令 API 返回 `503`。使用 `256` 后 `POST /market-sentiment/preview` 返回包含理由、风险提示和新闻来源的 `200` 响应。
+- 验证：
+  - 本机真实 DashScope/Qwen smoke 通过：结构化情绪路由返回 `200`，未输出或持久化 Key。
+  - `cargo test -p ai-client -p indexlink-server --locked` 通过。
+
 ### 2026-07-19 23:35 AEST
 
 - 执行模型：GPT-5。

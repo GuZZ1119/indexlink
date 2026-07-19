@@ -582,7 +582,7 @@ mod tests {
         );
         assert_eq!(qwen.model, "qwen-plus");
         assert_eq!(qwen.timeout, Duration::from_secs(30));
-        assert_eq!(qwen.max_tokens, 128);
+        assert_eq!(qwen.max_tokens, 256);
         assert_eq!(qwen.temperature, 0.0);
         assert_eq!(qwen.api_key, "sk-test-secret");
     }

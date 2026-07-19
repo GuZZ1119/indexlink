@@ -61,7 +61,7 @@ pub struct AiConfig {
     pub model: String,
     /// 单次请求超时。
     pub timeout: Duration,
-    /// 最大生成 token 数（响应极短，默认 128 足够）。
+    /// 最大生成 token 数（为结构化理由和风险提示预留空间，默认 256）。
     pub max_tokens: u32,
     /// 生成温度（建议 0.0~0.3，降低随机性以保持信号稳定）。
     pub temperature: f32,
@@ -74,7 +74,7 @@ impl Default for AiConfig {
             api_key: String::new(),
             model: "qwen-plus".to_owned(),
             timeout: Duration::from_secs(30),
-            max_tokens: 128,
+            max_tokens: 256,
             temperature: 0.0,
         }
     }
@@ -129,7 +129,7 @@ mod tests {
         assert!(config.base_url.contains("dashscope"));
         assert_eq!(config.model, "qwen-plus");
         assert_eq!(config.timeout, Duration::from_secs(30));
-        assert_eq!(config.max_tokens, 128);
+        assert_eq!(config.max_tokens, 256);
         assert_eq!(config.temperature, 0.0);
         assert!(config.api_key.is_empty());
     }
