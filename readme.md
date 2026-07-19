@@ -275,6 +275,8 @@ indexlink/
    pnpm --dir apps/web dev
    ```
 
+5. 在 Dashboard 按闭环完成演示：创建或选择计划，手工填写信号，或导入 JSON 信号文件，再运行 Decision Preview。导入文件可使用顶层 API 字段，或按 `fundamental` / `trend` 分组；其中必须包含 `cape_history`、`cape_current`、`erp_history`、`erp_current`、`ma_distance_history`、`ma_distance_current`、`rsi_history`、`rsi_current`、`vix_history` 与 `vix_current`。每个历史序列仍需满足后端要求的至少 60 个有限数值。Qwen 已配置时会显示真实情绪分数；未配置或不可用时，页面会显示后端的安全降级状态。仅在明确勾选 paper order 时才会请求 paper broker。
+
 `.env` 仅供本地使用且已被 Git 忽略。主要环境变量如下：
 
 | 变量 | 默认示例 | 说明 |

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { BarChart3, Bot, ClipboardCheck, Send } from 'lucide-react'
+import { BarChart3, Bot, ClipboardCheck, FileJson, Plus, Send, Upload } from 'lucide-react'
 import { useSnapshot } from 'valtio'
 
 import {
@@ -9,9 +9,10 @@ import {
   previewDecision,
   previewFundamental,
   previewTrend,
+  useCreatePlan,
   usePlans,
 } from '@/api/queries'
-import type { DecisionPreviewResponse } from '@/api/types'
+import type { CreateInvestmentPlanRequest, DecisionPreviewResponse } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -46,6 +47,16 @@ const emptySignals: SignalFields = {
   vixCurrent: '',
 }
 
+const initialPlan: CreateInvestmentPlanRequest = {
+  name: '',
+  symbol: '',
+  base_contribution: '1000.00',
+  currency: 'USD',
+  schedule_kind: 'monthly',
+  schedule_day: 15,
+  max_single_execution: '1500.00',
+}
+
 /** Parse a comma- or newline-separated historical series without manufacturing data. */
 function parseHistory(value: string, label: string): number[] {
   const values = value
@@ -73,19 +84,69 @@ function paperOrderKey(): string {
   return `web-paper-${suffix}`
 }
 
+/** Convert one imported JSON document into editable signal fields without creating market data. */
+function signalFieldsFromImport(value: unknown): SignalFields {
+  if (!isRecord(value)) {
+    throw new ApiRequestError('signal import must be a JSON object')
+  }
+  const fundamental = isRecord(value.fundamental) ? value.fundamental : value
+  const trend = isRecord(value.trend) ? value.trend : value
+  return {
+    capeHistory: importedHistory(fundamental, 'cape_history'),
+    capeCurrent: importedCurrent(fundamental, 'cape_current'),
+    erpHistory: importedHistory(fundamental, 'erp_history'),
+    erpCurrent: importedCurrent(fundamental, 'erp_current'),
+    maHistory: importedHistory(trend, 'ma_distance_history'),
+    maCurrent: importedCurrent(trend, 'ma_distance_current'),
+    rsiHistory: importedHistory(trend, 'rsi_history'),
+    rsiCurrent: importedCurrent(trend, 'rsi_current'),
+    vixHistory: importedHistory(trend, 'vix_history'),
+    vixCurrent: importedCurrent(trend, 'vix_current'),
+  }
+}
+
+/** Check a JSON value is a non-null object before reading its signal fields. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Read one finite historical numeric series from an imported JSON object. */
+function importedHistory(value: Record<string, unknown>, field: string): string {
+  const values = value[field]
+  if (!Array.isArray(values) || values.some((item) => typeof item !== 'number' || !Number.isFinite(item))) {
+    throw new ApiRequestError(`${field} must be an array of finite numbers`)
+  }
+  return values.join(', ')
+}
+
+/** Read one finite current numeric value from an imported JSON object. */
+function importedCurrent(value: Record<string, unknown>, field: string): string {
+  const current = value[field]
+  if (typeof current !== 'number' || !Number.isFinite(current)) {
+    throw new ApiRequestError(`${field} must be a finite number`)
+  }
+  return String(current)
+}
+
 /** Render the live Decision Preview workflow backed by Rust HTTP APIs. */
 export default function DashboardPage() {
   const { t } = useTranslation()
   const { data: plans = [], isPending: plansPending, error: plansError } = usePlans()
   const { selectedPlanId } = useSnapshot(uiStore)
   const queryClient = useQueryClient()
+  const createPlan = useCreatePlan()
+  const importInput = useRef<HTMLInputElement>(null)
   const [signals, setSignals] = useState<SignalFields>(emptySignals)
+  const [planInput, setPlanInput] = useState(initialPlan)
   const [dayOfMonth, setDayOfMonth] = useState(String(new Date().getDate()))
   const [coreRatio, setCoreRatio] = useState('0.80')
   const [opportunityRatio, setOpportunityRatio] = useState('0.20')
   const [submitPaperOrder, setSubmitPaperOrder] = useState(false)
   const [quantity, setQuantity] = useState('1.00')
   const [result, setResult] = useState<DecisionPreviewResponse | null>(null)
+  const [importName, setImportName] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [planFormOpen, setPlanFormOpen] = useState(false)
 
   useEffect(() => {
     if (selectedPlanId === null && plans[0]) {
@@ -148,7 +209,30 @@ export default function DashboardPage() {
   const updateSignal = (key: keyof SignalFields, value: string) => {
     setSignals((current) => ({ ...current, [key]: value }))
   }
-  const error = decisionMutation.error ?? plansError
+  const updatePlan = <K extends keyof CreateInvestmentPlanRequest>(key: K, value: string | number) => {
+    setPlanInput((current) => ({ ...current, [key]: value }) as CreateInvestmentPlanRequest)
+  }
+  const createDemoPlan = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const created = await createPlan.mutateAsync(planInput)
+    setSelectedPlanId(created.id)
+    setPlanInput(initialPlan)
+    setPlanFormOpen(false)
+  }
+  const importSignals = async (file: File) => {
+    try {
+      const next = signalFieldsFromImport(JSON.parse(await file.text()) as unknown)
+      setSignals(next)
+      setImportName(file.name)
+      setImportError(null)
+      setResult(null)
+    } catch (error) {
+      setImportName(null)
+      setImportError(error instanceof Error ? error.message : 'signal import failed')
+    }
+  }
+  const error = decisionMutation.error ?? createPlan.error ?? plansError
+  const hasSignalInput = Object.values(signals).every((value) => value.trim().length > 0)
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:p-6">
@@ -163,6 +247,12 @@ export default function DashboardPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          <DemoSteps
+            planReady={selectedPlan !== null}
+            signalReady={hasSignalInput}
+            result={result}
+            paperOrderRequested={submitPaperOrder}
+          />
           <label className="grid gap-1.5 text-sm font-medium">
             {t('live.decision.plan')}
             <select
@@ -183,6 +273,30 @@ export default function DashboardPage() {
             </select>
           </label>
 
+          <details
+            className="rounded-lg border border-dashed p-3"
+            open={planFormOpen || plans.length === 0}
+            onToggle={(event) => setPlanFormOpen(event.currentTarget.open)}
+          >
+            <summary className="cursor-pointer text-sm font-medium">
+              {t('live.decision.createPlanHere')}
+            </summary>
+            <form className="mt-4 space-y-3" onSubmit={(event) => void createDemoPlan(event)}>
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                <DemoPlanField label={t('live.plans.name')} value={planInput.name} onChange={(value) => updatePlan('name', value)} />
+                <DemoPlanField label={t('live.plans.symbol')} value={planInput.symbol} onChange={(value) => updatePlan('symbol', value)} />
+                <DemoPlanField label={t('live.plans.currency')} value={planInput.currency} onChange={(value) => updatePlan('currency', value)} />
+                <DemoPlanField label={t('live.plans.baseContribution')} value={planInput.base_contribution} onChange={(value) => updatePlan('base_contribution', value)} />
+                <DemoPlanField label={t('live.plans.scheduleDay')} value={String(planInput.schedule_day)} onChange={(value) => updatePlan('schedule_day', Number(value))} />
+                <DemoPlanField label={t('live.plans.maxExecution')} value={planInput.max_single_execution} onChange={(value) => updatePlan('max_single_execution', value)} />
+              </div>
+              <Button type="submit" disabled={createPlan.isPending}>
+                <Plus className="size-4" />
+                {createPlan.isPending ? t('live.plans.creating') : t('live.plans.create')}
+              </Button>
+            </form>
+          </details>
+
           <div className="grid gap-4 md:grid-cols-3">
             <label className="grid gap-1.5 text-sm font-medium">
               {t('live.decision.day')}
@@ -200,6 +314,39 @@ export default function DashboardPage() {
               />
             </label>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileJson className="size-4 text-muted-foreground" />
+            {t('live.decision.importTitle')}
+          </CardTitle>
+          <CardDescription>{t('live.decision.importDescription')}</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <input
+            ref={importInput}
+            className="sr-only"
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => {
+              const [file] = event.target.files ?? []
+              if (file) {
+                void importSignals(file)
+              }
+              event.target.value = ''
+            }}
+          />
+          <Button type="button" variant="outline" onClick={() => importInput.current?.click()}>
+            <Upload className="size-4" />
+            {t('live.decision.importButton')}
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            {importName ? t('live.decision.imported', { name: importName }) : t('live.decision.importFormat')}
+          </span>
+          {importError && <p className="w-full text-sm text-destructive">{importError}</p>}
         </CardContent>
       </Card>
 
@@ -273,8 +420,63 @@ export default function DashboardPage() {
         </p>
       )}
 
-      {result && <DecisionResultCard result={result} />}
+      {result && <DecisionResultCard result={result} paperOrderRequested={submitPaperOrder} />}
     </div>
+  )
+}
+
+/** Render the five observable stages of the local demonstration workflow. */
+function DemoSteps({
+  planReady,
+  signalReady,
+  result,
+  paperOrderRequested,
+}: {
+  planReady: boolean
+  signalReady: boolean
+  result: DecisionPreviewResponse | null
+  paperOrderRequested: boolean
+}) {
+  const { t } = useTranslation()
+  const steps = [
+    [t('live.demoSteps.plan'), planReady],
+    [t('live.demoSteps.signals'), signalReady],
+    [t('live.demoSteps.decision'), result !== null],
+    [t('live.demoSteps.buckets'), result?.execution.bucket_split !== undefined],
+    [t('live.demoSteps.paper'), paperOrderRequested ? result?.paper_order_ack !== undefined : false],
+  ] as const
+  return (
+    <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+      {steps.map(([label, complete], index) => (
+        <li
+          key={label}
+          className={cn(
+            'rounded-lg border px-3 py-2 text-xs font-medium',
+            complete ? 'border-semantic-positive/40 bg-semantic-positive/10' : 'bg-muted/40 text-muted-foreground',
+          )}
+        >
+          {index + 1}. {label}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/** Render one controlled plan field used by the dashboard's creation step. */
+function DemoPlanField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="grid gap-1.5 text-sm font-medium">
+      {label}
+      <Input required value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
   )
 }
 
@@ -322,8 +524,14 @@ function SignalInputCard({
   )
 }
 
-/** Render a non-fabricated Decision Preview response and optional broker acknowledgement. */
-function DecisionResultCard({ result }: { result: DecisionPreviewResponse }) {
+/** Render a non-fabricated Decision Preview response and paper-order outcome. */
+function DecisionResultCard({
+  result,
+  paperOrderRequested,
+}: {
+  result: DecisionPreviewResponse
+  paperOrderRequested: boolean
+}) {
   const { t } = useTranslation()
   const planned = result.execution.planned_contribution
   return (
@@ -351,13 +559,17 @@ function DecisionResultCard({ result }: { result: DecisionPreviewResponse }) {
           <Metric label={t('live.decision.trendScore')} value={result.decision.trend_score.toFixed(2)} />
           <Metric
             label={t('live.decision.qwenSentiment')}
-            value={result.decision.sentiment_score?.toFixed(2) ?? t('live.decision.fallback')}
+            value={
+              result.decision.sentiment_score === undefined
+                ? t('live.decision.fallback')
+                : `${result.decision.sentiment_score.toFixed(2)} · ${t('live.decision.qwenAvailable')}`
+            }
           />
         </div>
         {result.execution.bucket_split && (
           <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-            {t('live.decision.bucketSplit')}: core {result.execution.bucket_split.core_contribution} {result.execution.currency}
-            {' · '}opportunity {result.execution.bucket_split.opportunity_contribution}{' '}
+            {t('live.decision.bucketSplit')}: {t('live.decision.coreBucket')} {result.execution.bucket_split.core_contribution} {result.execution.currency}
+            {' · '}{t('live.decision.opportunityBucket')} {result.execution.bucket_split.opportunity_contribution}{' '}
             {result.execution.currency}
           </div>
         )}
@@ -368,6 +580,11 @@ function DecisionResultCard({ result }: { result: DecisionPreviewResponse }) {
           <div className="rounded-lg border border-semantic-positive/40 bg-semantic-positive/10 p-3 text-sm">
             {t('live.decision.paperAck')}: {result.paper_order_ack.status} · order{' '}
             {result.paper_order_ack.order_id} · {result.paper_order_ack.environment}
+          </div>
+        )}
+        {paperOrderRequested && !result.paper_order_ack && (
+          <div className="rounded-lg border border-muted-foreground/30 bg-muted/50 p-3 text-sm text-muted-foreground">
+            {t('live.decision.paperNotSubmitted')}
           </div>
         )}
       </CardContent>

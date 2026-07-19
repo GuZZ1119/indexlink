@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### 2026-07-19 12:15 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 演示闭环页面完善 / 信号 JSON 导入。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `apps/web/src/i18n/locales/{zh,en}.ts`
+  - `readme.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - Dashboard 现在包含可见的五步演示进度：创建或选择计划、输入或导入信号、Qwen 与决策、双桶拆分、paper-order 回执；状态只反映真实页面输入或 API 响应，不生成演示数据。
+  - 在同一页面增加真实的计划创建表单，提交后复用既有 `POST /investment-plans`、选中新建计划，并继续进入当前 Decision Preview 流程。
+  - 新增 JSON 信号文件导入：支持顶层 API 字段或 `fundamental` / `trend` 分组，导入时只接受有限数值和有限数值数组，并填入可继续手工审查、编辑的字段；后端仍负责不少于 60 条历史样本及全部领域校验。
+  - 结果区更明确地标记 Qwen 成功返回的分数、`sentiment_unavailable` 降级，及已请求但因服务端 execution/action 门控而没有 paper-order 回执的情况；不会将没有回执的情况伪装为订单成功。
+  - `readme.md` 补充本地演示闭环与导入文件字段说明。所有 HTTP 请求仍仅指向本机 Rust API；paper order 默认关闭。
+  - 本次只修改并后续推送你的 Fork `main`，不向 Jame `upstream` 推送或修改其代码、分支、PR 或 `main`。
+- 验证：
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示首个 JS bundle 超过 500 kB，未阻断构建。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `git diff --check` 通过。
+
 ### 2026-07-19 00:58 AEST
 
 - 执行模型：GPT-5。
