@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { BarChart3, Bot, ClipboardCheck, Plus, RefreshCw, Send } from 'lucide-react'
+import { BarChart3, Bot, ClipboardCheck, RefreshCw, Send } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Link } from 'react-router'
 import { useSnapshot } from 'valtio'
 
 import {
@@ -10,17 +11,16 @@ import {
   fetchActualPerformance,
   fetchHistoricalBacktest,
   fetchHoldingPriceHistory,
+  fetchMarketSentiment,
   fetchMarketSignalInput,
   fetchPaperPerformance,
   fetchPaperPortfolio,
   previewAutomaticDecision,
   setPaperOpeningBalance,
-  useCreatePlan,
   useDecisionRecords,
   usePlans,
 } from '@/api/queries'
 import type {
-  CreateInvestmentPlanRequest,
   DecisionRecord,
   DecisionResult,
   DecisionPreviewResponse,
@@ -51,16 +51,6 @@ type OverviewDecision = {
   marketSentiment?: MarketSentimentEvidence
 }
 
-const initialPlan: CreateInvestmentPlanRequest = {
-  name: '',
-  symbol: '',
-  base_contribution: '1000.00',
-  currency: 'USD',
-  schedule_kind: 'monthly',
-  schedule_day: 15,
-  max_single_execution: '1500.00',
-}
-
 /** Return a unique, non-secret idempotency key for one user-confirmed paper order. */
 function paperOrderKey(): string {
   const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
@@ -73,15 +63,13 @@ export default function DashboardPage() {
   const { data: plans = [], isPending: plansPending, error: plansError } = usePlans()
   const { selectedPlanId } = useSnapshot(uiStore)
   const queryClient = useQueryClient()
-  const createPlan = useCreatePlan()
-  const [planInput, setPlanInput] = useState(initialPlan)
   const [coreRatio, setCoreRatio] = useState('0.80')
   const [opportunityRatio, setOpportunityRatio] = useState('0.20')
   const [submitPaperOrder, setSubmitPaperOrder] = useState(false)
   const [quantity, setQuantity] = useState('1.00')
   const [result, setResult] = useState<DecisionPreviewResponse | null>(null)
   const [marketRefresh, setMarketRefresh] = useState<MarketSignalInput | null>(null)
-  const [planFormOpen, setPlanFormOpen] = useState(false)
+  const [marketSentiment, setMarketSentiment] = useState<MarketSentimentEvidence | null>(null)
   const [pricePeriod, setPricePeriod] = useState<'3m' | '6m' | '1y' | '3y'>('1y')
 
   useEffect(() => {
@@ -101,7 +89,6 @@ export default function DashboardPage() {
       if (!selectedPlan) {
         throw new ApiRequestError('select a plan before running a decision')
       }
-      const marketInput = await fetchMarketSignalInput(selectedPlan.symbol)
       const preview = await previewAutomaticDecision(selectedPlan.id, {
         bucket_allocation: {
           core_ratio: coreRatio,
@@ -118,10 +105,9 @@ export default function DashboardPage() {
             }
           : {}),
       })
-      return { marketInput, preview }
+      return preview
     },
-    onSuccess: async ({ marketInput, preview }) => {
-      setMarketRefresh(marketInput)
+    onSuccess: async (preview) => {
       setResult(preview)
       await queryClient.invalidateQueries({ queryKey: ['decision-records', selectedPlanId] })
     },
@@ -137,6 +123,10 @@ export default function DashboardPage() {
       setMarketRefresh(input)
       setResult(null)
     },
+  })
+  const marketSentimentMutation = useMutation({
+    mutationFn: fetchMarketSentiment,
+    onSuccess: (sentiment) => setMarketSentiment(sentiment),
   })
   const paperPortfolioMutation = useMutation({
     mutationFn: fetchPaperPortfolio,
@@ -165,25 +155,15 @@ export default function DashboardPage() {
     mutationFn: () => fetchHoldingPriceHistory(pricePeriod),
   })
 
-  const updatePlan = <K extends keyof CreateInvestmentPlanRequest>(key: K, value: string | number) => {
-    setPlanInput((current) => ({ ...current, [key]: value }) as CreateInvestmentPlanRequest)
-  }
-  const createDemoPlan = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const created = await createPlan.mutateAsync(planInput)
-    setSelectedPlanId(created.id)
-    setPlanInput(initialPlan)
-    setPlanFormOpen(false)
-  }
   const error = marketRefreshMutation.error
     ?? decisionMutation.error
+    ?? marketSentimentMutation.error
     ?? paperPortfolioMutation.error
     ?? paperPerformanceMutation.error
     ?? openingBalanceMutation.error
     ?? actualPerformanceMutation.error
     ?? historicalBacktestMutation.error
     ?? priceHistoryMutation.error
-    ?? createPlan.error
     ?? plansError
     ?? decisionRecordsError
   const hasSignalInput = marketRefresh !== null || result !== null
@@ -210,9 +190,11 @@ export default function DashboardPage() {
         onRefreshActual={() => actualPerformanceMutation.mutate()}
         historicalBacktest={historicalBacktestMutation.data ?? null}
         historicalRefreshing={historicalBacktestMutation.isPending}
+        historicalError={historicalBacktestMutation.error}
         onRefreshHistorical={() => historicalBacktestMutation.mutate()}
         priceHistory={priceHistoryMutation.data ?? null}
         priceRefreshing={priceHistoryMutation.isPending}
+        priceHistoryError={priceHistoryMutation.error}
         pricePeriod={pricePeriod}
         onPricePeriodChange={setPricePeriod}
         onRefreshPrices={() => priceHistoryMutation.mutate()}
@@ -255,29 +237,11 @@ export default function DashboardPage() {
             </select>
           </label>
 
-          <details
-            className="rounded-lg border border-dashed p-3"
-            open={planFormOpen || plans.length === 0}
-            onToggle={(event) => setPlanFormOpen(event.currentTarget.open)}
-          >
-            <summary className="cursor-pointer text-sm font-medium">
-              {t('live.decision.createPlanHere')}
-            </summary>
-            <form className="mt-4 space-y-3" onSubmit={(event) => void createDemoPlan(event)}>
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                <DemoPlanField label={t('live.plans.name')} value={planInput.name} onChange={(value) => updatePlan('name', value)} />
-                <DemoPlanField label={t('live.plans.symbol')} value={planInput.symbol} onChange={(value) => updatePlan('symbol', value)} />
-                <DemoPlanField label={t('live.plans.currency')} value={planInput.currency} onChange={(value) => updatePlan('currency', value)} />
-                <DemoPlanField label={t('live.plans.baseContribution')} value={planInput.base_contribution} onChange={(value) => updatePlan('base_contribution', value)} />
-                <DemoPlanField label={t('live.plans.scheduleDay')} value={String(planInput.schedule_day)} onChange={(value) => updatePlan('schedule_day', Number(value))} />
-                <DemoPlanField label={t('live.plans.maxExecution')} value={planInput.max_single_execution} onChange={(value) => updatePlan('max_single_execution', value)} />
-              </div>
-              <Button type="submit" disabled={createPlan.isPending}>
-                <Plus className="size-4" />
-                {createPlan.isPending ? t('live.plans.creating') : t('live.plans.create')}
-              </Button>
-            </form>
-          </details>
+          {plans.length === 0 && (
+            <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+              请先在 <Link className="font-medium text-primary underline-offset-4 hover:underline" to="/plans">定投标的</Link> 页面创建计划，再回到这里生成决策存证。
+            </p>
+          )}
 
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-1.5 text-sm font-medium">
@@ -312,6 +276,24 @@ export default function DashboardPage() {
             {t('live.decision.marketRefreshed', { symbol: marketRefresh.symbol, date: marketRefresh.as_of })}
             </p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-violet-500/35 bg-violet-500/5">
+        <CardHeader>
+          <div>
+            <CardTitle className="flex items-center gap-2"><Bot className="size-5 text-violet-700" />AI 市场情绪</CardTitle>
+            <CardDescription>单独调用 Qwen 读取当前新闻，展示情绪依据、新闻来源与风险提示；生成决策时也会自动使用同一类证据。</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex justify-center">
+            <Button className="w-full max-w-xl" variant="outline" disabled={marketSentimentMutation.isPending} onClick={() => marketSentimentMutation.mutate()}>
+              <Bot className={cn('size-4', marketSentimentMutation.isPending && 'animate-pulse')} />
+              {marketSentimentMutation.isPending ? '正在分析新闻…' : '获取 Qwen 情绪分析'}
+            </Button>
+          </div>
+          {marketSentiment && <MarketSentimentCard sentiment={marketSentiment} />}
         </CardContent>
       </Card>
 
@@ -352,9 +334,7 @@ export default function DashboardPage() {
 
       {error && (
         <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {decisionMutation.error
-            ? t('live.decision.automaticUnavailable')
-            : error instanceof Error ? error.message : 'request failed'}
+          {requestErrorMessage(error, decisionMutation.error !== null)}
         </p>
       )}
 
@@ -407,6 +387,53 @@ function evidenceFromSnapshot(
   }
 }
 
+/** Render a standalone Qwen result before a decision record has been generated. */
+function MarketSentimentCard({ sentiment }: { sentiment: MarketSentimentEvidence }) {
+  const label = sentiment.label === 'positive' ? '偏积极' : sentiment.label === 'negative' ? '偏谨慎' : '中性'
+  return (
+    <div className="space-y-3 rounded-lg border bg-background/70 p-4 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-semibold">Qwen 情绪：{label}</span>
+        <Badge variant="outline">{sentiment.score.toFixed(2)}</Badge>
+      </div>
+      <div><p className="font-medium">分析依据</p><p className="mt-1 leading-relaxed text-muted-foreground">{sentiment.rationale}</p></div>
+      {sentiment.warnings.length > 0 && (
+        <div><p className="font-medium">风险提示</p><ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">{sentiment.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>
+      )}
+      <div>
+        <p className="font-medium">新闻来源</p>
+        <ul className="mt-1 space-y-1 text-muted-foreground">
+          {sentiment.headlines.map((headline) => (
+            <li key={`${headline.published_at}-${headline.title}`}>
+              {headline.url ? <a className="underline-offset-4 hover:underline" href={headline.url} rel="noreferrer" target="_blank">{headline.title}</a> : headline.title}
+              <span className="ml-2 text-xs">{formatLocalDate(headline.published_at)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+/** Explain failures without leaking provider configuration, transport details, or credentials. */
+function requestErrorMessage(error: unknown, automaticDecision: boolean): string {
+  if (error instanceof ApiRequestError) {
+    if (error.status === 404 && automaticDecision) {
+      return '当前运行中的 Rust 服务尚未重启到自动决策版本。请停止旧的 indexlink-server 后运行 `cargo run -p indexlink-server`，再重试；本次没有写入决策存证。'
+    }
+    if (error.status === 404) {
+      return '本机 Rust API 未提供此功能版本。请重启 indexlink-server 后重试。'
+    }
+    if (error.status === 426) {
+      return '本机 Rust 服务仍在运行旧版响应契约。请重启 indexlink-server 后重试。'
+    }
+    if (error.status === 503) {
+      return '所需的本机或公开数据源暂不可用。模拟账户已连接只代表资金/订单通道可读；自动决策还需要行情、估值、波动率与 Qwen（如已配置）来源。请稍后重试。'
+    }
+  }
+  return error instanceof Error ? error.message : 'request failed'
+}
+
 /** Render the restored dashboard layout with only source-backed decision data. */
 function DashboardOverview({
   plan,
@@ -424,9 +451,11 @@ function DashboardOverview({
   onRefreshActual,
   historicalBacktest,
   historicalRefreshing,
+  historicalError,
   onRefreshHistorical,
   priceHistory,
   priceRefreshing,
+  priceHistoryError,
   pricePeriod,
   onPricePeriodChange,
   onRefreshPrices,
@@ -446,9 +475,11 @@ function DashboardOverview({
   onRefreshActual: () => void
   historicalBacktest: HistoricalBacktest | null
   historicalRefreshing: boolean
+  historicalError: Error | null
   onRefreshHistorical: () => void
   priceHistory: HoldingPriceHistory[] | null
   priceRefreshing: boolean
+  priceHistoryError: Error | null
   pricePeriod: '3m' | '6m' | '1y' | '3y'
   onPricePeriodChange: (period: '3m' | '6m' | '1y' | '3y') => void
   onRefreshPrices: () => void
@@ -691,7 +722,7 @@ function DashboardOverview({
           <div><CardTitle>定投标的历史走势与成交点</CardTitle><CardDescription>实际 OpenD 日线。多标的会归一化到 100，便于在同一张图比较；圆点仅代表本地已确认的模拟买卖成交。</CardDescription></div>
           <div className="flex flex-wrap items-center gap-2"><select className="h-9 rounded-md border bg-background px-2 text-sm" value={pricePeriod} onChange={(event) => onPricePeriodChange(event.target.value as '3m' | '6m' | '1y' | '3y')}><option value="3m">近 3 个月</option><option value="6m">近 6 个月</option><option value="1y">近 1 年</option><option value="3y">近 3 年</option></select><Button variant="outline" disabled={priceRefreshing} onClick={onRefreshPrices}><RefreshCw className={cn('size-4', priceRefreshing && 'animate-spin')} />拉取走势</Button></div>
         </CardHeader>
-        <CardContent>{priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text="选择或创建定投标的后，点击“拉取走势”。不会生成虚构的历史价格。" />}</CardContent>
+        <CardContent>{priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text={priceHistoryError ? requestErrorMessage(priceHistoryError, false) : '选择定投标的后，点击“拉取走势”。不会生成虚构的历史价格。'} />}</CardContent>
       </Card>
 
       <Card>
@@ -699,7 +730,7 @@ function DashboardOverview({
           <div><CardTitle>一年历史模拟对比</CardTitle><CardDescription>将所有启用的定投标的聚合为两条曲线。该回放使用真实日线，不把历史 AI 或宏观信号伪造成已知事实。</CardDescription></div>
           <Button variant="outline" disabled={historicalRefreshing} onClick={onRefreshHistorical}><RefreshCw className={cn('size-4', historicalRefreshing && 'animate-spin')} />运行一年回放</Button>
         </CardHeader>
-        <CardContent>{historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text="需要至少一只启用的定投标的以及足够的 OpenD 历史日线，才能运行一年历史回放。" />}</CardContent>
+        <CardContent>{historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text={historicalError ? requestErrorMessage(historicalError, false) : '需要至少一只启用的定投标的以及足够的 OpenD 历史日线，才能运行一年历史回放。'} />}</CardContent>
       </Card>
     </section>
   )
@@ -1077,24 +1108,6 @@ function DemoSteps({
         </li>
       ))}
     </ol>
-  )
-}
-
-/** Render one controlled plan field used by the dashboard's creation step. */
-function DemoPlanField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <label className="grid gap-1.5 text-sm font-medium">
-      {label}
-      <Input required value={value} onChange={(event) => onChange(event.target.value)} />
-    </label>
   )
 }
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-07-19 23:35 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Demo 决策入口去重 / Qwen 可见性与本机 API 故障说明。
+- 涉及文件：
+  - `apps/web/src/api/queries.ts`
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - Dashboard 删除与“定投标的”页面重复的计划创建表单；没有计划时只提供明确的页面跳转入口。
+  - 增加独立的“AI 市场情绪”卡片，可直接调用 Qwen 情绪 API 并展示理由、风险提示和新闻来源，无需先生成决策。
+  - 自动决策不再在调用自动预览前额外重复拉取一次 70/20 数据，减少一次易受公开数据源波动影响的请求；走势图和一年回放在自身请求失败时保留对应位置的安全、可操作提示。
+  - 前端请求错误保留公开 HTTP 状态；自动决策路由返回 404、或旧版 Qwen 仅返回 score/label 时明确提示本机 `indexlink-server` 仍是旧进程，避免将版本未重启误报为模拟账户或市场数据不可用。
+- 验证：
+  - 以本机正在运行的旧 server 验证：`GET /signals/market-input/VOO`、`GET /market-data/holdings?period=1y`、`GET /paper-performance/historical-backtest` 均返回 `200`；旧进程对新自动决策路由返回 `404`，确认故障原因是未重启到最新 Rust 二进制。
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；仅保留既有首个 JS bundle 大于 500 kB 的非阻断警告。
+
 ### 2026-07-19 23:15 AEST
 
 - 执行模型：GPT-5。

@@ -15,6 +15,7 @@ import type {
   ActualPerformance,
   HistoricalBacktest,
   HoldingPriceHistory,
+  MarketSentimentEvidence,
   TrendPreviewRequest,
   TrendSignal,
 } from './types'
@@ -22,10 +23,24 @@ import type {
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 /** Error returned to the UI without exposing transport or provider internals. */
-export class ApiRequestError extends Error {}
+export class ApiRequestError extends Error {
+  /** HTTP status returned by the safe API envelope when one was available. */
+  readonly status?: number
+
+  /** Stable public error code returned by the API envelope when one was available. */
+  readonly code?: string
+
+  /** Build a client-safe request error without retaining provider or transport details. */
+  constructor(message: string, options: { status?: number; code?: string } = {}) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = options.status
+    this.code = options.code
+  }
+}
 
 interface ErrorEnvelope {
-  error?: { message?: string }
+  error?: { code?: string; message?: string }
 }
 
 /** Call one same-origin or configured Rust HTTP endpoint. */
@@ -40,7 +55,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as ErrorEnvelope | null
-    throw new ApiRequestError(body?.error?.message ?? 'request failed')
+    throw new ApiRequestError(body?.error?.message ?? 'request failed', {
+      status: response.status,
+      code: body?.error?.code,
+    })
   }
   if (response.status === 204) {
     return undefined as T
@@ -82,6 +100,15 @@ export function previewTrend(input: TrendPreviewRequest): Promise<TrendSignal> {
 /** Read one automatic, source-labelled signal snapshot from the local Rust API. */
 export function fetchMarketSignalInput(symbol: string): Promise<MarketSignalInput> {
   return request(`/signals/market-input/${encodeURIComponent(symbol)}`)
+}
+
+/** Ask the configured Qwen pipeline for a source-backed current market-sentiment explanation. */
+export async function fetchMarketSentiment(): Promise<MarketSentimentEvidence> {
+  const response = await request<Partial<MarketSentimentEvidence>>('/market-sentiment/preview', { method: 'POST' })
+  if (typeof response.rationale !== 'string' || !Array.isArray(response.warnings) || !Array.isArray(response.headlines)) {
+    throw new ApiRequestError('本机 Rust 服务仍在运行旧版 Qwen 响应契约。请重启 indexlink-server 后重试。', { status: 426 })
+  }
+  return response as MarketSentimentEvidence
 }
 
 /** Read funds, positions, and recent orders from the configured local paper account. */
