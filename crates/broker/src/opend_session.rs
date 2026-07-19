@@ -1210,7 +1210,7 @@ mod tests {
         assert_eq!(positions[0].symbol, "VOO");
         assert_eq!(orders[0].state, PaperOrderState::Filled);
         assert!(funds_from_payload(
-            &json!({
+            json!({
                 "header": {"trdEnv": 0, "accID": "different-account", "trdMarket": 2},
                 "funds": {"usCash": 1, "usNetCashPower": 1, "totalAssets": 1, "marketVal": 0}
             })

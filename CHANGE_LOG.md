@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 2026-07-19 19:27 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` CI Clippy 修复。
+- 涉及文件：
+  - `crates/broker/src/opend_session.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 移除 OpenD 模拟账户回执账户不匹配测试夹具中的冗余借用，兼容 GitHub Actions 当前 stable Rust 的 `clippy::needless_borrow` 检查。
+  - 不改变 OpenD 请求、回执校验、订单行为或对外 API 契约。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` 通过。
+  - `cargo test -p broker --locked` 通过（38 tests）。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `git diff --check` 通过。
+
 ### 2026-07-19 19:18 AEST
 
 - 执行模型：GPT-5。
