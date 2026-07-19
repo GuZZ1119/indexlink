@@ -25,7 +25,7 @@ i18n
     },
   })
 
-/** 归一化为应用支持的语言，用于选择 mock 数据中的本地化文案。 */
+/** Normalize a browser language to one of the application's supported locales. */
 export function appLanguage(lang: string): AppLanguage {
   return lang.startsWith('zh') ? 'zh' : 'en'
 }

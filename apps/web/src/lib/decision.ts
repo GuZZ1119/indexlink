@@ -4,7 +4,7 @@ import type { DecisionAction } from '@/api/types'
 export const actionBadgeClass: Record<DecisionAction, string> = {
   overweight: 'border-transparent bg-action-overweight-bg text-action-overweight-fg',
   standard: 'border-transparent bg-action-standard-bg text-action-standard-fg',
-  delay: 'border-transparent bg-action-delay-bg text-action-delay-fg',
+  tactical_delay: 'border-transparent bg-action-delay-bg text-action-delay-fg',
   underweight: 'border-transparent bg-action-underweight-bg text-action-underweight-fg',
   skip: 'border-transparent bg-action-skip-bg text-action-skip-fg',
 }

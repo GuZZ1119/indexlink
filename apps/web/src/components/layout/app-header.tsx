@@ -14,11 +14,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 
-const mockAccount = {
-  name: 'James',
-  email: 'james@indexlink.dev',
-}
-
 export function AppHeader() {
   const { t, i18n } = useTranslation()
 
@@ -55,17 +50,17 @@ export function AppHeader() {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="gap-2 px-2">
               <Avatar className="size-7">
-                <AvatarFallback className="text-xs">J</AvatarFallback>
+                <AvatarFallback className="text-xs">IL</AvatarFallback>
               </Avatar>
-              <span className="hidden text-sm sm:inline">{mockAccount.name}</span>
+              <span className="hidden text-sm sm:inline">{t('live.localDemo')}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
             <DropdownMenuLabel>
               <div className="flex flex-col">
-                <span>{mockAccount.name}</span>
+                <span>{t('live.localDemo')}</span>
                 <span className="text-xs font-normal text-muted-foreground">
-                  {mockAccount.email}
+                  {t('live.localOnly')}
                 </span>
               </div>
             </DropdownMenuLabel>

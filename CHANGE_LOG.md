@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### 2026-07-19 00:58 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 前端去 Mock 化 / 本机 API 联调。
+- 涉及文件：
+  - `apps/web/src/api/queries.ts`
+  - `apps/web/src/api/types.ts`
+  - `apps/web/src/api/mock.ts`
+  - `apps/web/src/pages/dashboard/**`
+  - `apps/web/src/pages/plans/index.tsx`
+  - `apps/web/src/pages/decisions/index.tsx`
+  - `apps/web/src/components/layout/{app-header,news-ticker}.tsx`
+  - `apps/web/src/{stores/ui.ts,lib/decision.ts,i18n/**}`
+  - `apps/web/vite.config.ts`
+  - `readme.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 移除浏览器端的 mock 数据源、假收益/估值/新闻/风险卡片及其 Dashboard 子组件；在没有回测或行情持仓 API 的情况下，不再展示或暗示虚构收益。
+  - React Query 现在直接调用本机 Rust API：`GET/POST /investment-plans`、两个 `/signals/*/preview`、`POST /investment-plans/:id/decision-preview`、`GET /investment-plans/:id/decisions` 与 `GET /decisions/:id`；统一读取后端安全错误 envelope。
+  - Dashboard 成为真实的决策工作台：调用方输入 CAPE、ERP、MA200 距离、RSI、VIX 历史及当前值，先获得 70%/20% 信号，再提交 Decision Preview；页面展示服务端摘要、双桶金额、Qwen 或降级状态及可选 paper-order 回执。Paper order 默认关闭，且只使用 market buy / paper 路径。
+  - Plans 页面可创建、列出并选择真实计划；Decisions 页面可选择已有计划并读取 SQLite 持久化的历史与审计快照，预览成功后会失效刷新当前计划的历史缓存。
+  - 开发服务器为上述 API 前缀代理至 `127.0.0.1:8080`；README 补充本机 Web 启动方式，以及跨域部署时的 `VITE_API_BASE_URL` / `CORS_ALLOWED_ORIGINS` 配置说明。中英文界面新增实时流程的文案。
+  - 本次仅修改你的 Fork 本地 `main`；不会向 Jame `upstream` 推送、修改其 `main`、分支或 PR。
+- 验证：
+  - `pnpm --dir apps/web install --frozen-lockfile` 通过。
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示首个 JS bundle 超过 500 kB，未阻断构建。
+  - `cargo test -p core-domain --locked` 通过（13 tests）。
+  - `git diff --check` 通过；已确认 `apps/web/src` 不再引用 mock API 模块。
+
 ### 2026-07-19 00:42 AEST
 
 - 执行模型：GPT-5。

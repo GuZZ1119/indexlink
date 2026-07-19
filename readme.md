@@ -268,6 +268,13 @@ indexlink/
    curl http://localhost:8080/ready
    ```
 
+4. 启动 Web 演示界面。开发服务器会把计划、信号、决策与决策历史请求代理到本机的 Rust 服务；若将前端部署到其他来源，请设置 `VITE_API_BASE_URL`，并将该来源加入 `CORS_ALLOWED_ORIGINS`：
+
+   ```bash
+   pnpm --dir apps/web install --frozen-lockfile
+   pnpm --dir apps/web dev
+   ```
+
 `.env` 仅供本地使用且已被 Git 忽略。主要环境变量如下：
 
 | 变量 | 默认示例 | 说明 |
@@ -276,7 +283,7 @@ indexlink/
 | `APP_PORT` | `8080` | HTTP 监听端口 |
 | `RUST_LOG` | `info,indexlink_server=debug` | 日志过滤规则 |
 | `DATABASE_URL` | `sqlite://indexlink.db?mode=rwc` | SQLite 文件地址；未设置时使用该本地默认值 |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | 逗号分隔的允许来源 |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | 逗号分隔的允许来源 |
 | `DATABASE_MAX_CONNECTIONS` | `10` | 连接池上限 |
 | `DATABASE_CONNECT_TIMEOUT_SECONDS` | `5` | 启动连接超时秒数 |
 
