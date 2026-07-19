@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### 2026-07-19 17:00 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 本地演示数据保护。
+- 涉及文件：
+  - `.gitignore`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 忽略本机 pnpm 缓存与默认 SQLite 数据库的主文件、WAL 和 SHM 文件，防止演示计划、决策审计记录或本地构建缓存被误提交。
+  - 不删除、不迁移或上传任何已有本地数据；仅在你的 Fork 本地 `main` 修改，不向 Jame `upstream` 推送或修改任何状态。
+- 验证：
+  - `git check-ignore` 确认本机 pnpm 缓存和 SQLite 文件均受忽略规则保护。
+  - `git diff --check` 通过。
+
 ### 2026-07-19 16:55 AEST
 
 - 执行模型：GPT-5。

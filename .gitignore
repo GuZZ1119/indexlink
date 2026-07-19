@@ -1,5 +1,9 @@
 target/
 .env
+.pnpm-store/
+indexlink.db
+indexlink.db-shm
+indexlink.db-wal
 .DS_Store
 .idea/
 .vscode/
