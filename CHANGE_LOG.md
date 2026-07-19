@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 2026-07-19 23:55 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：前端 Qwen 降级状态空值修复。
+- 涉及文件：
+  - `apps/web/src/api/types.ts`
+  - `apps/web/src/pages/{dashboard,decisions}/index.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将 API 契约中的 `sentiment_score` 表达为 `number | null | undefined`：历史记录可缺省，当前 Qwen 不可用时 Rust 会序列化为 `null`。
+  - 所有 Dashboard 与决策存证展示改为仅在值确为数字时调用 `toFixed()`；`null` 与缺省均显示“AI 暂不可用 / 已降级”，不再触发 React 错误页。
+- 验证：
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+
 ### 2026-07-19 23:45 AEST
 
 - 执行模型：GPT-5。

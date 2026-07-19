@@ -180,7 +180,7 @@ function AuditOverview({ record }: { record: DecisionRecord }) {
       <AuditFact label="综合决策" value={`${decision.action} · ${(decision.multiplier * 100).toFixed(0)}%`} />
       <AuditFact label="70% 基本面" value={decision.fundamental_score.toFixed(2)} />
       <AuditFact label="20% 趋势" value={decision.trend_score.toFixed(2)} />
-      <AuditFact label="10% AI 情绪" value={decision.sentiment_score === undefined ? '不可用，已降级' : decision.sentiment_score.toFixed(2)} />
+      <AuditFact label="10% AI 情绪" value={typeof decision.sentiment_score === 'number' ? decision.sentiment_score.toFixed(2) : '不可用，已降级'} />
       <AuditFact label="权重模式" value={decision.weight_mode} />
     </section>
   )

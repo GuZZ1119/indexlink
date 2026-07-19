@@ -200,7 +200,8 @@ export interface DecisionResult {
   weight_mode: 'normal' | 'sentiment_unavailable'
   fundamental_score: number
   trend_score: number
-  sentiment_score?: number
+  /** Absent from legacy records and `null` when Qwen is temporarily unavailable. */
+  sentiment_score?: number | null
 }
 
 /** One RSS source headline retained with a Qwen market-sentiment result. */

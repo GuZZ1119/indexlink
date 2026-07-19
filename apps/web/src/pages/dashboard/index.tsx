@@ -570,9 +570,9 @@ function DashboardOverview({
             <ScoreCard
               title={t('dashboard.scores.sentiment')}
               weight={10}
-              value={decision?.decision.sentiment_score === undefined
-                ? null
-                : toScore(decision.decision.sentiment_score)}
+              value={typeof decision?.decision.sentiment_score === 'number'
+                ? toScore(decision.decision.sentiment_score)
+                : null}
             />
             <ScoreCard
               title={t('dashboard.scores.composite')}
@@ -886,9 +886,9 @@ function DecisionExplanation({
         />
         <ExplanationItem
           label={t('dashboard.decisionExplanation.ai')}
-          value={sentiment === undefined
-            ? t('dashboard.decisionExplanation.aiUnavailable')
-            : t('dashboard.decisionExplanation.aiAvailable', { score: sentiment.toFixed(2) })}
+          value={typeof sentiment === 'number'
+            ? t('dashboard.decisionExplanation.aiAvailable', { score: sentiment.toFixed(2) })
+            : t('dashboard.decisionExplanation.aiUnavailable')}
         />
       </div>
       <p className="leading-relaxed text-muted-foreground">
@@ -928,7 +928,7 @@ function DecisionExplanation({
           </div>
         </div>
       )}
-      {sentiment !== undefined && !marketSentiment && (
+      {typeof sentiment === 'number' && !marketSentiment && (
         <p className="text-xs text-muted-foreground">{t('dashboard.decisionExplanation.aiLegacySource')}</p>
       )}
     </div>
@@ -1050,7 +1050,7 @@ function RiskNotices({ decision }: { decision: OverviewDecision }) {
       ? [t('dashboard.risk.reduced')]
       : []),
     t('dashboard.risk.percentile'),
-    ...(decision.decision.sentiment_score === undefined ? [t('dashboard.risk.sentimentUnavailable')] : []),
+    ...(typeof decision.decision.sentiment_score !== 'number' ? [t('dashboard.risk.sentimentUnavailable')] : []),
   ]
   return (
     <ul className="space-y-2">
@@ -1147,9 +1147,9 @@ function DecisionResultCard({
           <Metric
             label={t('live.decision.qwenSentiment')}
             value={
-              result.decision.sentiment_score === undefined
-                ? t('live.decision.fallback')
-                : `${result.decision.sentiment_score.toFixed(2)} · ${t('live.decision.qwenAvailable')}`
+              typeof result.decision.sentiment_score === 'number'
+                ? `${result.decision.sentiment_score.toFixed(2)} · ${t('live.decision.qwenAvailable')}`
+                : t('live.decision.fallback')
             }
           />
         </div>
