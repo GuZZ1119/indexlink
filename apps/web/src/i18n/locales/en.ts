@@ -24,6 +24,15 @@ export default {
     skip: 'Skip',
   },
   dashboard: {
+    overview: {
+      title: 'Investment Overview',
+      description: 'Shows plan, decision, and market snapshots returned by the local API; it never substitutes illustrative returns for real fills.',
+      selectPlan: 'Select a plan to show the overview',
+      latestScore: 'Latest decision · {{date}}',
+      awaitingDecision: 'No decision preview has run yet',
+      schedule: 'Schedule',
+      monthlyDay: 'Day {{day}} each month',
+    },
     valuation: {
       title: 'Current Market Valuation',
       composite: 'Composite valuation percentile',
@@ -67,9 +76,14 @@ export default {
       multiplier: 'Multiplier',
       executionPrice: 'DCA price',
       viewDetail: 'View detail',
+      empty: 'No persisted decision yet. It will appear here after refreshing market data and running a decision.',
     },
     risk: {
       title: 'Risk Notices',
+      empty: 'No decision yet, so no data-backed risk notice can be generated.',
+      reduced: 'The system reduced or delayed this execution. Do not manually add an amount beyond the plan.',
+      percentile: 'Percentiles measure a position in historical distributions, not future value; historical distributions can fail in extreme regimes.',
+      sentimentUnavailable: 'AI sentiment was unavailable, so the decision used fallback weights. Review it with the other signals.',
     },
     returns: {
       total: 'Total Return',
@@ -89,6 +103,18 @@ export default {
         y3: '3Y',
         all: 'All',
       },
+    },
+    unavailable: {
+      awaitingFill: 'Awaiting first fill / no data',
+    },
+    emptyPerformance: {
+      title: 'Awaiting a verifiable performance series',
+      description: 'OpenD order status, fills, positions, and a local cost ledger are required before comparing real plain-DCA and adaptive-DCA performance.',
+    },
+    marketSnapshot: {
+      title: 'Current Market-input Snapshot',
+      description: 'Shows only raw indicators returned by this automatic refresh; every field remains editable and reviewable below.',
+      empty: 'No automatic refresh yet. Select a plan and use Refresh market signals to populate real inputs.',
     },
   },
   live: {
@@ -112,7 +138,7 @@ export default {
       opportunityRatio: 'Opportunity ratio',
       createPlanHere: 'Create a plan on this demo page',
       marketRefreshTitle: 'Refresh market signals',
-      marketRefreshDescription: 'Refreshes from local OpenD, public Shiller CAPE, and FRED. It never submits an order; review every populated value.',
+      marketRefreshDescription: 'Refreshes from local OpenD, public Shiller CAPE, Cboe, and U.S. Treasury data. It never submits an order; review every populated value.',
       marketRefresh: 'Refresh current-plan data',
       marketRefreshing: 'Refreshing…',
       marketRefreshed: 'Automatically populated {{symbol}} market inputs; technical data is current through {{date}}.',

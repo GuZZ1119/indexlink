@@ -11,9 +11,17 @@ import {
   previewFundamental,
   previewTrend,
   useCreatePlan,
+  useDecisionRecords,
   usePlans,
 } from '@/api/queries'
-import type { CreateInvestmentPlanRequest, DecisionPreviewResponse, MarketSignalInput } from '@/api/types'
+import type {
+  CreateInvestmentPlanRequest,
+  DecisionRecord,
+  DecisionResult,
+  DecisionPreviewResponse,
+  InvestmentPlan,
+  MarketSignalInput,
+} from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -33,6 +41,14 @@ type SignalFields = {
   rsiCurrent: string
   vixHistory: string
   vixCurrent: string
+}
+
+type OverviewDecision = {
+  createdAt: string
+  decision: DecisionResult
+  executionStatus: 'due' | 'waiting' | 'inactive'
+  plannedContribution?: string
+  summary: string
 }
 
 const emptySignals: SignalFields = {
@@ -176,6 +192,7 @@ export default function DashboardPage() {
     () => plans.find((plan) => plan.id === selectedPlanId) ?? null,
     [plans, selectedPlanId],
   )
+  const { data: decisionRecords = [], error: decisionRecordsError } = useDecisionRecords(selectedPlan?.id ?? null)
 
   const decisionMutation = useMutation({
     mutationFn: async () => {
@@ -263,11 +280,25 @@ export default function DashboardPage() {
       setImportError(error instanceof Error ? error.message : 'signal import failed')
     }
   }
-  const error = marketRefreshMutation.error ?? decisionMutation.error ?? createPlan.error ?? plansError
+  const error = marketRefreshMutation.error
+    ?? decisionMutation.error
+    ?? createPlan.error
+    ?? plansError
+    ?? decisionRecordsError
   const hasSignalInput = Object.values(signals).every((value) => value.trim().length > 0)
+  const overviewDecision = useMemo(
+    () => latestOverviewDecision(result, decisionRecords[0]),
+    [decisionRecords, result],
+  )
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:p-6">
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 p-4 lg:p-6">
+      <DashboardOverview
+        plan={selectedPlan}
+        decision={overviewDecision}
+        marketRefresh={marketRefresh}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -473,6 +504,312 @@ export default function DashboardPage() {
       {result && <DecisionResultCard result={result} paperOrderRequested={submitPaperOrder} />}
     </div>
   )
+}
+
+/** Prefer the just-returned preview, then fall back to the latest persisted audit record. */
+function latestOverviewDecision(
+  preview: DecisionPreviewResponse | null,
+  record: DecisionRecord | undefined,
+): OverviewDecision | null {
+  if (preview) {
+    return {
+      createdAt: new Date().toISOString(),
+      decision: preview.decision,
+      executionStatus: preview.execution.status,
+      plannedContribution: preview.execution.planned_contribution,
+      summary: preview.summary,
+    }
+  }
+  if (!record) {
+    return null
+  }
+  return {
+    createdAt: record.created_at,
+    decision: record.decision_snapshot,
+    executionStatus: record.execution_status,
+    plannedContribution: record.planned_contribution,
+    summary: record.summary,
+  }
+}
+
+/** Render the restored dashboard layout with only source-backed decision data. */
+function DashboardOverview({
+  plan,
+  decision,
+  marketRefresh,
+}: {
+  plan: InvestmentPlan | null
+  decision: OverviewDecision | null
+  marketRefresh: MarketSignalInput | null
+}) {
+  const { t } = useTranslation()
+  const currency = plan?.currency ?? 'USD'
+  const signalValues: Array<[string, number]> = marketRefresh
+    ? [
+        [t('dashboard.valuation.metrics.cape'), marketRefresh.fundamental.cape_current],
+        [t('dashboard.valuation.metrics.erp'), marketRefresh.fundamental.erp_current],
+        [t('dashboard.valuation.metrics.ma200'), marketRefresh.trend.ma_distance_current],
+        [t('dashboard.valuation.metrics.rsi'), marketRefresh.trend.rsi_current],
+        [t('dashboard.valuation.metrics.vix'), marketRefresh.trend.vix_current],
+      ]
+    : []
+  const decisionScore = decision ? toScore(decision.decision.final_score) : null
+  const action = decision?.decision.action
+
+  return (
+    <section className="space-y-4" aria-label={t('dashboard.overview.title')}>
+      <Card className="border-primary/30 bg-linear-to-br from-primary/8 via-card to-card shadow-sm">
+        <CardHeader className="gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <BarChart3 className="size-5 text-primary" />
+              {t('dashboard.overview.title')}
+            </CardTitle>
+            <CardDescription>{t('dashboard.overview.description')}</CardDescription>
+          </div>
+          {plan ? (
+            <div className="rounded-lg border bg-background/80 px-3 py-2 text-sm">
+              <span className="font-semibold">{plan.symbol}</span>
+              <span className="ml-2 text-muted-foreground">{plan.name}</span>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground">
+              {t('dashboard.overview.selectPlan')}
+            </div>
+          )}
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div>
+            <div className="text-4xl font-semibold tracking-tight">
+              {decisionScore === null ? '—' : `${decisionScore} / 100`}
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {decision
+                ? t('dashboard.overview.latestScore', { date: formatLocalDate(decision.createdAt) })
+                : t('dashboard.overview.awaitingDecision')}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-4">
+            <OverviewFact
+              label={t('dashboard.valuation.suggestedAction')}
+              value={action ? <Badge className={actionBadgeClass[action]}>{t(`action.${action}`)}</Badge> : '—'}
+            />
+            <OverviewFact
+              label={t('dashboard.valuation.multiplier')}
+              value={decision ? formatMultiplier(decision.decision.multiplier) : '—'}
+            />
+            <OverviewFact
+              label={t('dashboard.valuation.expectedAmount')}
+              value={decision?.plannedContribution
+                ? formatCurrency(Number(decision.plannedContribution), currency)
+                : '—'}
+            />
+            <OverviewFact
+              label={t('dashboard.overview.schedule')}
+              value={plan ? t('dashboard.overview.monthlyDay', { day: plan.schedule_day }) : '—'}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <ScoreCard
+              title={t('dashboard.scores.fundamental')}
+              weight={70}
+              value={decision ? toScore(decision.decision.fundamental_score) : null}
+            />
+            <ScoreCard
+              title={t('dashboard.scores.trend')}
+              weight={20}
+              value={decision ? toScore(decision.decision.trend_score) : null}
+            />
+            <ScoreCard
+              title={t('dashboard.scores.sentiment')}
+              weight={10}
+              value={decision?.decision.sentiment_score === undefined
+                ? null
+                : toScore(decision.decision.sentiment_score)}
+            />
+            <ScoreCard
+              title={t('dashboard.scores.composite')}
+              weight={null}
+              value={decision ? toScore(decision.decision.final_score) : null}
+              emphasize
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <UnavailableMetric label={t('dashboard.returns.total')} />
+            <UnavailableMetric label={t('dashboard.returns.position')} />
+            <UnavailableMetric label={t('dashboard.returns.realized')} />
+            <UnavailableMetric label={t('dashboard.returns.invested')} />
+          </div>
+
+          <Card className="min-h-80">
+            <CardHeader>
+              <CardTitle>{t('dashboard.chart.title')}</CardTitle>
+              <CardDescription>{t('dashboard.chart.subtitle')}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex min-h-56 items-center justify-center rounded-lg border border-dashed bg-muted/20">
+              <div className="max-w-md space-y-2 px-6 text-center">
+                <p className="font-medium">{t('dashboard.emptyPerformance.title')}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {t('dashboard.emptyPerformance.description')}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('dashboard.latest.title')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {decision ? (
+                <>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-semibold">{plan?.symbol ?? '—'}</span>
+                    {action && <Badge className={actionBadgeClass[action]}>{t(`action.${action}`)}</Badge>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <OverviewFact label={t('dashboard.latest.amount')} value={decision.plannedContribution
+                      ? formatCurrency(Number(decision.plannedContribution), currency)
+                      : '—'} />
+                    <OverviewFact label={t('dashboard.latest.multiplier')} value={formatMultiplier(decision.decision.multiplier)} />
+                  </div>
+                  <p className="border-t pt-3 text-sm leading-relaxed text-muted-foreground">{decision.summary}</p>
+                </>
+              ) : (
+                <EmptyState text={t('dashboard.latest.empty')} />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('dashboard.risk.title')}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {decision ? <RiskNotices decision={decision} /> : <EmptyState text={t('dashboard.risk.empty')} />}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <Card className="border-dashed bg-muted/20">
+        <CardHeader>
+          <CardTitle>{t('dashboard.marketSnapshot.title')}</CardTitle>
+          <CardDescription>{t('dashboard.marketSnapshot.description')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {marketRefresh ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              {signalValues.map(([label, value]) => (
+                <OverviewFact key={label} label={label} value={Number(value).toFixed(2)} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState text={t('dashboard.marketSnapshot.empty')} />
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  )
+}
+
+/** Render a small label-value fact without claiming unavailable data is zero. */
+function OverviewFact({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="mt-1 min-h-5 text-sm font-semibold">{value}</div>
+    </div>
+  )
+}
+
+/** Render a 70/20/10 decision score sourced from the latest decision record. */
+function ScoreCard({
+  title,
+  weight,
+  value,
+  emphasize = false,
+}: {
+  title: string
+  weight: number | null
+  value: number | null
+  emphasize?: boolean
+}) {
+  const { t } = useTranslation()
+  const progress = value ?? 0
+  return (
+    <Card className={emphasize ? 'border-primary/40 bg-primary/5' : undefined} size="sm">
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle>{title}</CardTitle>
+        {weight !== null && <CardDescription>{t('dashboard.scores.weight', { value: weight })}</CardDescription>}
+      </CardHeader>
+      <CardContent>
+        <div className="text-3xl font-semibold">{value === null ? '—' : value}<span className="ml-1 text-base font-normal text-muted-foreground">/ 100</span></div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-foreground transition-all" style={{ width: `${progress}%` }} />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Render a financial metric that awaits real fills and portfolio accounting. */
+function UnavailableMetric({ label }: { label: string }) {
+  const { t } = useTranslation()
+  return (
+    <Card size="sm">
+      <CardHeader><CardTitle>{label}</CardTitle></CardHeader>
+      <CardContent>
+        <div className="text-3xl font-semibold">—</div>
+        <p className="mt-2 text-sm text-muted-foreground">{t('dashboard.unavailable.awaitingFill')}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Render a clear empty-state instead of silently substituting fictional data. */
+function EmptyState({ text }: { text: string }) {
+  return <p className="rounded-lg border border-dashed bg-muted/20 p-3 text-sm text-muted-foreground">{text}</p>
+}
+
+/** Derive safe, user-facing notices only from the latest server decision. */
+function RiskNotices({ decision }: { decision: OverviewDecision }) {
+  const { t } = useTranslation()
+  const notices = [
+    ...(decision.decision.action === 'underweight' || decision.decision.action === 'skip' || decision.decision.action === 'tactical_delay'
+      ? [t('dashboard.risk.reduced')]
+      : []),
+    t('dashboard.risk.percentile'),
+    ...(decision.decision.sentiment_score === undefined ? [t('dashboard.risk.sentimentUnavailable')] : []),
+  ]
+  return (
+    <ul className="space-y-2">
+      {notices.map((notice) => (
+        <li key={notice} className="rounded-lg border bg-muted/20 p-3 text-sm leading-relaxed text-muted-foreground">
+          {notice}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** Convert a bounded engine score into the dashboard's 0–100 presentation. */
+function toScore(value: number): number {
+  return Math.round(value * 100)
+}
+
+/** Format a persisted UTC timestamp for a local overview label. */
+function formatLocalDate(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString()
 }
 
 /** Render the five observable stages of the local demonstration workflow. */

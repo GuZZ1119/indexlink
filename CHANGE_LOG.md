@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 2026-07-19 18:18 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` Dashboard 视觉布局恢复 / 真实数据联调。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `apps/web/src/i18n/locales/{zh,en}.ts`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 恢复 Dashboard 的概览式视觉层级：顶部计划/最近决策概览、70/20/10 分数卡、收益区域、最新决策、风险提示与市场输入快照；保留现有的真实计划创建、自动拉取、信号编辑、Decision Preview 和 paper-order 操作工作台。
+  - 计划、最近持久化 decision record、最新决策分数、动作、倍率、计划金额、风险提示及本次自动拉取的原始市场指标均读取现有本机 Rust API 返回值；不恢复此前的固定 SPY、收益、新闻或伪随机曲线。
+  - 收益、持仓收益、已实现收益、累计投入和收益对比图在尚无成交/持仓/成本账本时统一明确显示“等待首次成交 / 暂无数据”，不将 Mock 数值伪装为真实回报。
+  - 明确剩余缺口：OpenD 订单状态、成交、现金与持仓读取；本地交易成本账本；基于真实成交及历史价格的普通定投/自适应定投回放曲线。自动市场输入仍只在当前浏览器会话显示；页面重载后需要再次拉取或从后续持久化快照读取。
+  - 同步修正自动市场信号说明：数据源为本机 OpenD、公开 Shiller CAPE、Cboe 和美国财政部，不再误写为 FRED。
+- 验证：
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示首个 JS bundle 超过 500 kB，未阻断构建。
+  - `git diff --check` 通过。
+
 ### 2026-07-19 17:52 AEST
 
 - 执行模型：GPT-5。

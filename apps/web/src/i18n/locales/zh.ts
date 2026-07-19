@@ -24,6 +24,15 @@ export default {
     skip: '跳过',
   },
   dashboard: {
+    overview: {
+      title: '投资概览',
+      description: '展示本地 API 已返回的计划、决策与市场快照；不会用示意收益替代真实成交数据。',
+      selectPlan: '选择计划后显示概览',
+      latestScore: '最近一次决策 · {{date}}',
+      awaitingDecision: '尚未运行决策预览',
+      schedule: '定投日',
+      monthlyDay: '每月 {{day}} 日',
+    },
     valuation: {
       title: '当前市场估值',
       composite: '综合估值分位',
@@ -67,9 +76,14 @@ export default {
       multiplier: '倍率',
       executionPrice: '本期定投价格',
       viewDetail: '查看详情',
+      empty: '暂无已持久化决策。完成自动拉取并运行决策后会在这里显示。',
     },
     risk: {
       title: '风险提示',
+      empty: '尚无决策，暂不能生成基于数据的风险提示。',
+      reduced: '系统已根据本次决策降低或延后执行；请勿手动追加超出计划的金额。',
+      percentile: '分位只测量价格在历史分布中的位置，不代表对未来价值的判断；极端行情下历史分布可能失效。',
+      sentimentUnavailable: 'AI 情绪数据不可用，本次决策已使用降级权重；请结合其他信号审阅。',
     },
     returns: {
       total: '总收益',
@@ -89,6 +103,18 @@ export default {
         y3: '近 3 年',
         all: '全部',
       },
+    },
+    unavailable: {
+      awaitingFill: '等待首次成交 / 暂无数据',
+    },
+    emptyPerformance: {
+      title: '等待可核验的收益轨迹',
+      description: '需要 OpenD 订单状态、成交、持仓与本地成本账本后，才能计算普通定投与自适应定投的真实对比。',
+    },
+    marketSnapshot: {
+      title: '当前市场输入快照',
+      description: '仅显示本次“自动拉取市场信号”返回的原始指标；刷新后仍可在下方编辑和核对。',
+      empty: '尚未自动拉取。选择计划后点击“自动拉取市场信号”以填入真实市场输入。',
     },
   },
   live: {
@@ -112,7 +138,7 @@ export default {
       opportunityRatio: '机会桶比例',
       createPlanHere: '在此演示页创建计划',
       marketRefreshTitle: '自动拉取市场信号',
-      marketRefreshDescription: '从本机 OpenD、公开 Shiller CAPE 与 FRED 刷新数据；不会下单，刷新后仍可逐项核对。',
+      marketRefreshDescription: '从本机 OpenD、公开 Shiller CAPE、Cboe 与美国财政部数据刷新；不会下单，刷新后仍可逐项核对。',
       marketRefresh: '刷新 VOO / 当前计划数据',
       marketRefreshing: '正在拉取…',
       marketRefreshed: '已自动填入 {{symbol}} 的市场快照；技术数据截至 {{date}}。',
