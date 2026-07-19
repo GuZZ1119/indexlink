@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 2026-07-20 00:05 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Dashboard 模块层级与操作入口视觉修正。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将“刷新真实轨迹”“拉取走势”“运行一年回放”迁至各模块内容区并水平居中；走势周期选择与拉取操作作为同一居中组展示。
+  - 为账户账本、真实轨迹、历史走势与一年回放建立由白/浅灰到天蓝、浅蓝、靛蓝的渐进色层，增强模块边界但不改变任何数据语义。
+  - 复核本机最新 server：`GET /market-data/holdings?period=1y` 与 `GET /paper-performance/historical-backtest` 均返回 `200`；此前“路由未提供”提示来自旧 server/旧页面状态，刷新后可直接重试。
+- 验证：
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+
 ### 2026-07-19 23:55 AEST
 
 - 执行模型：GPT-5。

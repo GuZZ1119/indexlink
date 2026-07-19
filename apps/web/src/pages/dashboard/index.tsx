@@ -683,7 +683,7 @@ function DashboardOverview({
         </CardContent>
       </Card>
 
-      <Card className="border-primary/30">
+      <Card className="border-slate-200 bg-white/95">
         <CardHeader>
           <div>
             <CardTitle>{t('dashboard.portfolio.title')}</CardTitle>
@@ -709,28 +709,34 @@ function DashboardOverview({
         onSetOpeningBalance={onSetOpeningBalance}
       />
 
-      <Card>
-        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="border-sky-200/80 bg-sky-50/45">
+        <CardHeader>
           <div><CardTitle>真实组合收益轨迹</CardTitle><CardDescription>从本机 SQLite 的已观察模拟成交开始，显示每个定投标的与总和；刷新只读 OpenD。</CardDescription></div>
-          <Button variant="outline" disabled={actualRefreshing} onClick={onRefreshActual}><RefreshCw className={cn('size-4', actualRefreshing && 'animate-spin')} />刷新真实轨迹</Button>
         </CardHeader>
-        <CardContent>{actualPerformance?.total_points.length ? <ActualPerformanceChart performance={actualPerformance} /> : <EmptyState text="等待首次成交 / 暂无数据。先为定投标的设置起始资金并完成模拟成交，再刷新真实轨迹。" />}</CardContent>
+        <CardContent className="space-y-4">
+          <div className="flex justify-center"><Button className="w-full max-w-md" variant="outline" disabled={actualRefreshing} onClick={onRefreshActual}><RefreshCw className={cn('size-4', actualRefreshing && 'animate-spin')} />刷新真实轨迹</Button></div>
+          {actualPerformance?.total_points.length ? <ActualPerformanceChart performance={actualPerformance} /> : <EmptyState text="等待首次成交 / 暂无数据。先为定投标的设置起始资金并完成模拟成交，再刷新真实轨迹。" />}
+        </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="border-blue-200/80 bg-blue-50/45">
+        <CardHeader>
           <div><CardTitle>定投标的历史走势与成交点</CardTitle><CardDescription>实际 OpenD 日线。多标的会归一化到 100，便于在同一张图比较；圆点仅代表本地已确认的模拟买卖成交。</CardDescription></div>
-          <div className="flex flex-wrap items-center gap-2"><select className="h-9 rounded-md border bg-background px-2 text-sm" value={pricePeriod} onChange={(event) => onPricePeriodChange(event.target.value as '3m' | '6m' | '1y' | '3y')}><option value="3m">近 3 个月</option><option value="6m">近 6 个月</option><option value="1y">近 1 年</option><option value="3y">近 3 年</option></select><Button variant="outline" disabled={priceRefreshing} onClick={onRefreshPrices}><RefreshCw className={cn('size-4', priceRefreshing && 'animate-spin')} />拉取走势</Button></div>
         </CardHeader>
-        <CardContent>{priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text={priceHistoryError ? requestErrorMessage(priceHistoryError, false) : '选择定投标的后，点击“拉取走势”。不会生成虚构的历史价格。'} />}</CardContent>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap justify-center gap-2"><select className="h-9 rounded-md border bg-background px-2 text-sm" value={pricePeriod} onChange={(event) => onPricePeriodChange(event.target.value as '3m' | '6m' | '1y' | '3y')}><option value="3m">近 3 个月</option><option value="6m">近 6 个月</option><option value="1y">近 1 年</option><option value="3y">近 3 年</option></select><Button className="min-w-32" variant="outline" disabled={priceRefreshing} onClick={onRefreshPrices}><RefreshCw className={cn('size-4', priceRefreshing && 'animate-spin')} />拉取走势</Button></div>
+          {priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text={priceHistoryError ? requestErrorMessage(priceHistoryError, false) : '选择定投标的后，点击“拉取走势”。不会生成虚构的历史价格。'} />}
+        </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="border-indigo-200/80 bg-indigo-50/45">
+        <CardHeader>
           <div><CardTitle>一年历史模拟对比</CardTitle><CardDescription>将所有启用的定投标的聚合为两条曲线。该回放使用真实日线，不把历史 AI 或宏观信号伪造成已知事实。</CardDescription></div>
-          <Button variant="outline" disabled={historicalRefreshing} onClick={onRefreshHistorical}><RefreshCw className={cn('size-4', historicalRefreshing && 'animate-spin')} />运行一年回放</Button>
         </CardHeader>
-        <CardContent>{historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text={historicalError ? requestErrorMessage(historicalError, false) : '需要至少一只启用的定投标的以及足够的 OpenD 历史日线，才能运行一年历史回放。'} />}</CardContent>
+        <CardContent className="space-y-4">
+          <div className="flex justify-center"><Button className="w-full max-w-md" variant="outline" disabled={historicalRefreshing} onClick={onRefreshHistorical}><RefreshCw className={cn('size-4', historicalRefreshing && 'animate-spin')} />运行一年回放</Button></div>
+          {historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text={historicalError ? requestErrorMessage(historicalError, false) : '需要至少一只启用的定投标的以及足够的 OpenD 历史日线，才能运行一年历史回放。'} />}
+        </CardContent>
       </Card>
     </section>
   )
@@ -826,7 +832,7 @@ function PaperPerformanceDetails({ performance, refreshing, currency, onRefresh,
   const { t } = useTranslation()
   const [amount, setAmount] = useState('')
   return (
-    <Card className="border-primary/30">
+    <Card className="border-slate-200 bg-slate-50/55">
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><CardTitle>{t('dashboard.performance.title')}</CardTitle><CardDescription>{t('dashboard.performance.description')}</CardDescription></div>
       </CardHeader>
