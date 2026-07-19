@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### 2026-07-20 01:53 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：README 双语问题引入与 ECS 架构关系补充。
+- 涉及文件：
+  - `README.md`
+  - `readme.en.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 在中英文 README 开头增加有限预算、执行纪律与可核查决策依据的用户痛点，明确系统不承诺预测市场。
+  - 在中英文 Layered Overview 中增加 Web/API 客户端、Alibaba Cloud ECS（Docker Compose + SQLite volume）和 Model Studio DashScope/Qwen 的运行时关系；保留既有分层与决策边界。
+  - 将 Rust 后端描述更新为支持本机或 ECS Docker Compose 运行，保持 SQLite 本地持久化模型。
+- 验证：
+  - `git diff --check` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+
 ### 2026-07-20 01:35 AEST
 
 - 执行模型：GPT-5。

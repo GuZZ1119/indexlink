@@ -46,6 +46,8 @@
 
 IndexLink is an intelligent dollar-cost averaging (DCA) execution system designed for long-term index investors. Powered by a dual engine of **historical percentile anchors + AI semantic sensing**, it fine-tunes each scheduled investment day: invest more at relative lows, invest less at relative highs, and delay when overheated.
 
+Many students and working professionals invest from limited budgets and struggle to follow a plan through busy, volatile, or emotional market conditions: it is easy to chase rallies, pause during drawdowns, and later lose the evidence for why an adjustment was made. IndexLink combines fixed DCA discipline, reproducible market-position signals, and bounded AI news explanations so users can audit, adjust, and retain the rationale for a plan **without claiming to predict the market**.
+
 > **Core premise:** We cannot determine whether the market is "undervalued," but we can use data to detect its **position** within a historical distribution. IndexLink measures position only—it does not claim to know fair value. That is the essential difference between **adaptive DCA** and **market-timing speculation**.
 
 ---
@@ -75,7 +77,7 @@ The system rejects "blind AI fantasy." Every instruction follows this weighted l
 ## Key Features
 
 - 🤖 **Qwen Decision Engine:** Reads key financial news and earnings guidance for the week; identifies expectation gaps.
-- 🦀 **Local Rust backend:** Rust (Axum + Tokio) with local SQLite, migrations, health checks, and a fixed-monthly decision-audit scheduler.
+- 🦀 **Rust backend and local ledger:** Rust (Axum + Tokio) with SQLite, migrations, health checks, and a fixed-monthly decision-audit scheduler; it can run locally or in Docker Compose on Alibaba Cloud ECS.
 - 📊 **Dynamic action space:**
   - **Overweight (+20~50%):** Modest increase within DCA discipline when in a historical low band and not in an extreme sharp decline.
   - **Standard (100%):** Steady execution when in a neutral historical band (roughly 30%~70th percentile).
@@ -101,6 +103,8 @@ The system rejects "blind AI fantasy." Every instruction follows this weighted l
 
 ```mermaid
 graph TD
+    WEB[Web Dashboard / API Client]
+
     subgraph Ingestion[Data Ingestion]
         MD[Market Data<br/>Price/PE/VIX]
         NEWS[News/Earnings Sources]
@@ -122,11 +126,23 @@ graph TD
         DB[(State/Audit/Cache)]
     end
 
+    subgraph Cloud[Alibaba Cloud Runtime]
+        ECS[Alibaba Cloud ECS<br/>Docker Compose + SQLite Volume]
+        QWEN[Model Studio / DashScope<br/>Qwen API]
+    end
+
+    WEB --> ECS
+    ECS -. hosts .-> SCH
+    ECS -. hosts .-> QUANT
+    ECS -. hosts .-> AICLI
+    ECS -. hosts .-> DEC
+    ECS -. hosts .-> EXEC
     MD --> QUANT
     NEWS --> AICLI
     SCH --> DEC
     QUANT --> DEC
     AICLI --> DEC
+    AICLI -- OpenAI-compatible HTTPS --> QWEN
     DEC --> EXEC
     EXEC --> BROKER
     DEC --> DB
