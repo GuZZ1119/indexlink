@@ -169,6 +169,15 @@ export interface DecisionPreviewRequest {
   paper_order?: PaperOrderRequest
 }
 
+/** Request accepted by the server-sourced Decision Preview endpoint. */
+export interface AutomaticDecisionPreviewRequest {
+  bucket_allocation?: {
+    core_ratio: string
+    opportunity_ratio: string
+  }
+  paper_order?: PaperOrderRequest
+}
+
 /** Execution preview returned as part of a decision. */
 export interface ExecutionPreview {
   plan_id: string
@@ -261,6 +270,7 @@ export interface PaperOrder {
 
 /** Composed Decision Preview response. */
 export interface DecisionPreviewResponse {
+  audit_record_id: string
   execution: ExecutionPreview
   decision: DecisionResult
   market_sentiment?: MarketSentimentEvidence
@@ -277,8 +287,8 @@ export interface DecisionRecord {
   execution_status: 'due' | 'waiting' | 'inactive'
   planned_contribution?: string
   execution_snapshot: Record<string, unknown>
-  fundamental_snapshot: FundamentalSignal
-  trend_snapshot: TrendSignal
+  fundamental_snapshot: Record<string, unknown>
+  trend_snapshot: Record<string, unknown>
   sentiment_snapshot?: PersistedMarketSentimentSnapshot
   decision_snapshot: DecisionResult
   broker_order_request?: Record<string, unknown>

@@ -1,4 +1,4 @@
-mod decision_preview;
+pub(crate) mod decision_preview;
 mod decision_records;
 mod health;
 mod investment_plans;

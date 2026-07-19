@@ -26,6 +26,10 @@ const OPEND_PORT: &str = "OPEND_PORT";
 const OPEND_ACCOUNT_ID: &str = "OPEND_ACCOUNT_ID";
 const DEFAULT_OPEND_HOST: &str = "127.0.0.1";
 const DEFAULT_OPEND_PORT: &str = "11111";
+const SCHEDULER_ENABLED: &str = "SCHEDULER_ENABLED";
+const SCHEDULER_TICK_SECONDS: &str = "SCHEDULER_TICK_SECONDS";
+const DEFAULT_SCHEDULER_ENABLED: &str = "true";
+const DEFAULT_SCHEDULER_TICK_SECONDS: &str = "60";
 
 #[derive(Debug)]
 pub(crate) struct Config {
@@ -36,6 +40,14 @@ pub(crate) struct Config {
     pub(crate) cors_allowed_origins: Vec<HeaderValue>,
     pub(crate) qwen: Option<AiConfig>,
     pub(crate) opend: Option<OpenDConnectionConfig>,
+    pub(crate) scheduler: SchedulerConfig,
+}
+
+/// Safe fixed-monthly automatic-decision scheduler settings.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SchedulerConfig {
+    pub(crate) enabled: bool,
+    pub(crate) tick_interval: Duration,
 }
 
 impl Config {
@@ -95,6 +107,7 @@ impl Config {
             .collect::<Result<Vec<_>, _>>()?;
         let qwen = qwen_config(&mut lookup)?;
         let opend = opend_config(&mut lookup)?;
+        let scheduler = scheduler_config(&mut lookup)?;
 
         Ok(Self {
             address: SocketAddr::new(ip, port),
@@ -104,8 +117,33 @@ impl Config {
             cors_allowed_origins,
             qwen,
             opend,
+            scheduler,
         })
     }
+}
+
+fn scheduler_config(
+    lookup: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<SchedulerConfig, ConfigError> {
+    let enabled = parse_bool(
+        SCHEDULER_ENABLED,
+        &value_or_default(lookup, SCHEDULER_ENABLED, DEFAULT_SCHEDULER_ENABLED),
+    )?;
+    let tick_seconds = parse_u64(
+        SCHEDULER_TICK_SECONDS,
+        &value_or_default(
+            lookup,
+            SCHEDULER_TICK_SECONDS,
+            DEFAULT_SCHEDULER_TICK_SECONDS,
+        ),
+    )?;
+    if tick_seconds == 0 {
+        return Err(ConfigError::NonPositive(SCHEDULER_TICK_SECONDS));
+    }
+    Ok(SchedulerConfig {
+        enabled,
+        tick_interval: Duration::from_secs(tick_seconds),
+    })
 }
 
 fn opend_config(
@@ -246,6 +284,14 @@ fn parse_u64(name: &'static str, value: &str) -> Result<u64, ConfigError> {
         .map_err(|source| ConfigError::InvalidInteger { name, source })
 }
 
+fn parse_bool(name: &'static str, value: &str) -> Result<bool, ConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ConfigError::InvalidBoolean { name }),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
     #[error("DATABASE_URL must be a non-blank SQLite URL")]
@@ -264,6 +310,8 @@ pub(crate) enum ConfigError {
         #[source]
         source: std::num::ParseFloatError,
     },
+    #[error("{name} must be true or false")]
+    InvalidBoolean { name: &'static str },
     #[error("DASHSCOPE_TEMPERATURE must be in the range 0.0..=2.0")]
     InvalidTemperature,
     #[error("OPEND_PROVIDER must be futu or moomoo")]
@@ -306,6 +354,8 @@ mod tests {
         assert!(config.cors_allowed_origins.is_empty());
         assert!(config.qwen.is_none());
         assert!(config.opend.is_none());
+        assert!(config.scheduler.enabled);
+        assert_eq!(config.scheduler.tick_interval, Duration::from_secs(60));
     }
 
     #[test]
@@ -322,6 +372,29 @@ mod tests {
         assert_eq!(config.address, "127.0.0.1:0".parse().unwrap());
         assert_eq!(config.database_max_connections, 23);
         assert_eq!(config.database_connect_timeout, Duration::from_secs(17));
+    }
+
+    #[test]
+    fn scheduler_values_are_parsed_and_validated() {
+        let config = parse(&[
+            ("DATABASE_URL", DATABASE_URL),
+            ("SCHEDULER_ENABLED", "false"),
+            ("SCHEDULER_TICK_SECONDS", "15"),
+        ])
+        .unwrap();
+        assert!(!config.scheduler.enabled);
+        assert_eq!(config.scheduler.tick_interval, Duration::from_secs(15));
+
+        assert!(matches!(
+            parse(&[("SCHEDULER_ENABLED", "sometimes")]),
+            Err(ConfigError::InvalidBoolean {
+                name: SCHEDULER_ENABLED
+            })
+        ));
+        assert!(matches!(
+            parse(&[("SCHEDULER_TICK_SECONDS", "0")]),
+            Err(ConfigError::NonPositive(SCHEDULER_TICK_SECONDS))
+        ));
     }
 
     #[test]

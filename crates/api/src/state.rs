@@ -13,7 +13,7 @@ use decision_records::{
 use indexlink_storage::{
     PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
     PaperTradeMarker, SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository,
-    SqlitePaperPerformanceRepository, SqliteStorage,
+    SqlitePaperPerformanceRepository, SqliteScheduledDecisionRepository, SqliteStorage,
 };
 use investment_plans::InvestmentPlanService;
 use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
@@ -119,6 +119,7 @@ pub struct ApiState {
     market_sentiment: Option<Arc<MarketSentimentDependencies>>,
     market_data: Option<Arc<dyn MarketSignalProvider>>,
     paper_performance: Option<SqlitePaperPerformanceRepository>,
+    scheduled_decisions: Option<SqliteScheduledDecisionRepository>,
     version: Arc<str>,
 }
 
@@ -149,6 +150,7 @@ impl ApiState {
             InvestmentPlanService::new(Arc::new(SqliteInvestmentPlanRepository::new(pool.clone())));
         let decision_records =
             DecisionRecordService::new(Arc::new(SqliteDecisionRecordRepository::new(pool.clone())));
+        let scheduled_decisions = SqliteScheduledDecisionRepository::new(pool.clone());
         Self {
             readiness: Arc::new(ReadinessBackend::SqliteStorage(storage)),
             plans,
@@ -157,6 +159,7 @@ impl ApiState {
             market_sentiment: None,
             market_data: None,
             paper_performance: Some(SqlitePaperPerformanceRepository::new(pool)),
+            scheduled_decisions: Some(scheduled_decisions),
             version: version.into(),
         }
     }
@@ -223,6 +226,7 @@ impl ApiState {
             market_sentiment: None,
             market_data: None,
             paper_performance: None,
+            scheduled_decisions: None,
             version: version.into(),
         }
     }
@@ -623,6 +627,25 @@ impl ApiState {
             .await
             .inspect_err(|error| tracing::error!(%error, "market signal refresh failed"))
             .map_err(market_data_error)
+    }
+
+    /// Atomically claim one automatic decision run for a plan and UTC calendar day.
+    ///
+    /// This ledger is deliberately claimed immediately before record creation. Failed data
+    /// refreshes remain retryable, while a persisted automatic decision cannot be duplicated
+    /// by the next scheduler tick or after a process restart.
+    pub(crate) async fn claim_scheduled_decision(
+        &self,
+        plan_id: uuid::Uuid,
+        scheduled_for: &str,
+    ) -> Result<bool, ApiError> {
+        self.scheduled_decisions
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?
+            .claim(plan_id, scheduled_for)
+            .await
+            .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "scheduled decision claim failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
     }
 }
 

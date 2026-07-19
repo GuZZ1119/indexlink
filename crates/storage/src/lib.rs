@@ -11,6 +11,7 @@ mod sqlite;
 mod sqlite_decision_records;
 mod sqlite_investment_plans;
 mod sqlite_paper_performance;
+mod sqlite_scheduled_decisions;
 
 use std::{str::FromStr, time::Duration};
 
@@ -31,6 +32,8 @@ pub use sqlite_paper_performance::{
     PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
     PaperTradeMarker, SqlitePaperPerformanceRepository,
 };
+/// SQLite idempotency ledger for fixed-monthly automatic decision runs.
+pub use sqlite_scheduled_decisions::SqliteScheduledDecisionRepository;
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

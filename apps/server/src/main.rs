@@ -11,7 +11,7 @@ use broker::{
     BrokerClient, BrokerError, OpenDConnectionConfig, OpenDPaperBroker, OpenDPaperSession,
     OpenDSessionError,
 };
-use config::Config;
+use config::{Config, SchedulerConfig};
 use indexlink_api::{build_router_with_cors, ApiState};
 use indexlink_storage::SqliteStorage;
 use market_data::OpenDMarketSignalProvider;
@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let paper_broker_configured = config.opend.is_some();
     let state =
         build_api_state(storage, config.qwen, config.opend, build_opend_paper_broker).await?;
+    start_automatic_scheduler(state.clone(), config.scheduler);
     let app = build_router_with_cors(state, config.cors_allowed_origins);
     let listener = tokio::net::TcpListener::bind(config.address).await?;
 
@@ -43,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         address = %config.address,
         market_sentiment_configured,
         paper_broker_configured,
+        scheduler_enabled = config.scheduler.enabled,
         "indexlink server started"
     );
     axum::serve(listener, app)
@@ -51,6 +53,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("indexlink server stopped");
 
     Ok(())
+}
+
+/// Spawn the safe fixed-monthly audit scheduler when enabled by local configuration.
+///
+/// The task creates at most one server-sourced decision record per active plan and UTC day.
+/// It never submits a broker order; an operator must still explicitly request paper submission.
+fn start_automatic_scheduler(state: ApiState, config: SchedulerConfig) {
+    if !config.enabled {
+        tracing::info!("automatic decision scheduler is disabled");
+        return;
+    }
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(config.tick_interval);
+        loop {
+            interval.tick().await;
+            match indexlink_api::run_due_decisions(&state).await {
+                Ok(summary) => tracing::info!(
+                    created = summary.created,
+                    already_claimed = summary.already_claimed,
+                    unavailable = summary.unavailable,
+                    "automatic decision scheduler tick completed"
+                ),
+                Err(error) => {
+                    tracing::error!(error = %error, "automatic decision scheduler tick failed")
+                }
+            }
+        }
+    });
 }
 
 /// Assemble production API state with optional Qwen and OpenD paper dependencies.

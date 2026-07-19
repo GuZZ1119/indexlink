@@ -12,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use broker::{BrokerOrderAck, BrokerOrderRequest, BrokerOrderSide, BrokerOrderStatus};
+use chrono::{Datelike, Utc};
 use core_domain::{Action, Percentile};
 use decision_engine::{
     evaluate_decision, DecisionConfig, DecisionInput, DecisionSentiment, DecisionSignal,
@@ -22,7 +23,11 @@ use investment_plans::{
     BucketAllocationRatio, ExecutionPreviewStatus, InvestmentPlanExecutionPreview,
     PreviewInvestmentPlanExecution, TwoBucketAllocationConfig,
 };
-use quant_engine::{FundamentalSignal, TrendRegime, TrendSignal};
+use market_data::MarketSignalInput;
+use quant_engine::{
+    evaluate_fundamental, evaluate_trend, FundamentalConfig, FundamentalSignal,
+    FundamentalSnapshot, TrendConfig, TrendRegime, TrendSignal, TrendSnapshot,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,6 +54,30 @@ struct DecisionPreviewRequest {
     trend: TrendSignalRequest,
     /// Optional paper order to submit when the decision is executable and due.
     paper_order: Option<PaperOrderRequest>,
+    /// Trusted source disclosure attached only by server-side automatic orchestration.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    input_source: Option<Value>,
+}
+
+/// Server-sourced decision request that deliberately excludes 70/20 signal fields.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutomaticDecisionPreviewRequest {
+    /// Optional bucket allocation used when the plan is due.
+    bucket_allocation: Option<TwoBucketAllocationRequest>,
+    /// Optional operator-confirmed paper order submitted only after automatic evaluation.
+    paper_order: Option<PaperOrderRequest>,
+}
+
+/// Origin of an audit record's 70/20 inputs.
+#[derive(Debug, Clone, Copy)]
+enum DecisionTrigger {
+    /// An operator supplied validated signal values through the legacy preview endpoint.
+    ManualInput,
+    /// An operator explicitly requested server-sourced automatic inputs.
+    AutomaticPreview,
+    /// The fixed-monthly background scheduler created the automatic decision.
+    AutomaticScheduler,
 }
 
 /// Bucket allocation request DTO.
@@ -140,6 +169,8 @@ enum BrokerOrderTypeRequest {
 /// Decision preview response DTO.
 #[derive(Debug, Serialize)]
 struct DecisionPreviewResponse {
+    /// Persisted local audit-record ID for this decision.
+    audit_record_id: Uuid,
     /// Execution preview from the investment-plan service.
     execution: InvestmentPlanExecutionPreview,
     /// Decision result safe for API clients.
@@ -152,6 +183,17 @@ struct DecisionPreviewResponse {
     paper_order_ack: Option<BrokerOrderAck>,
     /// Human-readable summary for demo UI.
     summary: String,
+}
+
+/// Result counters emitted by one fixed-monthly automatic scheduler tick.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScheduledDecisionRunSummary {
+    /// Due active plans for which a new automatic audit record was created.
+    pub created: u32,
+    /// Due plans already claimed for the same UTC calendar day.
+    pub already_claimed: u32,
+    /// Due plans skipped because automatic market data was unavailable or invalid.
+    pub unavailable: u32,
 }
 
 /// API-facing decision response.
@@ -202,10 +244,15 @@ enum DecisionWeightModeResponse {
 
 /// Build decision preview routes.
 pub(crate) fn router() -> Router<ApiState> {
-    Router::new().route(
-        "/investment-plans/:id/decision-preview",
-        post(preview_decision),
-    )
+    Router::new()
+        .route(
+            "/investment-plans/:id/decision-preview",
+            post(preview_decision),
+        )
+        .route(
+            "/investment-plans/:id/automatic-decision-preview",
+            post(preview_automatic_decision),
+        )
 }
 
 /// Preview one investment decision and optionally submit a configured paper order.
@@ -217,6 +264,151 @@ async fn preview_decision(
     let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
 
+    Ok(Json(
+        preview_decision_input(&state, id, input, DecisionTrigger::ManualInput).await?,
+    ))
+}
+
+/// Run one server-sourced decision preview without accepting caller-supplied 70/20 inputs.
+async fn preview_automatic_decision(
+    State(state): State<ApiState>,
+    id: Result<Path<Uuid>, PathRejection>,
+    input: Result<Json<AutomaticDecisionPreviewRequest>, JsonRejection>,
+) -> Result<Json<DecisionPreviewResponse>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
+    let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
+    let day_of_month = i16::try_from(Utc::now().day()).map_err(|_| ApiError::ServiceUnavailable)?;
+    Ok(Json(
+        preview_automatic_for_plan(
+            &state,
+            id,
+            day_of_month,
+            DecisionTrigger::AutomaticPreview,
+            input,
+        )
+        .await?,
+    ))
+}
+
+/// Execute a due-plan scheduler tick using the UTC calendar day as its fixed-monthly trigger.
+pub(crate) async fn run_due_decisions(
+    state: &ApiState,
+) -> Result<ScheduledDecisionRunSummary, ApiError> {
+    let now = Utc::now();
+    let day_of_month = i16::try_from(now.day()).map_err(|_| ApiError::ServiceUnavailable)?;
+    let scheduled_for = now.date_naive().to_string();
+    let mut summary = ScheduledDecisionRunSummary::default();
+
+    for plan in state.plans().list().await? {
+        if !plan.is_active || plan.schedule_day != day_of_month {
+            continue;
+        }
+        match preview_automatic_for_plan_with_claim(state, plan.id, day_of_month, &scheduled_for)
+            .await
+        {
+            Ok(Some(_)) => summary.created += 1,
+            Ok(None) => summary.already_claimed += 1,
+            Err(ApiError::ServiceUnavailable | ApiError::BadRequest) => {
+                summary.unavailable += 1;
+                tracing::warn!(plan_id = %plan.id, "automatic decision skipped because market inputs were unavailable");
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(summary)
+}
+
+/// Build source-labelled automatic inputs, claim the plan/day key, then persist one audit record.
+async fn preview_automatic_for_plan_with_claim(
+    state: &ApiState,
+    plan_id: Uuid,
+    day_of_month: i16,
+    scheduled_for: &str,
+) -> Result<Option<DecisionPreviewResponse>, ApiError> {
+    let plan = state.plans().get(plan_id).await?;
+    let input = automatic_decision_input(
+        state,
+        &plan.symbol,
+        day_of_month,
+        AutomaticDecisionPreviewRequest {
+            bucket_allocation: None,
+            paper_order: None,
+        },
+    )
+    .await?;
+    if !state
+        .claim_scheduled_decision(plan_id, scheduled_for)
+        .await?
+    {
+        return Ok(None);
+    }
+    preview_decision_input(state, plan_id, input, DecisionTrigger::AutomaticScheduler)
+        .await
+        .map(Some)
+}
+
+/// Build one automatic preview from trusted provider data for a selected investment symbol.
+async fn preview_automatic_for_plan(
+    state: &ApiState,
+    plan_id: Uuid,
+    day_of_month: i16,
+    trigger: DecisionTrigger,
+    options: AutomaticDecisionPreviewRequest,
+) -> Result<DecisionPreviewResponse, ApiError> {
+    let plan = state.plans().get(plan_id).await?;
+    let input = automatic_decision_input(state, &plan.symbol, day_of_month, options).await?;
+    preview_decision_input(state, plan_id, input, trigger).await
+}
+
+/// Resolve automatic market snapshots into the same validated request shape used by the engine.
+async fn automatic_decision_input(
+    state: &ApiState,
+    symbol: &str,
+    day_of_month: i16,
+    options: AutomaticDecisionPreviewRequest,
+) -> Result<DecisionPreviewRequest, ApiError> {
+    let input = state.market_signal_input(symbol).await?;
+    let fundamental = evaluate_fundamental(
+        &FundamentalSnapshot {
+            cape_history: input.cape_history.clone(),
+            cape_current: input.cape_current,
+            erp_history: input.erp_history.clone(),
+            erp_current: input.erp_current,
+        },
+        &FundamentalConfig::default(),
+    )
+    .map_err(|_| ApiError::ServiceUnavailable)?;
+    let trend = evaluate_trend(
+        &TrendSnapshot {
+            ma_distance_history: input.ma_distance_history.clone(),
+            ma_distance_current: input.ma_distance_current,
+            rsi_history: input.rsi_history.clone(),
+            rsi_current: input.rsi_current,
+            vix_history: input.vix_history.clone(),
+            vix_current: input.vix_current,
+        },
+        &TrendConfig::default(),
+    )
+    .map_err(|_| ApiError::ServiceUnavailable)?;
+
+    Ok(DecisionPreviewRequest {
+        day_of_month,
+        bucket_allocation: options.bucket_allocation,
+        fundamental: FundamentalSignalRequest::from(fundamental),
+        trend: TrendSignalRequest::from(trend),
+        paper_order: options.paper_order,
+        input_source: Some(automatic_source_snapshot(&input)),
+    })
+}
+
+/// Execute a resolved decision and create its audit record before any optional broker side effect.
+async fn preview_decision_input(
+    state: &ApiState,
+    id: Uuid,
+    input: DecisionPreviewRequest,
+    trigger: DecisionTrigger,
+) -> Result<DecisionPreviewResponse, ApiError> {
     let execution_input = PreviewInvestmentPlanExecution::new(input.day_of_month)?;
     let fundamental = input.fundamental.clone_signal()?;
     let trend = input.trend.clone_signal()?;
@@ -240,7 +432,7 @@ async fn preview_decision(
         .clone()
         .map(|order| order.into_domain(&execution.symbol))
         .transpose()?;
-    let market_sentiment = market_sentiment_for_decision(&state).await;
+    let market_sentiment = market_sentiment_for_decision(state).await;
     let market_sentiment_response = market_sentiment.as_ref().map(MarketSentimentResponse::from);
     let decision_input = DecisionInput {
         fundamental,
@@ -263,6 +455,7 @@ async fn preview_decision(
             execution: &execution,
             decision: &decision,
             market_sentiment: market_sentiment.as_ref(),
+            trigger,
             paper_order: paper_order.as_ref(),
             paper_order_ack: None,
             summary: preliminary_summary,
@@ -270,7 +463,7 @@ async fn preview_decision(
         .await?;
     let paper_order_ack = if should_submit {
         let request = paper_order.as_ref().ok_or(ApiError::ServiceUnavailable)?;
-        let ack = submit_paper_order(&state, request).await?;
+        let ack = submit_paper_order(state, request).await?;
         let summary = summarize_decision(&execution, &decision, Some(&ack));
         if let Err(error) = state
             .decision_records()
@@ -292,13 +485,14 @@ async fn preview_decision(
     };
     let summary = summarize_decision(&execution, &decision, paper_order_ack.as_ref());
 
-    Ok(Json(DecisionPreviewResponse {
+    Ok(DecisionPreviewResponse {
+        audit_record_id: persisted.id,
         execution,
         decision: decision_response,
         market_sentiment: market_sentiment_response,
         paper_order_ack,
         summary,
-    }))
+    })
 }
 
 impl TwoBucketAllocationRequest {
@@ -321,6 +515,16 @@ impl FundamentalSignalRequest {
     }
 }
 
+impl From<FundamentalSignal> for FundamentalSignalRequest {
+    fn from(signal: FundamentalSignal) -> Self {
+        Self {
+            score: signal.score.value(),
+            cape_percentile: signal.cape_percentile.value(),
+            erp_percentile: signal.erp_percentile.value(),
+        }
+    }
+}
+
 impl TrendSignalRequest {
     fn clone_signal(&self) -> Result<TrendSignal, ApiError> {
         Ok(TrendSignal {
@@ -330,6 +534,18 @@ impl TrendSignalRequest {
             vix_percentile: percentile(self.vix_percentile)?,
             regime: self.regime.to_domain(),
         })
+    }
+}
+
+impl From<TrendSignal> for TrendSignalRequest {
+    fn from(signal: TrendSignal) -> Self {
+        Self {
+            score: signal.score.value(),
+            ma_distance_percentile: signal.ma_distance_percentile.value(),
+            rsi_percentile: signal.rsi_percentile.value(),
+            vix_percentile: signal.vix_percentile.value(),
+            regime: signal.regime.into(),
+        }
     }
 }
 
@@ -367,6 +583,16 @@ impl TrendRegimeRequest {
             Self::Overheated => TrendRegime::Overheated,
             Self::Neutral => TrendRegime::Neutral,
             Self::FallingKnife => TrendRegime::FallingKnife,
+        }
+    }
+}
+
+impl From<TrendRegime> for TrendRegimeRequest {
+    fn from(value: TrendRegime) -> Self {
+        match value {
+            TrendRegime::Overheated => Self::Overheated,
+            TrendRegime::Neutral => Self::Neutral,
+            TrendRegime::FallingKnife => Self::FallingKnife,
         }
     }
 }
@@ -466,6 +692,7 @@ struct DecisionRecordContext<'a> {
     execution: &'a InvestmentPlanExecutionPreview,
     decision: &'a DecisionSignal,
     market_sentiment: Option<&'a MarketSentimentReport>,
+    trigger: DecisionTrigger,
     paper_order: Option<&'a BrokerOrderRequest>,
     paper_order_ack: Option<&'a BrokerOrderAck>,
     summary: String,
@@ -482,15 +709,62 @@ fn record_input(context: DecisionRecordContext<'_>) -> Result<CreateDecisionReco
             .execution
             .planned_contribution
             .map(|value| value.to_string()),
-        execution_snapshot: snapshot(context.execution)?,
-        fundamental_snapshot: snapshot(&context.input.fundamental)?,
-        trend_snapshot: snapshot(&context.input.trend)?,
+        execution_snapshot: json!({
+            "trigger": trigger_label(context.trigger),
+            "execution": snapshot(context.execution)?,
+        }),
+        fundamental_snapshot: signal_snapshot(
+            "fundamental",
+            &context.input.fundamental,
+            context.input.input_source.as_ref(),
+        )?,
+        trend_snapshot: signal_snapshot(
+            "trend",
+            &context.input.trend,
+            context.input.input_source.as_ref(),
+        )?,
         sentiment_snapshot: context.market_sentiment.map(market_sentiment_snapshot),
         decision_snapshot: decision_snapshot(context.decision),
         broker_order_request: context.paper_order.map(snapshot).transpose()?,
         broker_order_ack: context.paper_order_ack.map(snapshot).transpose()?,
         summary: context.summary,
     })
+}
+
+/// Build a source-labelled 70% or 20% audit snapshot without retaining credentials.
+fn signal_snapshot(
+    layer: &'static str,
+    signal: &impl Serialize,
+    automatic_source: Option<&Value>,
+) -> Result<Value, ApiError> {
+    Ok(json!({
+        "layer": layer,
+        "source": automatic_source.cloned().unwrap_or_else(|| json!({
+            "kind": "operator_input",
+            "description": "validated values supplied through the legacy decision-preview endpoint",
+        })),
+        "signal": snapshot(signal)?,
+    }))
+}
+
+/// Build the auditable, non-secret provider disclosure for automatic 70/20 inputs.
+fn automatic_source_snapshot(input: &MarketSignalInput) -> Value {
+    json!({
+        "kind": "automatic_market_data",
+        "symbol": input.symbol,
+        "as_of": input.as_of,
+        "fundamental": "Shiller CAPE monthly table; ERP proxy = 100 / CAPE - US Treasury 10-year yield",
+        "trend": "local OpenD daily close with locally computed MA200 and RSI; Cboe VIX monthly last observation",
+    })
+}
+
+/// Return a stable trigger label for a persisted execution snapshot.
+fn trigger_label(trigger: DecisionTrigger) -> &'static str {
+    match trigger {
+        DecisionTrigger::ManualInput => "manual_input",
+        DecisionTrigger::AutomaticPreview => "automatic_preview",
+        DecisionTrigger::AutomaticScheduler => "automatic_scheduler",
+    }
 }
 
 /// Return a stable audit snapshot for an automatically retrieved market sentiment.

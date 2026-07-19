@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { BarChart3, Bot, ClipboardCheck, FileJson, Plus, RefreshCw, Send, Upload } from 'lucide-react'
+import { BarChart3, Bot, ClipboardCheck, Plus, RefreshCw, Send } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useSnapshot } from 'valtio'
 
@@ -13,9 +13,7 @@ import {
   fetchMarketSignalInput,
   fetchPaperPerformance,
   fetchPaperPortfolio,
-  previewDecision,
-  previewFundamental,
-  previewTrend,
+  previewAutomaticDecision,
   setPaperOpeningBalance,
   useCreatePlan,
   useDecisionRecords,
@@ -44,19 +42,6 @@ import { actionBadgeClass, formatCurrency, formatMultiplier } from '@/lib/decisi
 import { cn } from '@/lib/utils'
 import { setSelectedPlanId, uiStore } from '@/stores/ui'
 
-type SignalFields = {
-  capeHistory: string
-  capeCurrent: string
-  erpHistory: string
-  erpCurrent: string
-  maHistory: string
-  maCurrent: string
-  rsiHistory: string
-  rsiCurrent: string
-  vixHistory: string
-  vixCurrent: string
-}
-
 type OverviewDecision = {
   createdAt: string
   decision: DecisionResult
@@ -64,19 +49,6 @@ type OverviewDecision = {
   plannedContribution?: string
   summary: string
   marketSentiment?: MarketSentimentEvidence
-}
-
-const emptySignals: SignalFields = {
-  capeHistory: '',
-  capeCurrent: '',
-  erpHistory: '',
-  erpCurrent: '',
-  maHistory: '',
-  maCurrent: '',
-  rsiHistory: '',
-  rsiCurrent: '',
-  vixHistory: '',
-  vixCurrent: '',
 }
 
 const initialPlan: CreateInvestmentPlanRequest = {
@@ -89,91 +61,10 @@ const initialPlan: CreateInvestmentPlanRequest = {
   max_single_execution: '1500.00',
 }
 
-/** Parse a comma- or newline-separated historical series without manufacturing data. */
-function parseHistory(value: string, label: string): number[] {
-  const values = value
-    .split(/[\s,]+/)
-    .filter(Boolean)
-    .map(Number)
-  if (values.length === 0 || values.some((item) => !Number.isFinite(item))) {
-    throw new ApiRequestError(`${label} must contain finite numbers`)
-  }
-  return values
-}
-
-/** Parse one finite current indicator value. */
-function parseCurrent(value: string, label: string): number {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) {
-    throw new ApiRequestError(`${label} must be a finite number`)
-  }
-  return parsed
-}
-
 /** Return a unique, non-secret idempotency key for one user-confirmed paper order. */
 function paperOrderKey(): string {
   const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
   return `web-paper-${suffix}`
-}
-
-/** Convert one imported JSON document into editable signal fields without creating market data. */
-function signalFieldsFromImport(value: unknown): SignalFields {
-  if (!isRecord(value)) {
-    throw new ApiRequestError('signal import must be a JSON object')
-  }
-  const fundamental = isRecord(value.fundamental) ? value.fundamental : value
-  const trend = isRecord(value.trend) ? value.trend : value
-  return {
-    capeHistory: importedHistory(fundamental, 'cape_history'),
-    capeCurrent: importedCurrent(fundamental, 'cape_current'),
-    erpHistory: importedHistory(fundamental, 'erp_history'),
-    erpCurrent: importedCurrent(fundamental, 'erp_current'),
-    maHistory: importedHistory(trend, 'ma_distance_history'),
-    maCurrent: importedCurrent(trend, 'ma_distance_current'),
-    rsiHistory: importedHistory(trend, 'rsi_history'),
-    rsiCurrent: importedCurrent(trend, 'rsi_current'),
-    vixHistory: importedHistory(trend, 'vix_history'),
-    vixCurrent: importedCurrent(trend, 'vix_current'),
-  }
-}
-
-/** Convert one server-refreshed market snapshot into editable dashboard signal fields. */
-function signalFieldsFromMarketInput(input: MarketSignalInput): SignalFields {
-  return {
-    capeHistory: input.fundamental.cape_history.join(', '),
-    capeCurrent: String(input.fundamental.cape_current),
-    erpHistory: input.fundamental.erp_history.join(', '),
-    erpCurrent: String(input.fundamental.erp_current),
-    maHistory: input.trend.ma_distance_history.join(', '),
-    maCurrent: String(input.trend.ma_distance_current),
-    rsiHistory: input.trend.rsi_history.join(', '),
-    rsiCurrent: String(input.trend.rsi_current),
-    vixHistory: input.trend.vix_history.join(', '),
-    vixCurrent: String(input.trend.vix_current),
-  }
-}
-
-/** Check a JSON value is a non-null object before reading its signal fields. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** Read one finite historical numeric series from an imported JSON object. */
-function importedHistory(value: Record<string, unknown>, field: string): string {
-  const values = value[field]
-  if (!Array.isArray(values) || values.some((item) => typeof item !== 'number' || !Number.isFinite(item))) {
-    throw new ApiRequestError(`${field} must be an array of finite numbers`)
-  }
-  return values.join(', ')
-}
-
-/** Read one finite current numeric value from an imported JSON object. */
-function importedCurrent(value: Record<string, unknown>, field: string): string {
-  const current = value[field]
-  if (typeof current !== 'number' || !Number.isFinite(current)) {
-    throw new ApiRequestError(`${field} must be a finite number`)
-  }
-  return String(current)
 }
 
 /** Render the live Decision Preview workflow backed by Rust HTTP APIs. */
@@ -183,17 +74,12 @@ export default function DashboardPage() {
   const { selectedPlanId } = useSnapshot(uiStore)
   const queryClient = useQueryClient()
   const createPlan = useCreatePlan()
-  const importInput = useRef<HTMLInputElement>(null)
-  const [signals, setSignals] = useState<SignalFields>(emptySignals)
   const [planInput, setPlanInput] = useState(initialPlan)
-  const [dayOfMonth, setDayOfMonth] = useState(String(new Date().getDate()))
   const [coreRatio, setCoreRatio] = useState('0.80')
   const [opportunityRatio, setOpportunityRatio] = useState('0.20')
   const [submitPaperOrder, setSubmitPaperOrder] = useState(false)
   const [quantity, setQuantity] = useState('1.00')
   const [result, setResult] = useState<DecisionPreviewResponse | null>(null)
-  const [importName, setImportName] = useState<string | null>(null)
-  const [importError, setImportError] = useState<string | null>(null)
   const [marketRefresh, setMarketRefresh] = useState<MarketSignalInput | null>(null)
   const [planFormOpen, setPlanFormOpen] = useState(false)
   const [pricePeriod, setPricePeriod] = useState<'3m' | '6m' | '1y' | '3y'>('1y')
@@ -215,30 +101,12 @@ export default function DashboardPage() {
       if (!selectedPlan) {
         throw new ApiRequestError('select a plan before running a decision')
       }
-      const [fundamental, trend] = await Promise.all([
-        previewFundamental({
-          cape_history: parseHistory(signals.capeHistory, 'CAPE history'),
-          cape_current: parseCurrent(signals.capeCurrent, 'CAPE current'),
-          erp_history: parseHistory(signals.erpHistory, 'ERP history'),
-          erp_current: parseCurrent(signals.erpCurrent, 'ERP current'),
-        }),
-        previewTrend({
-          ma_distance_history: parseHistory(signals.maHistory, 'MA200 history'),
-          ma_distance_current: parseCurrent(signals.maCurrent, 'MA200 current'),
-          rsi_history: parseHistory(signals.rsiHistory, 'RSI history'),
-          rsi_current: parseCurrent(signals.rsiCurrent, 'RSI current'),
-          vix_history: parseHistory(signals.vixHistory, 'VIX history'),
-          vix_current: parseCurrent(signals.vixCurrent, 'VIX current'),
-        }),
-      ])
-      return previewDecision(selectedPlan.id, {
-        day_of_month: Number(dayOfMonth),
+      const marketInput = await fetchMarketSignalInput(selectedPlan.symbol)
+      const preview = await previewAutomaticDecision(selectedPlan.id, {
         bucket_allocation: {
           core_ratio: coreRatio,
           opportunity_ratio: opportunityRatio,
         },
-        fundamental,
-        trend,
         ...(submitPaperOrder
           ? {
               paper_order: {
@@ -250,9 +118,11 @@ export default function DashboardPage() {
             }
           : {}),
       })
+      return { marketInput, preview }
     },
-    onSuccess: async (next) => {
-      setResult(next)
+    onSuccess: async ({ marketInput, preview }) => {
+      setMarketRefresh(marketInput)
+      setResult(preview)
       await queryClient.invalidateQueries({ queryKey: ['decision-records', selectedPlanId] })
     },
   })
@@ -264,9 +134,7 @@ export default function DashboardPage() {
       return fetchMarketSignalInput(selectedPlan.symbol)
     },
     onSuccess: (input) => {
-      setSignals(signalFieldsFromMarketInput(input))
       setMarketRefresh(input)
-      setImportError(null)
       setResult(null)
     },
   })
@@ -297,9 +165,6 @@ export default function DashboardPage() {
     mutationFn: () => fetchHoldingPriceHistory(pricePeriod),
   })
 
-  const updateSignal = (key: keyof SignalFields, value: string) => {
-    setSignals((current) => ({ ...current, [key]: value }))
-  }
   const updatePlan = <K extends keyof CreateInvestmentPlanRequest>(key: K, value: string | number) => {
     setPlanInput((current) => ({ ...current, [key]: value }) as CreateInvestmentPlanRequest)
   }
@@ -309,18 +174,6 @@ export default function DashboardPage() {
     setSelectedPlanId(created.id)
     setPlanInput(initialPlan)
     setPlanFormOpen(false)
-  }
-  const importSignals = async (file: File) => {
-    try {
-      const next = signalFieldsFromImport(JSON.parse(await file.text()) as unknown)
-      setSignals(next)
-      setImportName(file.name)
-      setImportError(null)
-      setResult(null)
-    } catch (error) {
-      setImportName(null)
-      setImportError(error instanceof Error ? error.message : 'signal import failed')
-    }
   }
   const error = marketRefreshMutation.error
     ?? decisionMutation.error
@@ -333,7 +186,7 @@ export default function DashboardPage() {
     ?? createPlan.error
     ?? plansError
     ?? decisionRecordsError
-  const hasSignalInput = Object.values(signals).every((value) => value.trim().length > 0)
+  const hasSignalInput = marketRefresh !== null || result !== null
   const overviewDecision = useMemo(
     () => latestOverviewDecision(result, decisionRecords[0]),
     [decisionRecords, result],
@@ -426,11 +279,7 @@ export default function DashboardPage() {
             </form>
           </details>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="grid gap-1.5 text-sm font-medium">
-              {t('live.decision.day')}
-              <Input value={dayOfMonth} onChange={(event) => setDayOfMonth(event.target.value)} />
-            </label>
+          <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-1.5 text-sm font-medium">
               {t('live.decision.coreRatio')}
               <Input value={coreRatio} onChange={(event) => setCoreRatio(event.target.value)} />
@@ -469,68 +318,6 @@ export default function DashboardPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <FileJson className="size-4 text-muted-foreground" />
-            {t('live.decision.importTitle')}
-          </CardTitle>
-          <CardDescription>{t('live.decision.importDescription')}</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <input
-            ref={importInput}
-            className="sr-only"
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => {
-              const [file] = event.target.files ?? []
-              if (file) {
-                void importSignals(file)
-              }
-              event.target.value = ''
-            }}
-          />
-          <Button type="button" variant="outline" onClick={() => importInput.current?.click()}>
-            <Upload className="size-4" />
-            {t('live.decision.importButton')}
-          </Button>
-          <span className="text-sm text-muted-foreground">
-            {importName ? t('live.decision.imported', { name: importName }) : t('live.decision.importFormat')}
-          </span>
-          {importError && <p className="w-full text-sm text-destructive">{importError}</p>}
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SignalInputCard
-          title={t('live.decision.fundamental')}
-          icon={<BarChart3 className="size-4 text-muted-foreground" />}
-          fields={[
-            [t('live.decision.capeHistory'), 'capeHistory'],
-            [t('live.decision.capeCurrent'), 'capeCurrent'],
-            [t('live.decision.erpHistory'), 'erpHistory'],
-            [t('live.decision.erpCurrent'), 'erpCurrent'],
-          ]}
-          values={signals}
-          onChange={updateSignal}
-        />
-        <SignalInputCard
-          title={t('live.decision.trend')}
-          icon={<BarChart3 className="size-4 text-muted-foreground" />}
-          fields={[
-            [t('live.decision.maHistory'), 'maHistory'],
-            [t('live.decision.maCurrent'), 'maCurrent'],
-            [t('live.decision.rsiHistory'), 'rsiHistory'],
-            [t('live.decision.rsiCurrent'), 'rsiCurrent'],
-            [t('live.decision.vixHistory'), 'vixHistory'],
-            [t('live.decision.vixCurrent'), 'vixCurrent'],
-          ]}
-          values={signals}
-          onChange={updateSignal}
-        />
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
             <Send className="size-4 text-muted-foreground" />
             {t('live.decision.paperTitle')}
           </CardTitle>
@@ -558,14 +345,16 @@ export default function DashboardPage() {
             disabled={!selectedPlan || decisionMutation.isPending}
             onClick={() => decisionMutation.mutate()}
           >
-            {decisionMutation.isPending ? t('live.decision.running') : t('live.decision.run')}
+            {decisionMutation.isPending ? t('live.decision.running') : t('live.decision.runAutomatic')}
           </Button>
         </CardContent>
       </Card>
 
       {error && (
         <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {error instanceof Error ? error.message : 'request failed'}
+          {decisionMutation.error
+            ? t('live.decision.automaticUnavailable')
+            : error instanceof Error ? error.message : 'request failed'}
         </p>
       )}
 
@@ -1309,50 +1098,6 @@ function DemoPlanField({
   )
 }
 
-/** Render a group of historical and current signal inputs. */
-function SignalInputCard({
-  title,
-  icon,
-  fields,
-  values,
-  onChange,
-}: {
-  title: string
-  icon: ReactNode
-  fields: Array<[string, keyof SignalFields]>
-  values: SignalFields
-  onChange: (key: keyof SignalFields, value: string) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">{icon}{title}</CardTitle>
-        <CardDescription>{t('live.decision.historyHelp')}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {fields.map(([label, key]) => {
-          const history = key.endsWith('History')
-          return (
-            <label key={key} className="grid gap-1.5 text-sm font-medium">
-              {label}
-              {history ? (
-                <textarea
-                  className="min-h-20 rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                  value={values[key]}
-                  onChange={(event) => onChange(key, event.target.value)}
-                />
-              ) : (
-                <Input value={values[key]} onChange={(event) => onChange(key, event.target.value)} />
-              )}
-            </label>
-          )
-        })}
-      </CardContent>
-    </Card>
-  )
-}
-
 /** Render a non-fabricated Decision Preview response and paper-order outcome. */
 function DecisionResultCard({
   result,
@@ -1403,6 +1148,12 @@ function DecisionResultCard({
           </div>
         )}
         <DecisionExplanation decision={result.decision} marketSentiment={result.market_sentiment} />
+        <a
+          className="inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline"
+          href={`/decisions/${result.audit_record_id}`}
+        >
+          {t('live.decision.viewAudit')}
+        </a>
         {result.paper_order_ack && (
           <div className="rounded-lg border border-semantic-positive/40 bg-semantic-positive/10 p-3 text-sm">
             {t('live.decision.paperAck')}: {result.paper_order_ack.status} · order{' '}

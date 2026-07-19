@@ -14,6 +14,7 @@ use axum::{
 use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 
 pub use error::{ApiError, ErrorBody, ErrorEnvelope};
+pub use routes::decision_preview::ScheduledDecisionRunSummary;
 pub use state::{ApiState, ReadinessCheck, ReadinessError};
 
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
@@ -46,4 +47,19 @@ pub fn build_router_with_cors(state: ApiState, allowed_origins: Vec<HeaderValue>
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_BYTES))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
+}
+
+/// Run one safe fixed-monthly automatic-decision scheduler tick.
+///
+/// The tick only creates auditable decisions for active plans whose configured UTC calendar day
+/// is due. It never submits a broker order: paper-order submission remains an explicit operator
+/// confirmation step. A local SQLite idempotency ledger prevents duplicate automatic records for
+/// the same plan and UTC day.
+///
+/// # Errors
+///
+/// Returns [`ApiError::ServiceUnavailable`] only when the plan store itself cannot be read.
+/// Per-plan market-data failures are counted in the returned summary so the next tick can retry.
+pub async fn run_due_decisions(state: &ApiState) -> Result<ScheduledDecisionRunSummary, ApiError> {
+    routes::decision_preview::run_due_decisions(state).await
 }

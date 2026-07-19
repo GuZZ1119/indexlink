@@ -161,6 +161,29 @@
 
 ### Decision Preview + Paper Broker
 
+#### `POST /investment-plans/:id/automatic-decision-preview`
+
+Dashboard 与最小 Scheduler 使用的默认入口。请求体**不接受**人工填写的 fundamental 或 trend 字段；后端为计划标的读取 OpenD/CAPE/国债/VIX 输入并计算 70/20，再读取 Qwen 情绪作为 10% 输入。请求体只允许可选双桶比例和经操作者确认的 `paper_order`：
+
+```json
+{
+  "bucket_allocation": {
+    "core_ratio": "0.80",
+    "opportunity_ratio": "0.20"
+  },
+  "paper_order": {
+    "idempotency_key": "operator-confirmed-key",
+    "side": "buy",
+    "order_type": "market",
+    "quantity": "1.00"
+  }
+}
+```
+
+服务端使用当前 UTC 月内日期。70/20 市场源不可用时返回统一 `503 service_unavailable`，不创建伪造的决策或审计记录；Qwen 不可用时仍创建记录并明确标记 `sentiment_unavailable` / `90/10/0`。响应新增 `audit_record_id`，可用 `GET /decisions/:id` 读取可读证据。省略 `paper_order` 时绝不下单。
+
+server 默认启用最小固定月日 Scheduler：每 `SCHEDULER_TICK_SECONDS`（默认 60）秒检查一次，仅在计划 `schedule_day` 与 UTC 日期相同的当天创建自动决策存证。SQLite 的 `(plan_id, scheduled_for)` claim 阻止重启或下一 tick 重复存证。它没有订单数量且从不自动提交 paper order。
+
 #### `POST /investment-plans/:id/decision-preview`
 
 当前最适合前端演示主链路的接口。它会串联：
@@ -424,7 +447,7 @@ OPEND_SMOKE_CONFIRM=submit-paper-order \
 
 ### Decision Preview 输入与摘要
 
-当前 `POST /investment-plans/:id/decision-preview` 已由后端自动获取 Qwen market sentiment，并将 execution、fundamental、trend、可选 sentiment、decision 和 broker 快照写入本地 SQLite decision record。fundamental 与 trend 由调用方传入，可先用上述预览端点的响应直接填充。
+当前 `POST /investment-plans/:id/decision-preview` 仍保留为兼容/测试入口，并由后端自动获取 Qwen market sentiment；fundamental 与 trend 仍由调用方传入。前端不再使用它填写 70/20，而应使用 `automatic-decision-preview`。两条入口都会将 execution、70/20 输入来源、可选 sentiment、decision 和 broker 快照写入本地 SQLite decision record。
 
 `summary` 已按 execution、计划金额、基本面、趋势和 regime、Qwen 情绪/降级权重、最终分数、倍率/action、双桶拆分和 paper-order 状态给出稳定分层解释。输入快照不得包含 Qwen API key、OpenD 密码、account id、token 或其他 secret。
 

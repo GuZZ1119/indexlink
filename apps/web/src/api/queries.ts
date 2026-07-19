@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import type {
   CreateInvestmentPlanRequest,
+  AutomaticDecisionPreviewRequest,
   DecisionPreviewRequest,
   DecisionPreviewResponse,
   DecisionRecord,
@@ -125,6 +126,17 @@ export function previewDecision(
   input: DecisionPreviewRequest,
 ): Promise<DecisionPreviewResponse> {
   return request(`/investment-plans/${planId}/decision-preview`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+/** Compose a decision from server-sourced 70/20 inputs and persist its audit record. */
+export function previewAutomaticDecision(
+  planId: string,
+  input: AutomaticDecisionPreviewRequest,
+): Promise<DecisionPreviewResponse> {
+  return request(`/investment-plans/${planId}/automatic-decision-preview`, {
     method: 'POST',
     body: JSON.stringify(input),
   })

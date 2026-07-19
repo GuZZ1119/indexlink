@@ -177,6 +177,7 @@ mod tests {
                 "paper_fills".to_owned(),
                 "paper_orders".to_owned(),
                 "portfolio_snapshots".to_owned(),
+                "scheduled_decision_runs".to_owned(),
             ]
         );
     }

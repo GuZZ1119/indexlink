@@ -84,6 +84,8 @@ The system rejects "blind AI fantasy." Every instruction follows this weighted l
 - 🔌 **Automated trading interface:** Mock mode and real broker APIs (Broker Adapter) for end-to-end decision-to-fill flow.
 - 📜 **Transparent audit log:** Each order generates an AI Decision Record explaining why the adjustment was made.
 
+> **Current demo status (2026-07):** the local SQLite demo now has a fixed-monthly UTC scheduler that writes one idempotent automatic decision record per due plan/day. It fetches server-side 70/20 market inputs and bounded Qwen evidence, but **never submits an order automatically**. Paper orders require an explicit operator request and are limited to MockBroker or local loopback Futu/Moomoo OpenD paper accounts. The next planned scheduling model is a configurable 1–31 day review interval plus per-plan monthly budget controls; it is not implemented yet.
+
 ---
 
 ## Technical Architecture

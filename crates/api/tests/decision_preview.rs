@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use ai_client::{
     AiClientError, AiProvider, NewsItem, NewsSource, NewsSourceError, Sentiment, SentimentAnalysis,
@@ -9,17 +12,19 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use broker::MockBroker;
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use decision_records::{
     CompleteDecisionRecord, CreateDecisionRecord, DecisionRecord, DecisionRecordListQuery,
     DecisionRecordRepository, DecisionRecordRepositoryError, DecisionRecordService,
 };
 use http_body_util::BodyExt;
-use indexlink_api::{build_router, ApiState, ReadinessCheck, ReadinessError};
+use indexlink_api::{build_router, run_due_decisions, ApiState, ReadinessCheck, ReadinessError};
+use indexlink_storage::SqliteStorage;
 use investment_plans::{
     CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository, InvestmentPlanService,
     PlanRepositoryError, ScheduleKind, UpdateInvestmentPlan,
 };
+use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -85,6 +90,43 @@ impl AiProvider for FailingAi {
     /// Return a private provider failure that must trigger safe fallback weights.
     async fn analyze(&self, _prompt: &str) -> Result<Sentiment, AiClientError> {
         Err(AiClientError::EmptyResponse)
+    }
+}
+
+/// Deterministic automatic 70/20 source used without OpenD or public-network access.
+struct StaticMarketData;
+
+#[async_trait]
+impl MarketSignalProvider for StaticMarketData {
+    /// Return a complete same-value fixture that the quant engine can evaluate.
+    async fn fetch(&self, symbol: &str) -> Result<MarketSignalInput, MarketDataError> {
+        let values = vec![1.0; 60];
+        Ok(MarketSignalInput {
+            symbol: symbol.to_ascii_uppercase(),
+            as_of: "2026-07-19".to_owned(),
+            cape_history: values.clone(),
+            cape_current: 1.0,
+            erp_history: values.clone(),
+            erp_current: 1.0,
+            ma_distance_history: values.clone(),
+            ma_distance_current: 1.0,
+            rsi_history: values.clone(),
+            rsi_current: 1.0,
+            vix_history: values,
+            vix_current: 1.0,
+        })
+    }
+
+    /// Return one harmless price point because this test only exercises decision orchestration.
+    async fn fetch_price_history(
+        &self,
+        _symbol: &str,
+        _lookback_days: i64,
+    ) -> Result<Vec<MarketPricePoint>, MarketDataError> {
+        Ok(vec![MarketPricePoint {
+            date: "2026-07-19".to_owned(),
+            close: 100.0,
+        }])
     }
 }
 
@@ -345,6 +387,24 @@ fn app_with_sentiment_provider(
     build_router(state)
 }
 
+/// Build an app with source-backed 70/20 inputs for automatic-preview coverage.
+fn app_with_automatic_sources(
+    repository: Arc<FakeRepository>,
+    broker: Arc<MockBroker>,
+    records: Arc<dyn DecisionRecordRepository>,
+) -> axum::Router {
+    let state = ApiState::with_readiness_plans_broker_and_decision_records(
+        Arc::new(Ready),
+        InvestmentPlanService::new(repository),
+        broker,
+        DecisionRecordService::new(records),
+        "0.1.0",
+    )
+    .with_market_sentiment(Arc::new(StaticNews), Arc::new(PositiveAi))
+    .with_market_data(Arc::new(StaticMarketData));
+    build_router(state)
+}
+
 /// Build an API app that exercises Decision Preview without a Qwen provider.
 fn app_without_sentiment_provider(
     repository: Arc<FakeRepository>,
@@ -455,9 +515,22 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(broker.accepted_orders().len(), 1);
     let persisted = records.records.lock().unwrap();
     assert_eq!(persisted.len(), 1);
-    assert_eq!(persisted[0].execution_snapshot["status"], json!("due"));
-    assert_eq!(persisted[0].fundamental_snapshot["score"], json!(0.10));
-    assert_eq!(persisted[0].trend_snapshot["regime"], json!("neutral"));
+    assert_eq!(
+        persisted[0].execution_snapshot["trigger"],
+        json!("manual_input")
+    );
+    assert_eq!(
+        persisted[0].execution_snapshot["execution"]["status"],
+        json!("due")
+    );
+    assert_eq!(
+        persisted[0].fundamental_snapshot["signal"]["score"],
+        json!(0.10)
+    );
+    assert_eq!(
+        persisted[0].trend_snapshot["signal"]["regime"],
+        json!("neutral")
+    );
     let sentiment_snapshot = persisted[0].sentiment_snapshot.as_ref().unwrap();
     assert_eq!(sentiment_snapshot["source"], json!("market_sentiment"));
     assert_eq!(sentiment_snapshot["score"], json!(0.4));
@@ -477,6 +550,119 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(
         persisted[0].broker_order_ack.as_ref().unwrap()["status"],
         json!("accepted")
+    );
+}
+
+/// Verify automatic preview hides caller signal fields and persists automatic-source disclosure.
+#[tokio::test]
+async fn automatic_decision_preview_uses_server_sources_and_writes_readable_audit() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let mut input = create_input();
+    input.schedule_day = i16::try_from(Utc::now().day()).unwrap();
+    let created = repository.create(input).await.unwrap();
+    let records = Arc::new(FakeDecisionRecordRepository::default());
+    let app = app_with_automatic_sources(
+        repository,
+        broker,
+        Arc::clone(&records) as Arc<dyn DecisionRecordRepository>,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/investment-plans/{}/automatic-decision-preview",
+                    created.id
+                ))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert!(body["audit_record_id"].is_string());
+    assert_eq!(body["execution"]["status"], json!("due"));
+    assert!(body.get("paper_order_ack").is_none());
+    let persisted = records.records.lock().unwrap();
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(
+        persisted[0].execution_snapshot["trigger"],
+        json!("automatic_preview")
+    );
+    assert_eq!(
+        persisted[0].fundamental_snapshot["source"]["kind"],
+        json!("automatic_market_data")
+    );
+    assert_eq!(
+        persisted[0].trend_snapshot["source"]["symbol"],
+        json!("VOO")
+    );
+}
+
+/// Verify the persisted scheduler claim prevents duplicate automatic records on a second tick.
+#[tokio::test]
+async fn scheduler_creates_one_due_audit_record_per_plan_and_utc_day() {
+    let storage = SqliteStorage::connect_with_options("sqlite::memory:", 1, Duration::from_secs(1))
+        .await
+        .unwrap();
+    storage.migrate().await.unwrap();
+    let state = ApiState::new(storage, "0.1.0")
+        .with_market_sentiment(Arc::new(StaticNews), Arc::new(PositiveAi))
+        .with_market_data(Arc::new(StaticMarketData));
+    let app = build_router(state.clone());
+    let day = Utc::now().day();
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/investment-plans")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Scheduled VOO",
+                        "symbol": "VOO",
+                        "base_contribution": "100.00",
+                        "currency": "USD",
+                        "schedule_kind": "monthly",
+                        "schedule_day": day,
+                        "max_single_execution": "100.00"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created = response_json(created).await;
+    let plan_id = created["id"].as_str().unwrap();
+
+    let first = run_due_decisions(&state).await.unwrap();
+    let second = run_due_decisions(&state).await.unwrap();
+    assert_eq!(first.created, 1);
+    assert_eq!(first.already_claimed, 0);
+    assert_eq!(second.created, 0);
+    assert_eq!(second.already_claimed, 1);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/investment-plans/{plan_id}/decisions"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let records = response_json(response).await;
+    assert_eq!(records.as_array().unwrap().len(), 1);
+    assert_eq!(
+        records[0]["execution_snapshot"]["trigger"],
+        json!("automatic_scheduler")
     );
 }
 

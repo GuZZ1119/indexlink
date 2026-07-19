@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { actionBadgeClass } from '@/lib/decision'
 import { cn } from '@/lib/utils'
 import { setSelectedPlanId, uiStore } from '@/stores/ui'
-import type { PersistedMarketSentimentSnapshot } from '@/api/types'
+import type { DecisionRecord, PersistedMarketSentimentSnapshot } from '@/api/types'
 
 /** Display real persisted decision history and detail snapshots from the Rust API. */
 export default function DecisionsPage() {
@@ -40,11 +40,13 @@ export default function DecisionsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="rounded-lg bg-muted/50 p-3 text-sm leading-relaxed">{record.data.summary}</p>
-            <Snapshot title={t('live.history.fundamental')} value={record.data.fundamental_snapshot} />
-            <Snapshot title={t('live.history.trend')} value={record.data.trend_snapshot} />
-            <Snapshot title={t('live.history.decision')} value={record.data.decision_snapshot} />
+            <AuditOverview record={record.data} />
+            <div className="grid gap-4 md:grid-cols-2">
+              <SignalEvidence title={t('live.history.fundamental')} snapshot={record.data.fundamental_snapshot} />
+              <SignalEvidence title={t('live.history.trend')} snapshot={record.data.trend_snapshot} />
+            </div>
             {record.data.sentiment_snapshot && <SentimentEvidence value={record.data.sentiment_snapshot} />}
-            {record.data.broker_order_ack && <Snapshot title={t('live.history.paperAck')} value={record.data.broker_order_ack} />}
+            <OrderEvidence record={record.data} />
           </CardContent>
         </Card>
       </div>
@@ -166,14 +168,68 @@ function PageMessage({ message }: { message: string }) {
   return <div className="p-6 text-sm text-muted-foreground">{message}</div>
 }
 
-/** Render one trusted JSON snapshot returned by the API. */
-function Snapshot({ title, value }: { title: string; value: unknown }) {
+/** Render the decision time, planned amount, weights, and action without exposing raw JSON. */
+function AuditOverview({ record }: { record: DecisionRecord }) {
+  const decision = record.decision_snapshot
+  const trigger = readText(record.execution_snapshot, 'trigger')
   return (
-    <section>
-      <h2 className="mb-2 text-sm font-semibold">{title}</h2>
-      <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 text-xs leading-relaxed">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+    <section className="grid gap-3 rounded-lg border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+      <AuditFact label="执行时间" value={new Date(record.created_at).toLocaleString()} />
+      <AuditFact label="计划投入" value={record.planned_contribution ? `${record.planned_contribution} ${record.currency}` : '本次不在执行日'} />
+      <AuditFact label="触发方式" value={trigger ?? '历史记录'} />
+      <AuditFact label="综合决策" value={`${decision.action} · ${(decision.multiplier * 100).toFixed(0)}%`} />
+      <AuditFact label="70% 基本面" value={decision.fundamental_score.toFixed(2)} />
+      <AuditFact label="20% 趋势" value={decision.trend_score.toFixed(2)} />
+      <AuditFact label="10% AI 情绪" value={decision.sentiment_score === undefined ? '不可用，已降级' : decision.sentiment_score.toFixed(2)} />
+      <AuditFact label="权重模式" value={decision.weight_mode} />
     </section>
   )
+}
+
+/** Render one readable source and score layer from a structured audit snapshot. */
+function SignalEvidence({ title, snapshot }: { title: string; snapshot: Record<string, unknown> }) {
+  const source = asRecord(snapshot.source)
+  const signal = asRecord(snapshot.signal) ?? snapshot
+  return (
+    <section className="space-y-2 rounded-lg border p-4 text-sm">
+      <h2 className="font-semibold">{title}</h2>
+      <p className="text-muted-foreground">{readText(source, 'kind') === 'automatic_market_data' ? '自动市场数据' : '经校验的人工输入'}</p>
+      <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+        {Object.entries(signal).filter(([, value]) => typeof value === 'number' || typeof value === 'string').map(([key, value]) => (
+          <span key={key}>{key}: {String(value)}</span>
+        ))}
+      </div>
+      {source && <p className="text-xs leading-relaxed text-muted-foreground">{readText(source, title.includes('基本') || title.includes('Fundamental') ? 'fundamental' : 'trend') ?? readText(source, 'description') ?? '来源说明不可用'}</p>}
+    </section>
+  )
+}
+
+/** Render the paper-order intent and acknowledgement as readable evidence. */
+function OrderEvidence({ record }: { record: DecisionRecord }) {
+  if (!record.broker_order_request && !record.broker_order_ack) return null
+  return (
+    <section className="space-y-2 rounded-lg border p-4 text-sm">
+      <h2 className="font-semibold">订单与回执</h2>
+      {record.broker_order_request && <p className="text-muted-foreground">请求：{readText(record.broker_order_request, 'side')} · {readText(record.broker_order_request, 'quantity')} · {readText(record.broker_order_request, 'order_type')}</p>}
+      {record.broker_order_ack
+        ? <p className="text-semantic-positive">回执：{record.broker_order_ack.status} · {record.broker_order_ack.order_id} · {record.broker_order_ack.environment}</p>
+        : <p className="text-muted-foreground">尚未提交订单；本存证仅记录本次决策。</p>}
+    </section>
+  )
+}
+
+/** Read one display-safe text field from a JSON audit object. */
+function readText(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const field = value?.[key]
+  return typeof field === 'string' || typeof field === 'number' ? String(field) : undefined
+}
+
+/** Narrow one unknown JSON value to an object for display-only extraction. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+/** Render one compact audit field. */
+function AuditFact({ label, value }: { label: string; value: string }) {
+  return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-medium">{value}</p></div>
 }

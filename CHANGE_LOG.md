@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-07-19 23:15 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：最小固定月日自动决策 / 可读 AI 决策存证 / Demo 文档校正。
+- 涉及文件：
+  - `migrations/sqlite/20260719203000_create_scheduled_decision_runs.sql`
+  - `crates/storage/src/{lib.rs,sqlite.rs,sqlite_scheduled_decisions.rs}`
+  - `crates/api/src/{lib.rs,state.rs,routes/{mod.rs,decision_preview.rs}}`
+  - `crates/api/tests/decision_preview.rs`
+  - `apps/server/src/{config.rs,main.rs}`
+  - `apps/web/src/{api/{queries,types}.ts,pages/{dashboard,decisions}/index.tsx,i18n/locales/{zh,en}.ts}`
+  - `.env.example`、`README.md`、`readme.en.md`、`API_MANAGEMENT.md`、`CHANGE_LOG.md`
+- 变更内容：
+  - 新增 SQLite `scheduled_decision_runs` 幂等 claim；server 默认每 60 秒检查一次到期的活跃 monthly 计划。相同计划在同一 UTC 日期最多生成一条自动决策存证，服务重启不会重复写入。
+  - Scheduler 与新的 `POST /investment-plans/:id/automatic-decision-preview` 共用服务器自动行情链路：70%/20% 由 OpenD、Shiller CAPE、国债和 VIX 数据计算，10% 由 Qwen 管线提供；70/20 数据不可用时不创建伪造记录，Qwen 不可用时明确降级为 `90/10/0`。
+  - Scheduler 不携带订单数量，也从不自动提交 paper order。自动入口只有在操作者明确提供 `paper_order` 时才通过既有 due/action 门控提交模拟订单。
+  - 决策存证新增触发方式、70/20 自动来源披露和 `audit_record_id`；Dashboard 隐藏手填/导入 70/20 信号，改用自动拉取；决策详情页将原始 JSON 改为时间、计划金额、70/20/10 分层、AI 理由/新闻/风险提示、订单意图与回执等可读卡片。
+  - README 与 API 管理文档改为反映当前实现：固定月日、UTC、自动审计但不自动下单、仅 paper trading；下一阶段明确列出“每 1–31 天周期审计 + 每计划月度上限 + 跨月/补跑规则”。
+- 验证：
+  - `cargo fmt --all` 通过。
+  - `cargo test -p indexlink-api -p indexlink-storage -p indexlink-server --locked` 通过：API 48 个、storage 34 个、server 27 个测试；一个需要显式确认的真实 OpenD paper smoke 按预期 ignored。
+  - `cargo test --workspace --locked` 与 `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` 通过；2 个真实 Qwen/news smoke、1 个真实 OpenD paper smoke 与 1 个本机 OpenD 行情 smoke 按预期 ignored。
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过；Vite 仅报告既有首个 JS bundle 大于 500 kB 的非阻断警告。
+
 ### 2026-07-19 22:33 AEST
 
 - 执行模型：GPT-5。
