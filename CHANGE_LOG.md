@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### 2026-07-19 16:55 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 前端开发代理联调修正。
+- 涉及文件：
+  - `apps/web/vite.config.ts`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - Vite 开发服务器新增 `/market-sentiment` 到本机 Rust API `127.0.0.1:8080` 的代理，令 Dashboard 的 Qwen 情绪预览在开发模式下走真实后端，而非被 SPA 回退页处理。
+  - 不改变 API 契约、Qwen 配置、订单门控或真实下单行为；仅在你的 Fork 本地 `main` 修改，不向 Jame `upstream` 推送或修改任何状态。
+- 验证：
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示首个 JS bundle 超过 500 kB，未阻断构建。
+  - 通过 Vite `POST /market-sentiment/preview` 的本机代理联调返回后端 JSON 响应。
+  - `git diff --check` 通过。
+
 ### 2026-07-19 12:15 AEST
 
 - 执行模型：GPT-5。
