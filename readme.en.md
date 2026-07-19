@@ -10,7 +10,7 @@
   <a href="https://github.com/jamesra26/indexlink/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version"></a>
   <a href="https://github.com/jamesra26/indexlink/releases"><img src="https://img.shields.io/github/v/release/jamesra26/indexlink?display_name=tag" alt="Latest Release"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <a href="https://github.com/jamesra26/indexlink"><img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status"></a>
+  <a href="https://github.com/jamesra26/indexlink"><img src="https://img.shields.io/badge/status-demo%20MVP-blue" alt="Status"></a>
 </p>
 
 <p align="center">
@@ -75,14 +75,14 @@ The system rejects "blind AI fantasy." Every instruction follows this weighted l
 ## Key Features
 
 - 🤖 **Qwen Decision Engine:** Reads key financial news and earnings guidance for the week; identifies expectation gaps.
-- 🦀 **Production-grade Rust backend:** Rust (Axum + Tokio) ensures reliable scheduling so financial instructions fire on time.
+- 🦀 **Local Rust backend:** Rust (Axum + Tokio) with local SQLite, migrations, health checks, and a fixed-monthly decision-audit scheduler.
 - 📊 **Dynamic action space:**
   - **Overweight (+20~50%):** Modest increase within DCA discipline when in a historical low band and not in an extreme sharp decline.
   - **Standard (100%):** Steady execution when in a neutral historical band (roughly 30%~70th percentile).
   - **Tactical Delay:** Suggest delaying 3–5 days due to major news (e.g. NFP, FOMC) or technical overheating.
   - **Underweight (-50%) / Skip:** Reduce size or sit out when in a historical high band or under systemic risk.
-- 🔌 **Automated trading interface:** Mock mode and real broker APIs (Broker Adapter) for end-to-end decision-to-fill flow.
-- 📜 **Transparent audit log:** Each order generates an AI Decision Record explaining why the adjustment was made.
+- 🔌 **Paper-trading interface:** Mock mode and local loopback Futu/Moomoo OpenD paper accounts; live trading is not implemented.
+- 📜 **Transparent audit log:** Each automatic or manual Decision Preview writes an AI Decision Record; an order is optional and requires an explicit operator request.
 
 > **Current demo status (2026-07):** the local SQLite demo now has a fixed-monthly UTC scheduler that writes one idempotent automatic decision record per due plan/day. It fetches server-side 70/20 market inputs and bounded Qwen evidence, but **never submits an order automatically**. Paper orders require an explicit operator request and are limited to MockBroker or local loopback Futu/Moomoo OpenD paper accounts. The next planned scheduling model is a configurable 1–31 day review interval plus per-plan monthly budget controls; it is not implemented yet.
 
@@ -111,7 +111,7 @@ graph TD
         QUANT[Quant Engine<br/>Percentile/MA/ERP]
         AICLI[AI Client<br/>Qwen Adapter]
         DEC[Decision Engine<br/>70/20/10 Weighting]
-        EXEC[Execution Orchestrator<br/>Idempotency + Confirm]
+        EXEC[Paper-order Gate<br/>Explicit operator request]
     end
 
     subgraph Adapters[External Adapters]
@@ -142,8 +142,8 @@ graph TD
 | **Quant Engine**           | 70% + 20% | Convert all indicators to percentiles within their own historical distributions; pure functions, no IO, shared by live trading and backtests. |
 | **AI Client**              | 10%       | Wrap Qwen; output bounded sentiment offset `sentiment ∈ [-1, +1]`; return 0 on timeout/parse failure (degraded mode).                         |
 | **Decision Engine**        | —         | Combine 70/20/10 into a composite score, map to DCA multiplier, emit `Decision` with input snapshot.                                          |
-| **Execution Orchestrator** | —         | Decision → (optional) user confirm → idempotent order; state machine `Pending→Confirmed→Submitted→Filled/Failed/Skipped`.                     |
-| **Broker Adapter**         | —         | One trait, two implementations: `MockBroker` (backtest/demo) and `RealBroker` (live).                                                         |
+| **Paper-order gate**       | —         | Decision → optional operator-supplied paper order; without it, only audit evidence is created. Scheduler never submits orders.                |
+| **Broker Adapter**         | —         | One trait with paper-only implementations: `MockBroker` and local loopback Futu/Moomoo OpenD.                                                  |
 
 ### Decision Pipeline
 
@@ -167,43 +167,44 @@ indexlink/
 │  ├─ core-domain/      # Types: Decision, Action, Percentile (no IO)
 │  ├─ quant-engine/     # 70%+20% pure computation (no IO)
 │  ├─ ai-client/        # Qwen adapter + degradation logic
-│  ├─ decision/         # 70/20/10 synthesis + mapping
-│  ├─ broker/           # Broker trait + Mock/Real impl
-│  ├─ scheduler/        # Tokio persistent scheduling
+│  ├─ decision-engine/  # 70/20/10 synthesis + mapping
+│  ├─ investment-plans/ # Fixed-monthly plans and execution preview
+│  ├─ decision-records/ # Auditable decision-record port
+│  ├─ market-data/      # Automatic 70/20 input provider
+│  ├─ broker/           # Broker trait + Mock/OpenD paper impl
 │  ├─ storage/          # DB access (audit/state/cache)
-│  └─ api/              # Axum HTTP layer (confirm/query/override)
+│  └─ api/              # Axum HTTP layer
 └─ apps/
-   └─ server/           # Binary entrypoint assembling all crates
+   ├─ server/           # Binary entrypoint and minimum scheduler
+   └─ web/              # Vite + React demo UI
 ```
 
-> Designing `quant-engine` / `decision` as pure logic crates with no IO is key: **live trading and backtests share the same decision code**.
+> `quant-engine` and `decision-engine` stay pure and IO-free. The current historical chart is deliberately a simplified MA200 price-rule replay, not a complete historical 70/20/10 reconstruction.
 
 ### Persistence & Audit
 
 | Table          | Purpose                                                             |
 | :------------- | :------------------------------------------------------------------ |
-| `plans`        | DCA plans (symbol, schedule, base amount, risk params)              |
-| `decisions`    | Each decision + **input snapshot** + rationale (AI Decision Record) |
-| `orders`       | Order state machine + idempotency keys                              |
-| `market_cache` | Market/indicator cache for same-day reproducibility                 |
+| `investment_plans` | DCA instruments, fixed monthly execution day, base amount and cap |
+| `decision_records` | Each decision + **input snapshot**, Qwen evidence, request/ack and readable summary |
+| `scheduled_decision_runs` | One UTC-day claim per plan for the audit scheduler |
+| `paper_orders` / `paper_fills` / `portfolio_snapshots` | Local paper ledger reconstructed from observed OpenD order changes |
 
 > Audit principle: **store inputs, not just conclusions**—persist percentiles, trend signals, sentiment, and weights at decision time so you can answer "why did we add 30% that day?"
 
 ### Reliability & Safety
 
-- **Idempotency:** Unique constraint on `(plan_id, as_of_date)` + order idempotency keys to prevent duplicate fills.
-- **Circuit breaker / Kill Switch:** Default to **Skip** on missing data or broker errors—never invest when uncertain.
-- **Degradation chain:** AI down → 90/10/0; market feed down → cache or skip day; broker down → retry then manual handoff.
-- **Amount safety:** Hard-coded multiplier cap + daily amount cap; AI cannot override.
-- **Manual override:** Axum endpoints for confirm / reject / manual override; every intervention is audited.
+- **Idempotency:** `(plan_id, UTC date)` prevents duplicate automatic audit records after scheduler ticks or restarts.
+- **Safe market-data failure:** Missing 70/20 data prevents automatic audit creation; no synthetic decision is written.
+- **Degradation chain:** AI down → explicit 90/10/0 decision mode; market feed down → no automatic decision; no retrying order is manufactured.
+- **Amount safety:** Hard-coded multiplier and single-execution caps; AI cannot override either.
+- **Paper-only execution:** The scheduler never submits an order. A paper order requires an explicit operator request, a due plan, and an executable action.
 
 ### Phased Rollout
 
-1. **MVP:** `core-domain` + `quant-engine` (70% only) + `MockBroker` + local backtest—validate percentile-driven adaptive DCA.
-2. **Add rhythm:** Wire in 20% trend + circuit breaker.
-3. **Add AI:** Qwen 10% bounded nudge + degradation.
-4. **Scheduling & execution:** Persistent Scheduler + idempotent orders + audit log.
-5. **Go live:** `RealBroker` + human confirmation flow.
+1. **Completed demo MVP:** local SQLite, automatic 70/20 data, bounded Qwen evidence, 70/20/10 decisions, audit records, a fixed-monthly scheduler, paper-order confirmation, and a local OpenD paper-account view.
+2. **Next:** configurable 1–31 day review intervals, per-plan monthly budgets, missed-run policies, and delayed re-evaluation.
+3. **Not in scope:** automatic or live orders, cloud sync, multi-user access, tax/FX/dividend treatment, and a complete historical 70/20/10 replay.
 
 ---
 
@@ -216,3 +217,13 @@ indexlink/
 - **Adaptive ≠ market timing:** This system measures price **position** within a historical distribution only. It does **not** claim to judge whether the market is "undervalued" or "overvalued," and cannot guarantee "buying the bottom."
 - **Use at your own risk:** Before connecting a real broker API, fully understand the code and risks, and test thoroughly. The authors are not liable for any direct or indirect losses from use of this software.
 - **Compliance:** Automated trading may be restricted by laws and broker terms in your jurisdiction. Confirm compliance before use.
+
+---
+
+## Copyright and contributors
+
+Copyright © 2026 IndexLink Contributors. The project is released under the [MIT License](./LICENSE); the original copyright notice in the license text remains unchanged.
+
+- Jame — original author and repository maintainer.
+- Xuanzhou Gu — backend, SQLite persistence, OpenD paper trading, decision records, and demo-loop contributions.
+- Yucong Peng — project contributor.

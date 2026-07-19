@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 2026-07-20 00:40 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：MVP 状态审查与 README 运行说明校正。
+- 涉及文件：
+  - `README.md`
+  - `readme.en.md`
+  - `.env.example`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 以当前实现更新 README：明确本机可演示 MVP 已覆盖计划管理、自动 70/20、Qwen 证据、固定月日自动存证、双桶、paper order、SQLite 账本与图表；同时明确 Scheduler 不自动下单、仅 paper trading、固定月执行日和简化历史回放等边界。
+  - 修正 Dashboard 演示步骤：前端使用服务端自动市场输入，不再要求手工填写或导入 70/20 JSON。
+  - 补充 Qwen/OpenD 本地配置说明，并将 `.env.example` 的 Vite CORS 示例端口校正为 `5173`。
+  - 在 README 增加 MIT 发布说明及 Jame、Xuanzhou Gu、Yucong Peng 贡献者信息。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test --workspace --locked` 通过；4 个需要真实 Qwen/OpenD/公开市场数据的 smoke 按预期 ignored。
+  - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` 通过。
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过；仅保留既有 bundle 大小非阻断警告。
+
 ### 2026-07-20 00:15 AEST
 
 - 执行模型：GPT-5。
