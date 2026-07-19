@@ -10,6 +10,7 @@ members = [
     "crates/broker",
     "crates/decision-engine",
     "crates/decision-records",
+    "crates/market-data",
     "apps/server",
 ]
 
@@ -23,6 +24,7 @@ ai-client = { path = "crates/ai-client" }
 broker = { path = "crates/broker" }
 decision-engine = { path = "crates/decision-engine" }
 decision-records = { path = "crates/decision-records" }
+market-data = { path = "crates/market-data" }
 investment-plans = { path = "crates/investment-plans" }
 indexlink-storage = { path = "crates/storage" }
 indexlink-api = { path = "crates/api" }
@@ -40,6 +42,7 @@ time = { version = "0.3", default-features = false, features = ["parsing", "serd
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+regex = "1"
 tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
 tracing = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

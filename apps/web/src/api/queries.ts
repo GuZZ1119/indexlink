@@ -8,6 +8,7 @@ import type {
   FundamentalPreviewRequest,
   FundamentalSignal,
   InvestmentPlan,
+  MarketSignalInput,
   TrendPreviewRequest,
   TrendSignal,
 } from './types'
@@ -62,6 +63,11 @@ export function previewTrend(input: TrendPreviewRequest): Promise<TrendSignal> {
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+/** Read one automatic, source-labelled signal snapshot from the local Rust API. */
+export function fetchMarketSignalInput(symbol: string): Promise<MarketSignalInput> {
+  return request(`/signals/market-input/${encodeURIComponent(symbol)}`)
 }
 
 /** Compose a decision, persist its audit record, and optionally submit a paper order. */

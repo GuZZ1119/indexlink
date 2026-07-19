@@ -291,6 +291,18 @@ curl -X POST http://127.0.0.1:8080/market-sentiment/preview
 
 ## Quant Signal APIs
 
+### Automatic Market Signal Input API
+
+#### `GET /signals/market-input/:symbol`
+
+读取并组装当前计划标的的自动信号输入，供 Dashboard 填充既有 Fundamental/Trend Preview 表单；该端点只读，不会创建订单、不会访问交易账户，也不会保存密钥。server 必须已配置本机 loopback OpenD；未配置或任一数据源不可用时，统一返回安全的 `503 service_unavailable`。
+
+- 价格与技术层：本机 OpenD 的美股日线，后端本地计算 MA200 distance 与 14 日 RSI，并按月保留最近 60 个快照。
+- 基本面层：公开 Shiller CAPE 月度表；ERP 明确使用代理口径 `100 / CAPE - 美国财政部 10 年期国债收益率`，不是前瞻盈利预测。
+- 波动层：Cboe 公开 VIX 历史 CSV，按每月最后一个可用观测值保留最近 60 个快照。
+
+响应含 `fundamental`、`trend`、`as_of` 与来源说明。页面只在用户点击醒目的“自动拉取市场信号”按钮后请求；返回值仍展示在可编辑字段中，用户可在运行 Decision Preview 前审查。实际执行时，同一输入最终会随 Decision Record 保存到本地 SQLite 审计快照。
+
 ### Fundamental Signal API
 
 #### `POST /signals/fundamental/preview`
@@ -318,7 +330,7 @@ curl -X POST http://127.0.0.1:8080/market-sentiment/preview
 - `ma_distance_percentile`、`rsi_percentile`、`vix_percentile`：原始审计分位。
 - `regime`：`neutral`、`overheated` 或 `falling_knife`。
 
-这两个端点不擅自接入未选定的数据供应商，也不保存调用方的历史数据；演示前端或受控导入流程应把同一份计算结果放入 Decision Preview 的 `fundamental` / `trend` 快照。这样既保证后端计算和校验完整可用，也不会把外部行情/估值供应商、凭据或数据授权假设写死进服务端。
+这两个端点不保存调用方请求本身；无论来自手工输入、JSON 导入还是自动市场快照，只有最终提交的 Decision Preview 输入会作为审计记录保存到本地 SQLite。
 
 ### Futu/Moomoo OpenD Paper Trading API
 

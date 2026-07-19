@@ -13,6 +13,7 @@ decision-engine.workspace = true
 decision-records.workspace = true
 investment-plans.workspace = true
 indexlink-storage.workspace = true
+market-data.workspace = true
 quant-engine.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true

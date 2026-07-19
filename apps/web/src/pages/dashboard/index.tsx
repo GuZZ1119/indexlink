@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { BarChart3, Bot, ClipboardCheck, FileJson, Plus, Send, Upload } from 'lucide-react'
+import { BarChart3, Bot, ClipboardCheck, FileJson, Plus, RefreshCw, Send, Upload } from 'lucide-react'
 import { useSnapshot } from 'valtio'
 
 import {
   ApiRequestError,
+  fetchMarketSignalInput,
   previewDecision,
   previewFundamental,
   previewTrend,
   useCreatePlan,
   usePlans,
 } from '@/api/queries'
-import type { CreateInvestmentPlanRequest, DecisionPreviewResponse } from '@/api/types'
+import type { CreateInvestmentPlanRequest, DecisionPreviewResponse, MarketSignalInput } from '@/api/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -105,6 +106,22 @@ function signalFieldsFromImport(value: unknown): SignalFields {
   }
 }
 
+/** Convert one server-refreshed market snapshot into editable dashboard signal fields. */
+function signalFieldsFromMarketInput(input: MarketSignalInput): SignalFields {
+  return {
+    capeHistory: input.fundamental.cape_history.join(', '),
+    capeCurrent: String(input.fundamental.cape_current),
+    erpHistory: input.fundamental.erp_history.join(', '),
+    erpCurrent: String(input.fundamental.erp_current),
+    maHistory: input.trend.ma_distance_history.join(', '),
+    maCurrent: String(input.trend.ma_distance_current),
+    rsiHistory: input.trend.rsi_history.join(', '),
+    rsiCurrent: String(input.trend.rsi_current),
+    vixHistory: input.trend.vix_history.join(', '),
+    vixCurrent: String(input.trend.vix_current),
+  }
+}
+
 /** Check a JSON value is a non-null object before reading its signal fields. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -146,6 +163,7 @@ export default function DashboardPage() {
   const [result, setResult] = useState<DecisionPreviewResponse | null>(null)
   const [importName, setImportName] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+  const [marketRefresh, setMarketRefresh] = useState<MarketSignalInput | null>(null)
   const [planFormOpen, setPlanFormOpen] = useState(false)
 
   useEffect(() => {
@@ -205,6 +223,20 @@ export default function DashboardPage() {
       await queryClient.invalidateQueries({ queryKey: ['decision-records', selectedPlanId] })
     },
   })
+  const marketRefreshMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedPlan) {
+        throw new ApiRequestError('select a plan before refreshing market signals')
+      }
+      return fetchMarketSignalInput(selectedPlan.symbol)
+    },
+    onSuccess: (input) => {
+      setSignals(signalFieldsFromMarketInput(input))
+      setMarketRefresh(input)
+      setImportError(null)
+      setResult(null)
+    },
+  })
 
   const updateSignal = (key: keyof SignalFields, value: string) => {
     setSignals((current) => ({ ...current, [key]: value }))
@@ -231,7 +263,7 @@ export default function DashboardPage() {
       setImportError(error instanceof Error ? error.message : 'signal import failed')
     }
   }
-  const error = decisionMutation.error ?? createPlan.error ?? plansError
+  const error = marketRefreshMutation.error ?? decisionMutation.error ?? createPlan.error ?? plansError
   const hasSignalInput = Object.values(signals).every((value) => value.trim().length > 0)
 
   return (
@@ -315,6 +347,24 @@ export default function DashboardPage() {
             </label>
           </div>
         </CardContent>
+      </Card>
+
+      <Card className="border-primary/60 bg-primary/5 shadow-sm">
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-primary"><RefreshCw className="size-5" />{t('live.decision.marketRefreshTitle')}</CardTitle>
+            <CardDescription>{t('live.decision.marketRefreshDescription')}</CardDescription>
+          </div>
+          <Button size="lg" disabled={!selectedPlan || marketRefreshMutation.isPending} onClick={() => marketRefreshMutation.mutate()}>
+            <RefreshCw className={cn('size-4', marketRefreshMutation.isPending && 'animate-spin')} />
+            {marketRefreshMutation.isPending ? t('live.decision.marketRefreshing') : t('live.decision.marketRefresh')}
+          </Button>
+        </CardHeader>
+        {marketRefresh && (
+          <CardContent className="text-sm text-muted-foreground">
+            {t('live.decision.marketRefreshed', { symbol: marketRefresh.symbol, date: marketRefresh.as_of })}
+          </CardContent>
+        )}
       </Card>
 
       <Card>

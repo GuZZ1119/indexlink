@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 2026-07-19 17:52 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` 自动市场信号拉取 / Dashboard 联调。
+- 涉及文件：
+  - `Cargo.toml`、`Cargo.lock`
+  - `crates/market-data/**`
+  - `crates/api/{Cargo.toml,src/state.rs,src/routes/{mod.rs,market_data.rs},tests/market_data.rs}`
+  - `apps/server/{Cargo.toml,src/main.rs}`
+  - `apps/web/src/{api/{queries,types}.ts,pages/dashboard/index.tsx,i18n/locales/{zh,en}.ts}`
+  - `API_MANAGEMENT.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增只读 `market-data` adapter 与 `GET /signals/market-input/:symbol`：通过本机 loopback OpenD 读取美股日线并本地计算 MA200 distance / 14 日 RSI；通过公开 Shiller CAPE 月度表、Cboe VIX 历史 CSV 和美国财政部十年期收益率生成最近 60 个历史快照。ERP 明确为 `100 / CAPE - 10 年期国债收益率` 代理口径，不伪装为前瞻预测。
+  - OpenD 历史 K 线支持分页；自动拉取不读取交易账户、不提交订单、不传输或记录凭据。任何外部来源不可用时保持统一安全的 `503 service_unavailable`，内部错误仅写日志。
+  - server 在已有 paper-only OpenD 配置存在时注入只读市场数据 provider；未配置 OpenD 时保持自动拉取不可用，不会静默使用模拟数据。
+  - Dashboard 增加高可见度“自动拉取市场信号”卡片和刷新按钮，成功后将来源明确的数据填入仍可人工复核的信号字段；paper order 默认关闭且本次功能不改变订单门控。
+  - 最终 Decision Preview 继续将使用到的输入快照写入本地 SQLite decision record；自动刷新本身不向云端持久化。
+- 验证：
+  - `cargo test -p market-data --offline` 通过（2 passed、1 ignored read-only local smoke）。
+  - `cargo test -p indexlink-api --test market_data --offline` 通过（2 passed）。
+  - `cargo test -p indexlink-api --offline` 通过。
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过；Vite 仅提示首个 JS bundle 超过 500 kB，未阻断构建。
+  - 真实 OpenD 日线只读协议探测成功；原 FRED public export 在本机 Rust 客户端超时，已替换为 Cboe 与美国财政部的公开 CSV 来源。`cargo test -p market-data local_opend_market_signal_smoke -- --ignored` 已在本机通过，仅读取 VOO/OpenD 与公开 CSV，不提交订单。
+
 ### 2026-07-19 17:00 AEST
 
 - 执行模型：GPT-5。

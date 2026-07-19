@@ -14,6 +14,7 @@ use broker::{
 use config::Config;
 use indexlink_api::{build_router_with_cors, ApiState};
 use indexlink_storage::SqliteStorage;
+use market_data::OpenDMarketSignalProvider;
 use std::{future::Future, sync::Arc};
 use tracing_subscriber::EnvFilter;
 
@@ -75,7 +76,13 @@ where
         None => state,
     };
     match opend {
-        Some(config) => Ok(state.with_broker(build_broker(config).await?)),
+        Some(config) => {
+            let market_data = OpenDMarketSignalProvider::new(config.host(), config.port())
+                .map_err(BrokerSetupError::MarketData)?;
+            Ok(state
+                .with_market_data(Arc::new(market_data))
+                .with_broker(build_broker(config).await?))
+        }
         None => Ok(state),
     }
 }
@@ -95,6 +102,9 @@ async fn build_opend_paper_broker(
 /// Safe startup error when an explicitly configured OpenD paper adapter cannot initialize.
 #[derive(Debug, thiserror::Error)]
 enum BrokerSetupError {
+    /// The local OpenD endpoint could not become a read-only market-data provider.
+    #[error("configured OpenD market-data provider could not be initialized")]
+    MarketData(#[source] market_data::MarketDataError),
     /// The local OpenD session could not be initialized.
     #[error("configured OpenD paper broker is unavailable")]
     Session(#[source] OpenDSessionError),

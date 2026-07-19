@@ -66,6 +66,19 @@ export interface TrendSignal {
   regime: 'neutral' | 'overheated' | 'falling_knife'
 }
 
+/** Automatically refreshed, source-labelled inputs for the existing signal APIs. */
+export interface MarketSignalInput {
+  symbol: string
+  as_of: string
+  fundamental: FundamentalPreviewRequest
+  trend: TrendPreviewRequest
+  sources: {
+    price: string
+    fundamental: string
+    volatility: string
+  }
+}
+
 /** Optional paper-only order submitted from a decision preview. */
 export interface PaperOrderRequest {
   idempotency_key: string

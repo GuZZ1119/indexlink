@@ -11,6 +11,7 @@ use indexlink_storage::{
     SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository, SqliteStorage,
 };
 use investment_plans::InvestmentPlanService;
+use market_data::{MarketDataError, MarketSignalInput, MarketSignalProvider};
 
 use crate::ApiError;
 
@@ -47,6 +48,7 @@ pub struct ApiState {
     decision_records: DecisionRecordService,
     broker: Arc<dyn BrokerClient>,
     market_sentiment: Option<Arc<MarketSentimentDependencies>>,
+    market_data: Option<Arc<dyn MarketSignalProvider>>,
     version: Arc<str>,
 }
 
@@ -59,6 +61,10 @@ impl fmt::Debug for ApiState {
             .field("decision_records", &"DecisionRecordService")
             .field("broker", &"BrokerClient")
             .field("market_sentiment", &self.market_sentiment)
+            .field(
+                "market_data",
+                &self.market_data.as_ref().map(|_| "MarketSignalProvider"),
+            )
             .field("version", &self.version)
             .finish()
     }
@@ -80,6 +86,7 @@ impl ApiState {
             decision_records,
             broker: Arc::new(MockBroker::paper_only()),
             market_sentiment: None,
+            market_data: None,
             version: version.into(),
         }
     }
@@ -144,6 +151,7 @@ impl ApiState {
             decision_records,
             broker,
             market_sentiment: None,
+            market_data: None,
             version: version.into(),
         }
     }
@@ -161,6 +169,15 @@ impl ApiState {
             news_source,
             provider,
         }));
+        self
+    }
+
+    /// 注入只读市场信号 provider，启用自动数据刷新。
+    ///
+    /// provider 只返回可审计的指标输入，不得持有交易账户、下单权限或任何密钥快照。
+    #[must_use]
+    pub fn with_market_data(mut self, provider: Arc<dyn MarketSignalProvider>) -> Self {
+        self.market_data = Some(provider);
         self
     }
 
@@ -218,6 +235,29 @@ impl ApiState {
         .await
         .inspect_err(|error| tracing::error!(%error, "market sentiment pipeline failed"))
         .map_err(Into::into)
+    }
+
+    /// 拉取一份自动市场信号输入，并在边界保留内部失败日志。
+    pub(crate) async fn market_signal_input(
+        &self,
+        symbol: &str,
+    ) -> Result<MarketSignalInput, ApiError> {
+        let provider = self
+            .market_data
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        provider
+            .fetch(symbol)
+            .await
+            .inspect_err(|error| tracing::error!(%error, "market signal refresh failed"))
+            .map_err(market_data_error)
+    }
+}
+
+fn market_data_error(error: MarketDataError) -> ApiError {
+    match error {
+        MarketDataError::InvalidSymbol => ApiError::BadRequest,
+        _ => ApiError::ServiceUnavailable,
     }
 }
 
