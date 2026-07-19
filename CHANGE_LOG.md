@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### 2026-07-20 00:15 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Vite 开发代理图表接口修复。
+- 涉及文件：
+  - `apps/web/vite.config.ts`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 为 `/market-data` 与 `/paper-performance` 增加到本机 Rust `8080` 的 Vite dev proxy，覆盖历史走势、真实收益轨迹和一年历史回放所使用的 API。
+  - 根因：后端接口本身均返回 `200`，但开发服务器此前未转发这两个路径，浏览器请求被 Vite SPA fallback 吞掉，导致页面误报“Rust API 未提供此功能版本”。
+- 验证：
+  - 临时启动更新后的 Vite 并验证：`GET /market-data/holdings?period=1y` 与 `GET /paper-performance/historical-backtest` 均经代理返回 Rust 的 JSON `200`。
+  - `pnpm --dir apps/web lint` 与 `pnpm --dir apps/web build` 通过。
+
 ### 2026-07-20 00:05 AEST
 
 - 执行模型：GPT-5。
