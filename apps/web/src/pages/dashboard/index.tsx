@@ -418,21 +418,23 @@ export default function DashboardPage() {
       </Card>
 
       <Card className="border-primary/60 bg-primary/5 shadow-sm">
-        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader>
           <div>
             <CardTitle className="flex items-center gap-2 text-primary"><RefreshCw className="size-5" />{t('live.decision.marketRefreshTitle')}</CardTitle>
             <CardDescription>{t('live.decision.marketRefreshDescription')}</CardDescription>
           </div>
-          <Button size="lg" disabled={!selectedPlan || marketRefreshMutation.isPending} onClick={() => marketRefreshMutation.mutate()}>
+        </CardHeader>
+        <CardContent className="flex flex-col items-center gap-3">
+          <Button className="w-full max-w-xl" size="lg" disabled={!selectedPlan || marketRefreshMutation.isPending} onClick={() => marketRefreshMutation.mutate()}>
             <RefreshCw className={cn('size-4', marketRefreshMutation.isPending && 'animate-spin')} />
             {marketRefreshMutation.isPending ? t('live.decision.marketRefreshing') : t('live.decision.marketRefresh')}
           </Button>
-        </CardHeader>
-        {marketRefresh && (
-          <CardContent className="text-sm text-muted-foreground">
+          {marketRefresh && (
+            <p className="text-center text-sm text-muted-foreground">
             {t('live.decision.marketRefreshed', { symbol: marketRefresh.symbol, date: marketRefresh.as_of })}
-          </CardContent>
-        )}
+            </p>
+          )}
+        </CardContent>
       </Card>
 
       <Card>
@@ -748,7 +750,7 @@ function DashboardOverview({
                       : '—'} />
                     <OverviewFact label={t('dashboard.latest.multiplier')} value={formatMultiplier(decision.decision.multiplier)} />
                   </div>
-                  <p className="border-t pt-3 text-sm leading-relaxed text-muted-foreground">{decision.summary}</p>
+                  <DecisionExplanation decision={decision.decision} />
                 </>
               ) : (
                 <EmptyState text={t('dashboard.latest.empty')} />
@@ -774,10 +776,17 @@ function DashboardOverview({
         </CardHeader>
         <CardContent>
           {marketRefresh ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              {signalValues.map(([label, value]) => (
-                <OverviewFact key={label} label={label} value={Number(value).toFixed(2)} />
-              ))}
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {signalValues.map(([label, value]) => (
+                  <OverviewFact key={label} label={label} value={Number(value).toFixed(2)} />
+                ))}
+              </div>
+              <div className="grid gap-2 rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground sm:grid-cols-3">
+                <span>{t('dashboard.marketSnapshot.priceSource')}: {marketRefresh.sources.price}</span>
+                <span>{t('dashboard.marketSnapshot.fundamentalSource')}: {marketRefresh.sources.fundamental}</span>
+                <span>{t('dashboard.marketSnapshot.volatilitySource')}: {marketRefresh.sources.volatility}</span>
+              </div>
             </div>
           ) : (
             <EmptyState text={t('dashboard.marketSnapshot.empty')} />
@@ -786,17 +795,19 @@ function DashboardOverview({
       </Card>
 
       <Card className="border-primary/30">
-        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader>
           <div>
             <CardTitle>{t('dashboard.portfolio.title')}</CardTitle>
             <CardDescription>{t('dashboard.portfolio.description')}</CardDescription>
           </div>
-          <Button size="lg" disabled={portfolioRefreshing} onClick={onRefreshPortfolio}>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex justify-center">
+          <Button className="w-full max-w-md" size="lg" disabled={portfolioRefreshing} onClick={onRefreshPortfolio}>
             <RefreshCw className={cn('size-4', portfolioRefreshing && 'animate-spin')} />
             {portfolioRefreshing ? t('dashboard.portfolio.refreshing') : t('dashboard.portfolio.refresh')}
           </Button>
-        </CardHeader>
-        <CardContent>
+          </div>
           {portfolio ? <PaperPortfolioDetails portfolio={portfolio} /> : <EmptyState text={t('dashboard.portfolio.empty')} />}
         </CardContent>
       </Card>
@@ -850,9 +861,9 @@ function PaperPerformanceDetails({ performance, refreshing, currency, onRefresh,
     <Card className="border-primary/30">
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div><CardTitle>{t('dashboard.performance.title')}</CardTitle><CardDescription>{t('dashboard.performance.description')}</CardDescription></div>
-        <Button disabled={refreshing} onClick={onRefresh}><RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />{t('dashboard.performance.refresh')}</Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="flex justify-center"><Button className="w-full max-w-md" disabled={refreshing} onClick={onRefresh}><RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />{t('dashboard.performance.refresh')}</Button></div>
         {!performance?.has_opening_balance && (
           <form className="flex flex-wrap items-end gap-3 rounded-lg border border-dashed p-3" onSubmit={(event) => { event.preventDefault(); onSetOpeningBalance({ amount, occurred_at: new Date().toISOString() }) }}>
             <label className="grid gap-1 text-sm font-medium"><span>{t('dashboard.performance.openingBalance')}</span><Input required inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="10000.00" /></label>
@@ -881,6 +892,54 @@ function OverviewFact({ label, value }: { label: string; value: ReactNode }) {
       <div className="mt-1 min-h-5 text-sm font-semibold">{value}</div>
     </div>
   )
+}
+
+/** Explain the score-derived decision in readable terms without inventing an AI rationale. */
+function DecisionExplanation({ decision }: { decision: DecisionResult }) {
+  const { t } = useTranslation()
+  const sentiment = decision.sentiment_score
+  return (
+    <div className="space-y-3 border-t pt-3 text-sm">
+      <p className="font-semibold">{t('dashboard.decisionExplanation.title')}</p>
+      <div className="grid gap-2 rounded-lg bg-muted/30 p-3 sm:grid-cols-3">
+        <ExplanationItem
+          label={t('dashboard.decisionExplanation.fundamental')}
+          value={t('dashboard.decisionExplanation.scoreBand', { score: decision.fundamental_score.toFixed(2), band: scoreBand(t, decision.fundamental_score) })}
+        />
+        <ExplanationItem
+          label={t('dashboard.decisionExplanation.trend')}
+          value={t('dashboard.decisionExplanation.scoreBand', { score: decision.trend_score.toFixed(2), band: scoreBand(t, decision.trend_score) })}
+        />
+        <ExplanationItem
+          label={t('dashboard.decisionExplanation.ai')}
+          value={sentiment === undefined
+            ? t('dashboard.decisionExplanation.aiUnavailable')
+            : t('dashboard.decisionExplanation.aiAvailable', { score: sentiment.toFixed(2) })}
+        />
+      </div>
+      <p className="leading-relaxed text-muted-foreground">
+        {t('dashboard.decisionExplanation.result', {
+          action: t(`action.${decision.action}`),
+          multiplier: formatMultiplier(decision.multiplier),
+        })}
+      </p>
+      {sentiment !== undefined && (
+        <p className="text-xs text-muted-foreground">{t('dashboard.decisionExplanation.aiSource')}</p>
+      )}
+    </div>
+  )
+}
+
+/** Render one concise, source-backed explanation field. */
+function ExplanationItem({ label, value }: { label: string; value: string }) {
+  return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-medium">{value}</p></div>
+}
+
+/** Convert a bounded decision score into a deliberately coarse presentation band. */
+function scoreBand(t: ReturnType<typeof useTranslation>['t'], score: number): string {
+  if (score <= 0.33) return t('dashboard.decisionExplanation.cautious')
+  if (score >= 0.67) return t('dashboard.decisionExplanation.supportive')
+  return t('dashboard.decisionExplanation.neutral')
 }
 
 /** Render a 70/20/10 decision score sourced from the latest decision record. */
@@ -1158,9 +1217,7 @@ function DecisionResultCard({
             {result.execution.currency}
           </div>
         )}
-        <p className="rounded-lg bg-muted/50 p-3 text-sm leading-relaxed text-muted-foreground">
-          {result.summary}
-        </p>
+        <DecisionExplanation decision={result.decision} />
         {result.paper_order_ack && (
           <div className="rounded-lg border border-semantic-positive/40 bg-semantic-positive/10 p-3 text-sm">
             {t('live.decision.paperAck')}: {result.paper_order_ack.status} · order{' '}

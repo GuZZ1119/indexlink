@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 2026-07-19 20:24 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Fork `main` Dashboard 可读性与决策解释改进。
+- 涉及文件：
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `apps/web/src/i18n/locales/{zh.ts,en.ts}`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将自动市场信号、模拟账户和收益账本的刷新按钮改为卡片内居中布局，避免宽屏下操作入口集中在左侧。
+  - 移除 Dashboard 中直接展示的原始英文技术 summary；改为可读的基本面、趋势、Qwen 情绪、权重降级和最终倍率解释，不把内部字段串暴露给用户。
+  - 市场输入快照说明其含义，并在成功自动拉取后展示 CAPE、ERP、MA200、RSI、VIX 及价格/基本面/波动率来源。
+  - 明确现有 Qwen 契约只返回有界情绪分数；页面显示真实新闻源与降级状态，但不虚构模型未返回的逐条新闻理由。
+- 验证：
+  - `pnpm --dir apps/web lint` 通过。
+  - `pnpm --dir apps/web build` 通过；Vite 仅提示现有首个 JS bundle 超过 500 kB，未阻断构建。
+
 ### 2026-07-19 20:12 AEST
 
 - 执行模型：GPT-5。
