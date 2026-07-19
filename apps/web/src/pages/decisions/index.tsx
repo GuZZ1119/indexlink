@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { actionBadgeClass } from '@/lib/decision'
 import { cn } from '@/lib/utils'
 import { setSelectedPlanId, uiStore } from '@/stores/ui'
+import type { PersistedMarketSentimentSnapshot } from '@/api/types'
 
 /** Display real persisted decision history and detail snapshots from the Rust API. */
 export default function DecisionsPage() {
@@ -42,7 +43,7 @@ export default function DecisionsPage() {
             <Snapshot title={t('live.history.fundamental')} value={record.data.fundamental_snapshot} />
             <Snapshot title={t('live.history.trend')} value={record.data.trend_snapshot} />
             <Snapshot title={t('live.history.decision')} value={record.data.decision_snapshot} />
-            {record.data.sentiment_snapshot && <Snapshot title={t('live.history.sentiment')} value={record.data.sentiment_snapshot} />}
+            {record.data.sentiment_snapshot && <SentimentEvidence value={record.data.sentiment_snapshot} />}
             {record.data.broker_order_ack && <Snapshot title={t('live.history.paperAck')} value={record.data.broker_order_ack} />}
           </CardContent>
         </Card>
@@ -117,6 +118,46 @@ export default function DecisionsPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+/** Render saved Qwen reasoning as readable audit evidence instead of a raw JSON blob. */
+function SentimentEvidence({ value }: { value: PersistedMarketSentimentSnapshot }) {
+  const { t } = useTranslation()
+  const evidence = typeof value.rationale === 'string'
+    && Array.isArray(value.warnings)
+    && Array.isArray(value.headlines)
+    ? { rationale: value.rationale, warnings: value.warnings, headlines: value.headlines }
+    : null
+  return (
+    <section className="space-y-3 rounded-lg border bg-muted/20 p-4 text-sm">
+      <h2 className="font-semibold">{t('live.history.sentiment')}</h2>
+      {!evidence && <p className="text-muted-foreground">{t('dashboard.decisionExplanation.aiLegacySource')}</p>}
+      {evidence && <p className="text-muted-foreground">{evidence.rationale}</p>}
+      {evidence && evidence.warnings.length > 0 && (
+        <div>
+          <p className="font-medium">{t('dashboard.decisionExplanation.aiWarnings')}</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">
+            {evidence.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        </div>
+      )}
+      {evidence && <div>
+        <p className="font-medium">{t('dashboard.decisionExplanation.aiHeadlines')}</p>
+        <ul className="mt-1 space-y-1 text-muted-foreground">
+          {evidence.headlines.map((headline) => (
+            <li key={`${headline.published_at}-${headline.title}`}>
+              {headline.url ? (
+                <a className="underline-offset-4 hover:underline" href={headline.url} rel="noreferrer" target="_blank">
+                  {headline.title}
+                </a>
+              ) : headline.title}
+              <span className="ml-2 text-xs">{new Date(headline.published_at).toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      </div>}
+    </section>
   )
 }
 

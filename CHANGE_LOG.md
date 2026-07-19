@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 2026-07-19 22:33 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：Qwen 结构化情绪依据 / 本地审计快照 / 前端决策解释。
+- 涉及文件：
+  - `crates/ai-client/src/{client,lib,news,provider,sentiment}.rs`
+  - `crates/ai-client/tests/client.rs`
+  - `crates/api/src/{state.rs,routes/{market_sentiment,decision_preview}.rs}`
+  - `crates/api/tests/{market_sentiment,decision_preview}.rs`
+  - `apps/web/src/{api/types.ts,pages/{dashboard,decisions}/index.tsx,i18n/locales/{zh,en}.ts}`
+  - `API_MANAGEMENT.md`
+  - `docs/minimum_mvp.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - Qwen system prompt 与解析契约从仅 `{"sentiment": number}` 升级为 `{"score": number, "rationale": string, "warnings": string[]}`；分数继续由 `Sentiment` 限制在 `[-1.0, 1.0]`，依据必须非空且受长度限制，风险提示最多五条且逐条校验。
+  - RSS 新闻项新增原始 HTTP(S) 链接；`market_sentiment` pipeline 返回模型依据、风险提示和实际送入模型的标题/链接/UTC 发布时间。链接仅从 RSS 原始输入生成，拒绝非 HTTP(S) 协议，模型不能编造来源。
+  - `POST /market-sentiment/preview` 与 `POST /investment-plans/:id/decision-preview` 现在返回结构化 AI 情绪依据；Decision Preview 通过既有本地 SQLite `sentiment_snapshot` 保存 score、rationale、warnings 和 headlines，不保存新闻正文、Key、provider URL、账户信息或内部错误。
+  - Dashboard 和决策详情页将新决策展示为“AI 情绪依据 / 新闻来源 / 风险提示”，历史只有旧 score 的记录保留明确降级说明，不伪造缺失内容。
+- 验证：
+  - `cargo test -p ai-client --locked` 通过：81 单元测试、11 本地回环 mock HTTP 集成测试、7 provider 测试、4 doc tests；2 个真实网络 smoke 按预期 ignored，未调用真实 Qwen 或暴露 API Key。
+  - `cargo test -p indexlink-api --locked` 通过：36 个 API 测试，覆盖结构化情绪响应、Decision Preview 审计快照与不可用降级。
+  - `cargo test -p core-domain --locked` 通过：13 个测试。
+  - `cargo check --workspace --locked`、`cargo fmt --all -- --check`、`cargo clippy -p ai-client -p indexlink-api --all-targets --all-features --locked -- -D warnings` 与 `pnpm --dir apps/web build` 通过。
+
 ### 2026-07-19 22:05 AEST
 
 - 执行模型：GPT-5。

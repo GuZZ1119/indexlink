@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ai_client::Sentiment;
+use ai_client::MarketSentimentReport;
 use axum::{
     extract::{
         rejection::{JsonRejection, PathRejection},
@@ -30,6 +30,8 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::{ApiError, ApiState};
+
+use super::market_sentiment::MarketSentimentResponse;
 
 const BROKER_SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -142,6 +144,9 @@ struct DecisionPreviewResponse {
     execution: InvestmentPlanExecutionPreview,
     /// Decision result safe for API clients.
     decision: DecisionResponse,
+    /// AI rationale, risk warnings, and RSS sources used for this decision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    market_sentiment: Option<MarketSentimentResponse>,
     /// Paper order acknowledgement when an executable due preview submitted an order.
     #[serde(skip_serializing_if = "Option::is_none")]
     paper_order_ack: Option<BrokerOrderAck>,
@@ -236,11 +241,15 @@ async fn preview_decision(
         .map(|order| order.into_domain(&execution.symbol))
         .transpose()?;
     let market_sentiment = market_sentiment_for_decision(&state).await;
+    let market_sentiment_response = market_sentiment.as_ref().map(MarketSentimentResponse::from);
     let decision_input = DecisionInput {
         fundamental,
         trend,
         sentiment: market_sentiment
-            .map_or(DecisionSentiment::Unavailable, DecisionSentiment::Available),
+            .as_ref()
+            .map_or(DecisionSentiment::Unavailable, |report| {
+                DecisionSentiment::Available(report.analysis.sentiment())
+            }),
     };
     let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
     let decision_response = DecisionResponse::from_signal(&decision);
@@ -248,15 +257,16 @@ async fn preview_decision(
     let preliminary_summary = summarize_decision(&execution, &decision, None);
     let persisted = state
         .decision_records()
-        .create(record_input(
-            id,
-            &input,
-            &execution,
-            &decision,
-            paper_order.as_ref(),
-            None,
-            preliminary_summary,
-        )?)
+        .create(record_input(DecisionRecordContext {
+            plan_id: id,
+            input: &input,
+            execution: &execution,
+            decision: &decision,
+            market_sentiment: market_sentiment.as_ref(),
+            paper_order: paper_order.as_ref(),
+            paper_order_ack: None,
+            summary: preliminary_summary,
+        })?)
         .await?;
     let paper_order_ack = if should_submit {
         let request = paper_order.as_ref().ok_or(ApiError::ServiceUnavailable)?;
@@ -285,6 +295,7 @@ async fn preview_decision(
     Ok(Json(DecisionPreviewResponse {
         execution,
         decision: decision_response,
+        market_sentiment: market_sentiment_response,
         paper_order_ack,
         summary,
     }))
@@ -434,7 +445,7 @@ async fn submit_paper_order(
 }
 
 /// Fetch Qwen market sentiment and safely fall back to the engine's 90/10/0 mode.
-async fn market_sentiment_for_decision(state: &ApiState) -> Option<Sentiment> {
+async fn market_sentiment_for_decision(state: &ApiState) -> Option<MarketSentimentReport> {
     match state.market_sentiment().await {
         Ok(sentiment) => Some(sentiment),
         Err(ApiError::ServiceUnavailable) => {
@@ -448,46 +459,53 @@ async fn market_sentiment_for_decision(state: &ApiState) -> Option<Sentiment> {
     }
 }
 
-/// Build a complete local audit snapshot before any optional broker side effect.
-fn record_input(
+/// Borrowed decision material required to create one local audit record.
+struct DecisionRecordContext<'a> {
     plan_id: Uuid,
-    input: &DecisionPreviewRequest,
-    execution: &InvestmentPlanExecutionPreview,
-    decision: &DecisionSignal,
-    paper_order: Option<&BrokerOrderRequest>,
-    paper_order_ack: Option<&BrokerOrderAck>,
+    input: &'a DecisionPreviewRequest,
+    execution: &'a InvestmentPlanExecutionPreview,
+    decision: &'a DecisionSignal,
+    market_sentiment: Option<&'a MarketSentimentReport>,
+    paper_order: Option<&'a BrokerOrderRequest>,
+    paper_order_ack: Option<&'a BrokerOrderAck>,
     summary: String,
-) -> Result<CreateDecisionRecord, ApiError> {
+}
+
+/// Build a complete local audit snapshot before any optional broker side effect.
+fn record_input(context: DecisionRecordContext<'_>) -> Result<CreateDecisionRecord, ApiError> {
     Ok(CreateDecisionRecord {
-        plan_id,
-        symbol: execution.symbol.clone(),
-        currency: execution.currency.clone(),
-        execution_status: execution_status(execution.status),
-        planned_contribution: execution
+        plan_id: context.plan_id,
+        symbol: context.execution.symbol.clone(),
+        currency: context.execution.currency.clone(),
+        execution_status: execution_status(context.execution.status),
+        planned_contribution: context
+            .execution
             .planned_contribution
             .map(|value| value.to_string()),
-        execution_snapshot: snapshot(execution)?,
-        fundamental_snapshot: snapshot(&input.fundamental)?,
-        trend_snapshot: snapshot(&input.trend)?,
-        sentiment_snapshot: decision_market_sentiment_snapshot(decision),
-        decision_snapshot: decision_snapshot(decision),
-        broker_order_request: paper_order.map(snapshot).transpose()?,
-        broker_order_ack: paper_order_ack.map(snapshot).transpose()?,
-        summary,
+        execution_snapshot: snapshot(context.execution)?,
+        fundamental_snapshot: snapshot(&context.input.fundamental)?,
+        trend_snapshot: snapshot(&context.input.trend)?,
+        sentiment_snapshot: context.market_sentiment.map(market_sentiment_snapshot),
+        decision_snapshot: decision_snapshot(context.decision),
+        broker_order_request: context.paper_order.map(snapshot).transpose()?,
+        broker_order_ack: context.paper_order_ack.map(snapshot).transpose()?,
+        summary: context.summary,
     })
 }
 
 /// Return a stable audit snapshot for an automatically retrieved market sentiment.
-fn market_sentiment_snapshot(sentiment: Sentiment) -> Value {
-    json!({"source": "market_sentiment", "score": sentiment.value()})
-}
-
-/// Return the automatic sentiment input snapshot retained by the decision engine.
-fn decision_market_sentiment_snapshot(decision: &DecisionSignal) -> Option<Value> {
-    match decision.input.sentiment {
-        DecisionSentiment::Available(sentiment) => Some(market_sentiment_snapshot(sentiment)),
-        DecisionSentiment::Unavailable => None,
-    }
+fn market_sentiment_snapshot(report: &MarketSentimentReport) -> Value {
+    json!({
+        "source": "market_sentiment",
+        "score": report.analysis.sentiment().value(),
+        "rationale": report.analysis.rationale(),
+        "warnings": report.analysis.warnings(),
+        "headlines": report.headlines.iter().map(|headline| json!({
+            "title": headline.title,
+            "url": headline.url,
+            "published_at": headline.published_at.to_rfc3339(),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Convert an execution preview status into its persisted audit representation.

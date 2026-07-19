@@ -1,6 +1,6 @@
 //! Market-sentiment preview HTTP route.
 
-use ai_client::Sentiment;
+use ai_client::MarketSentimentReport;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Serialize;
 
@@ -16,22 +16,28 @@ async fn preview_market_sentiment(
     State(state): State<ApiState>,
 ) -> Result<Json<MarketSentimentResponse>, ApiError> {
     let sentiment = state.market_sentiment().await?;
-    Ok(Json(MarketSentimentResponse::from(sentiment)))
+    Ok(Json(MarketSentimentResponse::from(&sentiment)))
 }
 
 /// API response for one market-sentiment preview.
 #[derive(Debug, Serialize)]
-struct MarketSentimentResponse {
+pub(crate) struct MarketSentimentResponse {
     /// Bounded Qwen sentiment score in `[-1.0, 1.0]`.
     score: f64,
     /// Stable presentation label derived from the score sign.
     label: MarketSentimentLabel,
+    /// Concise model explanation grounded in the supplied headlines.
+    rationale: String,
+    /// Model-supplied uncertainty or risk cautions.
+    warnings: Vec<String>,
+    /// RSS headlines actually supplied to the model.
+    headlines: Vec<MarketSentimentHeadlineResponse>,
 }
 
 /// Presentation label for a market-sentiment score.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum MarketSentimentLabel {
+pub(crate) enum MarketSentimentLabel {
     /// Positive Qwen sentiment.
     Positive,
     /// Neutral Qwen sentiment.
@@ -40,9 +46,20 @@ enum MarketSentimentLabel {
     Negative,
 }
 
-impl From<Sentiment> for MarketSentimentResponse {
-    fn from(sentiment: Sentiment) -> Self {
-        let score = sentiment.value();
+/// One source headline included in the market-sentiment response.
+#[derive(Debug, Serialize)]
+pub(crate) struct MarketSentimentHeadlineResponse {
+    /// Original RSS title.
+    title: String,
+    /// Original RSS HTTP(S) URL when available.
+    url: String,
+    /// UTC RFC3339 publication timestamp.
+    published_at: String,
+}
+
+impl From<&MarketSentimentReport> for MarketSentimentResponse {
+    fn from(report: &MarketSentimentReport) -> Self {
+        let score = report.analysis.sentiment().value();
         let label = if score > 0.0 {
             MarketSentimentLabel::Positive
         } else if score < 0.0 {
@@ -51,6 +68,20 @@ impl From<Sentiment> for MarketSentimentResponse {
             MarketSentimentLabel::Neutral
         };
 
-        Self { score, label }
+        Self {
+            score,
+            label,
+            rationale: report.analysis.rationale().to_owned(),
+            warnings: report.analysis.warnings().to_vec(),
+            headlines: report
+                .headlines
+                .iter()
+                .map(|headline| MarketSentimentHeadlineResponse {
+                    title: headline.title.clone(),
+                    url: headline.url.clone(),
+                    published_at: headline.published_at.to_rfc3339(),
+                })
+                .collect(),
+        }
     }
 }

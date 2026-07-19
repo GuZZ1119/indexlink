@@ -47,7 +47,9 @@ fn sentiment_response(value: f64) -> MockResponse {
     MockResponse {
         choices: vec![MockChoice {
             message: MockChoiceMessage {
-                content: format!(r#"{{"sentiment": {value}}}"#),
+                content: format!(
+                    r#"{{"score": {value}, "rationale": "Mock explanation based on the supplied headlines.", "warnings": ["Mock warning."]}}"#
+                ),
             },
         }],
     }

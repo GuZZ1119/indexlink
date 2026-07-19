@@ -210,10 +210,11 @@ investment plan
 
 - `execution`：执行预览和双桶拆分。
 - `decision`：`final_score`、`multiplier`、`action`、`weight_mode` 和分层 score。
+- `market_sentiment`：Qwen 返回的 `score`、受长度限制的 `rationale`、最多五条 `warnings`，以及实际送入模型的 RSS `headlines`（标题、链接、UTC 发布时间）。Qwen 不负责生成来源链接。
 - `paper_order_ack`：只有 due 且 action 可执行时才出现。
 - `summary`：演示级摘要。
 
-`sentiment` 不是请求字段。后端会在决策前自动拉取 CNBC RSS 并调用已配置的 Qwen provider；成功时使用 `70/20/10` 并将原始情绪快照写入本地 decision record。未配置 Key 或新闻/AI provider 暂时不可用时，接口仍会安全完成 preview，但 `decision.weight_mode` 为 `sentiment_unavailable`，引擎使用 `90/10/0` 降级权重且不提交任何伪造的情绪快照。手工 `sentiment` 字段会返回 `400 bad_request`，不能绕过该链路。
+`sentiment` 不是请求字段。后端会在决策前自动拉取 CNBC RSS 并调用已配置的 Qwen provider；成功时使用 `70/20/10`，并将分数、依据、风险提示和实际新闻来源写入本地 decision record。未配置 Key 或新闻/AI provider 暂时不可用时，接口仍会安全完成 preview，但 `decision.weight_mode` 为 `sentiment_unavailable`，引擎使用 `90/10/0` 降级权重且不提交任何伪造的情绪快照。手工 `sentiment` 字段会返回 `400 bad_request`，不能绕过该链路。
 
 `decision.action` 可选值：
 
@@ -258,7 +259,7 @@ investment plan
 GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 ```
 
-响应是 decision record 数组。每条记录包含 execution、fundamental、trend、可选 sentiment、decision 与可选 broker 的快照，以及最终 summary 和创建时间。
+响应是 decision record 数组。每条记录包含 execution、fundamental、trend、可选 sentiment（含 AI 依据、风险提示和来源）、decision 与可选 broker 的快照，以及最终 summary 和创建时间。
 
 #### `GET /decisions/:id`
 
@@ -270,14 +271,17 @@ GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 
 #### `POST /market-sentiment/preview`
 
-后端拉取 CNBC RSS 新闻并调用 DashScope/OpenAI-compatible Qwen，返回有界情绪值。设置 `DASHSCOPE_API_KEY` 后由 server 在启动时构造并注入真实 provider；未设置 Key 时 server 仍可启动，但本路由返回统一的 `503 service_unavailable`，不暴露 provider、URL 或凭据细节。`Decision Preview` 会自动复用同一条 pipeline：成功时将情绪作为 10% 输入，失败时显式降级为 `90/10/0`。
+后端拉取 CNBC RSS 新闻并调用 DashScope/OpenAI-compatible Qwen，返回有界情绪值及受控解释。设置 `DASHSCOPE_API_KEY` 后由 server 在启动时构造并注入真实 provider；未设置 Key 时 server 仍可启动，但本路由返回统一的 `503 service_unavailable`，不暴露 provider、URL 或凭据细节。`Decision Preview` 会自动复用同一条 pipeline：成功时将情绪作为 10% 输入，失败时显式降级为 `90/10/0`。
 
 响应字段：
 
 - `score`：`[-1.0, 1.0]` 内的情绪分数。
 - `label`：`positive`、`neutral` 或 `negative`，由分数正负确定。
+- `rationale`：Qwen 基于本次输入 headlines 给出的短依据；空白、过长或非结构化输出会被拒绝并触发安全降级。
+- `warnings`：最多五条短风险提示。
+- `headlines`：实际送入模型的 RSS 条目，含 `title`、HTTP(S) `url` 和 UTC `published_at`；不保存新闻正文。
 
-本阶段刻意不返回 LLM 自由文本解释、新闻正文、Key、provider URL 或模型内部错误。后续 structured-output PR 再补受控 explanation 与来源摘要，避免把未经约束的模型文本直接纳入 API 契约。
+不会返回新闻正文、Key、provider URL 或模型内部错误。模型不能自行提供 URL；来源只能由 RSS 原始条目生成，避免将幻觉来源写入 API 或审计记录。
 
 本地真实 Key smoke（不要把 Key 写入仓库或终端输出）：
 

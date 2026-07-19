@@ -44,7 +44,7 @@ impl std::error::Error for SentimentError {}
 ///
 /// 此类型只表达 AI 语义分析结果。AI 不可用时的降级（70/20/10 → 90/10/0）
 /// 发生在 decision engine 层，不在 ai-client 层。ai-client 在 AI 不可用时
-/// 返回 [`AiClientError`]，由 engine 决定如何处理权重分配。
+/// 返回 [`crate::AiClientError`]，由 engine 决定如何处理权重分配。
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Sentiment(f64);
@@ -132,6 +132,88 @@ impl std::fmt::Display for Sentiment {
             write!(f, "{sign}{}", abs)
         }
     }
+}
+
+/// 一次 AI 市场情绪分析的可审计输出。
+///
+/// 分数仍由 [`Sentiment`] 保证在 `[-1.0, 1.0]` 内；依据和风险提示仅用于
+/// 解释本次模型输出，不构成投资建议或事实断言。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentimentAnalysis {
+    sentiment: Sentiment,
+    rationale: String,
+    warnings: Vec<String>,
+}
+
+impl SentimentAnalysis {
+    /// 创建一条受长度限制的结构化 AI 分析。
+    ///
+    /// 空白依据会被拒绝，防止调用方把“只有分数”的结果伪装成可解释分析。
+    pub fn new(
+        sentiment: Sentiment,
+        rationale: String,
+        warnings: Vec<String>,
+    ) -> Result<Self, SentimentAnalysisError> {
+        let rationale = normalize_text(rationale, MAX_RATIONALE_CHARS)
+            .ok_or(SentimentAnalysisError::InvalidRationale)?;
+        if warnings.len() > MAX_WARNING_COUNT {
+            return Err(SentimentAnalysisError::TooManyWarnings);
+        }
+        let warnings = warnings
+            .into_iter()
+            .map(|warning| {
+                normalize_text(warning, MAX_WARNING_CHARS)
+                    .ok_or(SentimentAnalysisError::InvalidWarning)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            sentiment,
+            rationale,
+            warnings,
+        })
+    }
+
+    /// 返回本次有界情绪得分。
+    pub fn sentiment(&self) -> Sentiment {
+        self.sentiment
+    }
+
+    /// 返回模型给出的简短依据。
+    #[must_use]
+    pub fn rationale(&self) -> &str {
+        &self.rationale
+    }
+
+    /// 返回模型给出的风险提示。
+    #[must_use]
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+}
+
+/// 结构化 AI 分析的校验错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SentimentAnalysisError {
+    /// 模型未返回可展示的分析依据。
+    #[error("AI rationale must be non-empty and within the supported length")]
+    InvalidRationale,
+    /// 模型返回了过多风险提示。
+    #[error("AI returned too many warnings")]
+    TooManyWarnings,
+    /// 某条风险提示为空或过长。
+    #[error("AI warning must be non-empty and within the supported length")]
+    InvalidWarning,
+}
+
+const MAX_RATIONALE_CHARS: usize = 1_000;
+const MAX_WARNING_COUNT: usize = 5;
+const MAX_WARNING_CHARS: usize = 300;
+
+fn normalize_text(value: String, max_chars: usize) -> Option<String> {
+    let normalized = value.trim();
+    (!normalized.is_empty() && normalized.chars().count() <= max_chars)
+        .then(|| normalized.to_owned())
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -268,5 +350,35 @@ mod tests {
         assert!(low < mid);
         assert!(mid < high);
         assert!(low < high);
+    }
+
+    #[test]
+    fn analysis_retains_bounded_score_and_evidence() {
+        let analysis = SentimentAnalysis::new(
+            Sentiment::new(0.2).unwrap(),
+            "Inflation data softened.".to_owned(),
+            vec!["The sample is limited.".to_owned()],
+        )
+        .unwrap();
+
+        assert_eq!(analysis.sentiment().value(), 0.2);
+        assert_eq!(analysis.rationale(), "Inflation data softened.");
+        assert_eq!(analysis.warnings(), &["The sample is limited.".to_owned()]);
+    }
+
+    #[test]
+    fn analysis_rejects_blank_or_excessive_evidence() {
+        assert_eq!(
+            SentimentAnalysis::new(Sentiment::NEUTRAL, "  ".to_owned(), Vec::new()),
+            Err(SentimentAnalysisError::InvalidRationale)
+        );
+        assert_eq!(
+            SentimentAnalysis::new(
+                Sentiment::NEUTRAL,
+                "Valid rationale.".to_owned(),
+                vec!["warning".to_owned(); 6],
+            ),
+            Err(SentimentAnalysisError::TooManyWarnings)
+        );
     }
 }

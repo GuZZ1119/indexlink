@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use ai_client::{AiClientError, AiProvider, NewsItem, NewsSource, NewsSourceError, Sentiment};
+use ai_client::{
+    AiClientError, AiProvider, NewsItem, NewsSource, NewsSourceError, Sentiment, SentimentAnalysis,
+};
 use async_trait::async_trait;
 use axum::{
     body::Body,
@@ -33,6 +35,7 @@ impl NewsSource for StaticNews {
         Ok(vec![NewsItem {
             title: "Markets rise on improving inflation data".to_owned(),
             description: "A compact deterministic test item.".to_owned(),
+            url: "https://example.com/inflation".to_owned(),
             pub_date: Utc::now(),
         }])
     }
@@ -46,6 +49,19 @@ impl AiProvider for PositiveAi {
     /// Return a bounded sentiment without network access.
     async fn analyze(&self, _prompt: &str) -> Result<Sentiment, AiClientError> {
         Ok(Sentiment::new(0.4).expect("constant sentiment is in range"))
+    }
+
+    /// Return deterministic explanation fields for the HTTP contract.
+    async fn analyze_with_evidence(
+        &self,
+        _prompt: &str,
+    ) -> Result<SentimentAnalysis, AiClientError> {
+        SentimentAnalysis::new(
+            Sentiment::new(0.4).expect("constant sentiment is in range"),
+            "Cooling inflation supports risk appetite.".to_owned(),
+            vec!["Single headlines can be noisy.".to_owned()],
+        )
+        .map_err(|_| AiClientError::ParseFailure)
     }
 }
 
@@ -91,9 +107,21 @@ async fn preview_returns_sentiment_from_injected_provider() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["score"], json!(0.4));
+    assert_eq!(body["label"], json!("positive"));
     assert_eq!(
-        response_json(response).await,
-        json!({"score": 0.4, "label": "positive"})
+        body["rationale"],
+        json!("Cooling inflation supports risk appetite.")
+    );
+    assert_eq!(body["warnings"], json!(["Single headlines can be noisy."]));
+    assert_eq!(
+        body["headlines"][0]["title"],
+        json!("Markets rise on improving inflation data")
+    );
+    assert_eq!(
+        body["headlines"][0]["url"],
+        json!("https://example.com/inflation")
     );
 }
 

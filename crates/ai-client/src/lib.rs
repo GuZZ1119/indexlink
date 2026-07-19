@@ -47,8 +47,9 @@ pub use client::QwenClient;
 pub use error::AiClientError;
 pub use mock::MockAiProvider;
 pub use news::{
-    fetch_market_sentiment, format_sentiment_prompt, NewsItem, NewsSource, NewsSourceError,
+    fetch_market_sentiment, fetch_market_sentiment_report, format_sentiment_prompt,
+    MarketSentimentHeadline, MarketSentimentReport, NewsItem, NewsSource, NewsSourceError,
     PipelineError, RssNewsSource, CNBC_TOP_NEWS_RSS,
 };
 pub use provider::{AiConfig, AiProvider};
-pub use sentiment::{Sentiment, SentimentError};
+pub use sentiment::{Sentiment, SentimentAnalysis, SentimentAnalysisError, SentimentError};

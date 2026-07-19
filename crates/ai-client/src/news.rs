@@ -1,6 +1,6 @@
 //! 新闻获取模块。
 //!
-//! 从 CNBC 等 RSS 源拉取财经新闻，格式化后喂给 [`AiProvider`](crate::AiProvider)。
+//! 从 CNBC 等 RSS 源拉取财经新闻，格式化后喂给 [`AiProvider`]。
 //! 与 ai-client 的其他部分组合使用时：
 //!
 //! ```rust,no_run
@@ -22,7 +22,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use tracing::{debug, warn};
 
-use crate::{AiClientError, AiProvider, Sentiment};
+use crate::{AiClientError, AiProvider, Sentiment, SentimentAnalysis};
 
 /// CNBC US Top News RSS 地址。
 pub const CNBC_TOP_NEWS_RSS: &str =
@@ -40,6 +40,8 @@ pub struct NewsItem {
     pub title: String,
     /// 新闻摘要或首段内容。
     pub description: String,
+    /// 原始新闻链接；仅在 RSS 提供 HTTP(S) URL 时保留。
+    pub url: String,
     /// 发布时间。
     pub pub_date: DateTime<Utc>,
 }
@@ -71,7 +73,7 @@ pub enum NewsSourceError {
 
 // ─── NewsSource trait ─────────────────────────────────────────────────────────
 
-/// 新闻源抽象，与 [`AiProvider`](crate::AiProvider) 同一层级的可替换 trait。
+/// 新闻源抽象，与 [`AiProvider`] 同一层级的可替换 trait。
 ///
 /// 当前实现：[`RssNewsSource`]。
 #[async_trait]
@@ -87,7 +89,7 @@ pub trait NewsSource: Send + Sync {
 /// 基于 RSS 的新闻源。
 ///
 /// 从给定的 RSS URL 拉取 XML，解析 `<item>` 中的 `<title>`、`<description>`、
-/// `<pubDate>`，只保留最近 24 小时内的新闻，最多返回 10 条。
+/// `<link>` 与 `<pubDate>`，只保留最近 24 小时内的新闻，最多返回 10 条。
 pub struct RssNewsSource {
     url: String,
     http: reqwest::Client,
@@ -156,10 +158,9 @@ impl RssNewsSource {
         let mut in_item = false;
         let mut capture_title = false;
         let mut capture_description = false;
+        let mut capture_link = false;
         let mut capture_pubdate = false;
-        let mut title = String::new();
-        let mut description = String::new();
-        let mut pub_date_str = String::new();
+        let mut current = RawNewsItem::default();
 
         let mut buf = Vec::new();
         loop {
@@ -169,15 +170,15 @@ impl RssNewsSource {
                     match tag.as_str() {
                         "item" => {
                             in_item = true;
-                            title.clear();
-                            description.clear();
-                            pub_date_str.clear();
+                            current = RawNewsItem::default();
                             capture_title = false;
                             capture_description = false;
+                            capture_link = false;
                             capture_pubdate = false;
                         }
                         "title" if in_item => capture_title = true,
                         "description" if in_item => capture_description = true,
+                        "link" if in_item => capture_link = true,
                         "pubDate" if in_item => capture_pubdate = true,
                         _ => {}
                     }
@@ -191,10 +192,9 @@ impl RssNewsSource {
                         &text,
                         capture_title,
                         capture_description,
+                        capture_link,
                         capture_pubdate,
-                        &mut title,
-                        &mut description,
-                        &mut pub_date_str,
+                        &mut current,
                     );
                 }
                 Ok(Event::CData(ref e)) => {
@@ -203,10 +203,9 @@ impl RssNewsSource {
                         text.as_ref(),
                         capture_title,
                         capture_description,
+                        capture_link,
                         capture_pubdate,
-                        &mut title,
-                        &mut description,
-                        &mut pub_date_str,
+                        &mut current,
                     );
                 }
                 Ok(Event::End(ref e)) => {
@@ -216,22 +215,26 @@ impl RssNewsSource {
                             in_item = false;
                             // 条目解析完成后统一 trim，避免内联标签
                             // 导致碎片间空格丢失。
-                            title = title.trim().to_string();
-                            description = description.trim().to_string();
-                            pub_date_str = pub_date_str.trim().to_string();
-                            if !title.is_empty() && !pub_date_str.is_empty() {
+                            current.title = current.title.trim().to_string();
+                            current.description = current.description.trim().to_string();
+                            current.url = normalize_news_url(&current.url);
+                            current.pub_date_str = current.pub_date_str.trim().to_string();
+                            if !current.title.is_empty() && !current.pub_date_str.is_empty() {
                                 items.push(RawNewsItem {
-                                    title: std::mem::take(&mut title),
-                                    description: std::mem::take(&mut description),
-                                    pub_date_str: std::mem::take(&mut pub_date_str),
+                                    title: std::mem::take(&mut current.title),
+                                    description: std::mem::take(&mut current.description),
+                                    url: std::mem::take(&mut current.url),
+                                    pub_date_str: std::mem::take(&mut current.pub_date_str),
                                 });
                             }
                             capture_title = false;
                             capture_description = false;
+                            capture_link = false;
                             capture_pubdate = false;
                         }
                         "title" => capture_title = false,
                         "description" => capture_description = false,
+                        "link" => capture_link = false,
                         "pubDate" => capture_pubdate = false,
                         _ => {}
                     }
@@ -291,10 +294,11 @@ impl NewsSource for RssNewsSource {
 // ─── Internal raw item for parsing ───────────────────────────────────────────
 
 /// XML 解析阶段的中间产物，pub_date 还是字符串。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct RawNewsItem {
     title: String,
     description: String,
+    url: String,
     pub_date_str: String,
 }
 
@@ -321,6 +325,7 @@ impl RawNewsItem {
         Self::parse_date(&self.pub_date_str).map(|pub_date| NewsItem {
             title: self.title,
             description: self.description,
+            url: self.url,
             pub_date,
         })
     }
@@ -332,19 +337,31 @@ fn append_text(
     text: &str,
     capture_title: bool,
     capture_description: bool,
+    capture_link: bool,
     capture_pubdate: bool,
-    title: &mut String,
-    description: &mut String,
-    pub_date_str: &mut String,
+    current: &mut RawNewsItem,
 ) {
     if capture_title {
-        title.push_str(text);
+        current.title.push_str(text);
     }
     if capture_description {
-        description.push_str(text);
+        current.description.push_str(text);
+    }
+    if capture_link {
+        current.url.push_str(text);
     }
     if capture_pubdate {
-        pub_date_str.push_str(text);
+        current.pub_date_str.push_str(text);
+    }
+}
+
+/// Retain only an ordinary HTTP(S) URL for display and audit; RSS links are untrusted input.
+fn normalize_news_url(value: &str) -> String {
+    let normalized = value.trim();
+    if normalized.starts_with("https://") || normalized.starts_with("http://") {
+        normalized.to_owned()
+    } else {
+        String::new()
     }
 }
 
@@ -412,6 +429,26 @@ pub enum PipelineError {
     Ai(#[from] AiClientError),
 }
 
+/// 供 API 展示与审计的新闻来源条目。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarketSentimentHeadline {
+    /// 新闻标题。
+    pub title: String,
+    /// RSS 提供的 HTTP(S) 链接；源未提供有效链接时为空字符串。
+    pub url: String,
+    /// 原始新闻发布时间，统一为 UTC。
+    pub published_at: DateTime<Utc>,
+}
+
+/// 一次市场情绪管线的完整可审计结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarketSentimentReport {
+    /// AI 返回的有界分数、依据与风险提示。
+    pub analysis: SentimentAnalysis,
+    /// 实际提供给模型的 RSS 新闻来源。
+    pub headlines: Vec<MarketSentimentHeadline>,
+}
+
 /// 一站式获取市场情绪的便捷函数。
 ///
 /// 拉取新闻 → 格式化 prompt → 调用 AI 分析 → 返回 sentiment。
@@ -423,11 +460,36 @@ pub async fn fetch_market_sentiment(
     source: &(impl NewsSource + ?Sized),
     provider: &(impl AiProvider + ?Sized),
 ) -> Result<Sentiment, PipelineError> {
+    Ok(fetch_market_sentiment_report(source, provider)
+        .await?
+        .analysis
+        .sentiment())
+}
+
+/// 拉取新闻并返回包含 AI 解释和来源的市场情绪报告。
+///
+/// 返回的 headlines 源自实际送入模型的 RSS 条目，而不是模型自行生成的来源。
+/// 这使 API 与决策存证能审计“模型看到了什么”，同时不会保存新闻正文。
+pub async fn fetch_market_sentiment_report(
+    source: &(impl NewsSource + ?Sized),
+    provider: &(impl AiProvider + ?Sized),
+) -> Result<MarketSentimentReport, PipelineError> {
     let news = source.fetch().await?;
     debug!(count = news.len(), "fetched news for sentiment analysis");
     let prompt = format_sentiment_prompt(&news);
-    let sentiment = provider.analyze(&prompt).await?;
-    Ok(sentiment)
+    let analysis = provider.analyze_with_evidence(&prompt).await?;
+    let headlines = news
+        .into_iter()
+        .map(|item| MarketSentimentHeadline {
+            title: item.title,
+            url: item.url,
+            published_at: item.pub_date,
+        })
+        .collect();
+    Ok(MarketSentimentReport {
+        analysis,
+        headlines,
+    })
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -479,6 +541,7 @@ mod tests {
             items[0].description,
             "The Federal Reserve kept interest rates unchanged."
         );
+        assert_eq!(items[0].url, "https://example.com/1");
         assert_eq!(items[0].pub_date_str, "Mon, 06 Jul 2026 14:30:00 GMT");
     }
 
@@ -493,6 +556,22 @@ mod tests {
         let items = RssNewsSource::parse_items(&sample_rss(&items_xml)).unwrap();
 
         assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn parse_discards_non_http_news_link() {
+        let xml = sample_rss(
+            r#"<item>
+      <title>Safe link test</title>
+      <description>One item.</description>
+      <link>javascript:alert(1)</link>
+      <pubDate>Mon, 06 Jul 2026 14:30:00 GMT</pubDate>
+    </item>"#,
+        );
+
+        let items = RssNewsSource::parse_items(&xml).unwrap();
+
+        assert_eq!(items[0].url, "");
     }
 
     #[test]
@@ -580,6 +659,7 @@ mod tests {
         RawNewsItem {
             title: title.to_owned(),
             description: "Recent news".to_owned(),
+            url: "https://example.com/recent".to_owned(),
             pub_date_str: now.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
         }
     }
@@ -589,6 +669,7 @@ mod tests {
         RawNewsItem {
             title: title.to_owned(),
             description: "Old news".to_owned(),
+            url: "https://example.com/old".to_owned(),
             pub_date_str: "Mon, 01 Jan 2020 00:00:00 GMT".to_owned(),
         }
     }
@@ -649,6 +730,7 @@ mod tests {
         NewsItem {
             title: title.to_owned(),
             description: desc.to_owned(),
+            url: "https://example.com/news".to_owned(),
             pub_date: Utc::now(),
         }
     }
@@ -686,6 +768,7 @@ mod tests {
             .map(|i| NewsItem {
                 title: format!("News {i}"),
                 description: long_desc.clone(),
+                url: "https://example.com/news".to_owned(),
                 pub_date: Utc::now(),
             })
             .collect();
@@ -743,6 +826,21 @@ mod tests {
         let sentiment = fetch_market_sentiment(&source, &ai).await.unwrap();
 
         assert!(sentiment.value() < 0.0);
+    }
+
+    #[tokio::test]
+    async fn report_keeps_actual_headlines_with_generic_provider_evidence() {
+        let source = StubNewsSource {
+            items: vec![make_news_item("Markets steady", "No major surprise.")],
+        };
+        let ai = crate::MockAiProvider::new();
+
+        let report = fetch_market_sentiment_report(&source, &ai).await.unwrap();
+
+        assert_eq!(report.headlines.len(), 1);
+        assert_eq!(report.headlines[0].title, "Markets steady");
+        assert_eq!(report.headlines[0].url, "https://example.com/news");
+        assert!(!report.analysis.rationale().is_empty());
     }
 
     // ── truncate_at_sentence ──────────────────────────────────────────────

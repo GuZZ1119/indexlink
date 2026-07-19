@@ -194,6 +194,31 @@ export interface DecisionResult {
   sentiment_score?: number
 }
 
+/** One RSS source headline retained with a Qwen market-sentiment result. */
+export interface MarketSentimentHeadline {
+  title: string
+  url: string
+  published_at: string
+}
+
+/** Structured Qwen explanation attached to a live decision and its audit snapshot. */
+export interface MarketSentimentEvidence {
+  score: number
+  label: 'positive' | 'neutral' | 'negative'
+  rationale: string
+  warnings: string[]
+  headlines: MarketSentimentHeadline[]
+}
+
+/** Stored sentiment snapshots remain backward compatible with score-only historical records. */
+export interface PersistedMarketSentimentSnapshot {
+  source: string
+  score: number
+  rationale?: string
+  warnings?: string[]
+  headlines?: MarketSentimentHeadline[]
+}
+
 /** Paper-order acknowledgement returned only after a broker accepts a request. */
 export interface BrokerOrderAck {
   order_id: string
@@ -238,6 +263,7 @@ export interface PaperOrder {
 export interface DecisionPreviewResponse {
   execution: ExecutionPreview
   decision: DecisionResult
+  market_sentiment?: MarketSentimentEvidence
   paper_order_ack?: BrokerOrderAck
   summary: string
 }
@@ -253,7 +279,7 @@ export interface DecisionRecord {
   execution_snapshot: Record<string, unknown>
   fundamental_snapshot: FundamentalSignal
   trend_snapshot: TrendSignal
-  sentiment_snapshot?: { source: string; score: number }
+  sentiment_snapshot?: PersistedMarketSentimentSnapshot
   decision_snapshot: DecisionResult
   broker_order_request?: Record<string, unknown>
   broker_order_ack?: BrokerOrderAck

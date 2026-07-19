@@ -31,6 +31,8 @@ import type {
   ActualPerformance,
   HistoricalBacktest,
   HoldingPriceHistory,
+  MarketSentimentEvidence,
+  PersistedMarketSentimentSnapshot,
   PaperPortfolioSnapshot,
   PaperPerformance,
 } from '@/api/types'
@@ -61,6 +63,7 @@ type OverviewDecision = {
   executionStatus: 'due' | 'waiting' | 'inactive'
   plannedContribution?: string
   summary: string
+  marketSentiment?: MarketSentimentEvidence
 }
 
 const emptySignals: SignalFields = {
@@ -583,6 +586,7 @@ function latestOverviewDecision(
       executionStatus: preview.execution.status,
       plannedContribution: preview.execution.planned_contribution,
       summary: preview.summary,
+      marketSentiment: preview.market_sentiment,
     }
   }
   if (!record) {
@@ -594,6 +598,23 @@ function latestOverviewDecision(
     executionStatus: record.execution_status,
     plannedContribution: record.planned_contribution,
     summary: record.summary,
+    marketSentiment: evidenceFromSnapshot(record.sentiment_snapshot),
+  }
+}
+
+/** Return structured evidence only when a persisted snapshot has every required field. */
+function evidenceFromSnapshot(
+  snapshot: PersistedMarketSentimentSnapshot | undefined,
+): MarketSentimentEvidence | undefined {
+  if (!snapshot || typeof snapshot.rationale !== 'string' || !Array.isArray(snapshot.warnings) || !Array.isArray(snapshot.headlines)) {
+    return undefined
+  }
+  return {
+    score: snapshot.score,
+    label: snapshot.score > 0 ? 'positive' : snapshot.score < 0 ? 'negative' : 'neutral',
+    rationale: snapshot.rationale,
+    warnings: snapshot.warnings,
+    headlines: snapshot.headlines,
   }
 }
 
@@ -798,7 +819,7 @@ function DashboardOverview({
                       : '—'} />
                     <OverviewFact label={t('dashboard.latest.multiplier')} value={formatMultiplier(decision.decision.multiplier)} />
                   </div>
-                  <DecisionExplanation decision={decision.decision} />
+                  <DecisionExplanation decision={decision.decision} marketSentiment={decision.marketSentiment} />
                 </>
               ) : (
                 <EmptyState text={t('dashboard.latest.empty')} />
@@ -1021,8 +1042,14 @@ function OverviewFact({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
-/** Explain the score-derived decision in readable terms without inventing an AI rationale. */
-function DecisionExplanation({ decision }: { decision: DecisionResult }) {
+/** Explain the score-derived decision and show the structured Qwen evidence when available. */
+function DecisionExplanation({
+  decision,
+  marketSentiment,
+}: {
+  decision: DecisionResult
+  marketSentiment?: MarketSentimentEvidence
+}) {
   const { t } = useTranslation()
   const sentiment = decision.sentiment_score
   return (
@@ -1050,8 +1077,39 @@ function DecisionExplanation({ decision }: { decision: DecisionResult }) {
           multiplier: formatMultiplier(decision.multiplier),
         })}
       </p>
-      {sentiment !== undefined && (
-        <p className="text-xs text-muted-foreground">{t('dashboard.decisionExplanation.aiSource')}</p>
+      {marketSentiment && (
+        <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+          <div>
+            <p className="font-medium">{t('dashboard.decisionExplanation.aiRationale')}</p>
+            <p className="mt-1 leading-relaxed text-muted-foreground">{marketSentiment.rationale}</p>
+          </div>
+          {marketSentiment.warnings.length > 0 && (
+            <div>
+              <p className="font-medium">{t('dashboard.decisionExplanation.aiWarnings')}</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">
+                {marketSentiment.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            </div>
+          )}
+          <div>
+            <p className="font-medium">{t('dashboard.decisionExplanation.aiHeadlines')}</p>
+            <ul className="mt-1 space-y-1 text-muted-foreground">
+              {marketSentiment.headlines.map((headline) => (
+                <li key={`${headline.published_at}-${headline.title}`}>
+                  {headline.url ? (
+                    <a className="underline-offset-4 hover:underline" href={headline.url} rel="noreferrer" target="_blank">
+                      {headline.title}
+                    </a>
+                  ) : headline.title}
+                  <span className="ml-2 text-xs">{formatLocalDate(headline.published_at)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+      {sentiment !== undefined && !marketSentiment && (
+        <p className="text-xs text-muted-foreground">{t('dashboard.decisionExplanation.aiLegacySource')}</p>
       )}
     </div>
   )
@@ -1344,7 +1402,7 @@ function DecisionResultCard({
             {result.execution.currency}
           </div>
         )}
-        <DecisionExplanation decision={result.decision} />
+        <DecisionExplanation decision={result.decision} marketSentiment={result.market_sentiment} />
         {result.paper_order_ack && (
           <div className="rounded-lg border border-semantic-positive/40 bg-semantic-positive/10 p-3 text-sm">
             {t('live.decision.paperAck')}: {result.paper_order_ack.status} · order{' '}

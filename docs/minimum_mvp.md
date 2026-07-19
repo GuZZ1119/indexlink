@@ -150,9 +150,9 @@ MVP 接入策略：
 
 ### 阿里云 Qwen 配置与独立 API 已完成，尚待真实 Key smoke
 
-server 现在可读取可选 `DASHSCOPE_API_KEY` 及 model、base URL、timeout、temperature、max tokens，并将 Qwen provider 与 CNBC RSS 新闻源注入 `ApiState`。`POST /market-sentiment/preview` 返回有界 `score` 与稳定 `label`；未配置 Key 或新闻/AI provider 失败时返回不泄露内部细节的统一 `503`。
+server 现在可读取可选 `DASHSCOPE_API_KEY` 及 model、base URL、timeout、temperature、max tokens，并将 Qwen provider 与 CNBC RSS 新闻源注入 `ApiState`。`POST /market-sentiment/preview` 返回有界 `score`、稳定 `label`、受长度限制的 `rationale`、最多五条 `warnings`，以及实际送入模型的 RSS 新闻来源；未配置 Key 或新闻/AI provider 失败时返回不泄露内部细节的统一 `503`。
 
-MVP 仍需人工使用真实阿里云 Key 在本机执行一次网络 smoke。受控 structured output、新闻来源摘要和更丰富的 AI explanation 是后续产品增强，不作为当前 MVP 后端完成条件；不得把未约束的模型自由文本作为 API 契约。
+MVP 仍需人工使用真实阿里云 Key 在本机执行一次网络 smoke。Qwen 已使用受控 structured output，新闻来源只来自实际 RSS 输入；不得把未约束的模型自由文本、新闻正文、Key 或 provider 内部错误作为 API 契约。
 
 ### Decision Preview 已自动接入 Qwen，仍待真实 Key smoke
 
@@ -209,7 +209,7 @@ MVP 需要补到：
 
 ### 最终总结与决策存证已实现
 
-Decision Preview 自动写入本地 SQLite decision record，并返回稳定的分层 summary。它包含 execution status、计划金额、基本面/趋势及 regime、Qwen 情绪或降级状态、最终分数、倍率/action、双桶拆分和 paper-order 状态；不会包含 Key、密码、token 或账户标识。
+Decision Preview 自动写入本地 SQLite decision record，并返回稳定的分层 summary。它包含 execution status、计划金额、基本面/趋势及 regime、Qwen 情绪或降级状态、AI 依据、风险提示、实际 RSS 新闻来源、最终分数、倍率/action、双桶拆分和 paper-order 状态；不会包含新闻正文、Key、密码、token 或账户标识。
 
 示例 summary：
 

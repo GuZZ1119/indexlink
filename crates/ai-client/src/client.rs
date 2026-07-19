@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{AiClientError, AiConfig, AiProvider, Sentiment};
+use crate::{AiClientError, AiConfig, AiProvider, Sentiment, SentimentAnalysis};
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 
-/// 系统提示词：指导 LLM 输出结构化情绪 JSON。
+/// 系统提示词：指导 LLM 输出可审计的结构化情绪 JSON。
 ///
 /// 设计要点：
 /// - 强制 JSON-only 输出，禁止附带解释文本
@@ -19,10 +19,10 @@ use crate::{AiClientError, AiConfig, AiProvider, Sentiment};
 /// - 分类指引覆盖财报、宏观、政策等主要场景
 const SYSTEM_PROMPT: &str = "\
 You are a financial sentiment analyzer. Analyze the given financial news and \
-output ONLY a JSON object with a single \"sentiment\" field.
+output ONLY a JSON object with \"score\", \"rationale\", and \"warnings\" fields.
 
 Output format (exactly):
-{\"sentiment\": <float between -1.0 and +1.0>}
+{\"score\": <float between -1.0 and +1.0>, \"rationale\": \"<brief evidence-based explanation>\", \"warnings\": [\"<optional concise risk warning>\"]}
 
 Scoring guide:
 - +1.0: Strong bullish signal (major earnings beat, positive macro surprise, \
@@ -35,7 +35,9 @@ central bank dovish pivot)
 - -1.0: Strong bearish signal (major miss, systemic risk event, credit event)
 
 IMPORTANT: Be conservative. Unless there is a clear directional signal, output a \
-value close to 0. Do NOT include any text other than the JSON object.";
+value close to 0. The rationale must only summarize the supplied headlines, not \
+invent facts, forecasts, URLs, or sources. Return at most five warnings. Do NOT \
+include any text other than the JSON object.";
 
 // ─── Request / Response Types ────────────────────────────────────────────────
 
@@ -70,7 +72,10 @@ struct ChoiceMessage {
 
 #[derive(Deserialize)]
 struct SentimentResponse {
-    sentiment: f64,
+    score: f64,
+    rationale: String,
+    #[serde(default)]
+    warnings: Vec<String>,
 }
 
 // ─── QwenClient ────────────────────────────────────────────────────────────
@@ -152,7 +157,7 @@ impl QwenClient {
     }
 
     /// 执行 HTTP 请求并解析响应。
-    async fn call_api(&self, prompt: &str) -> Result<f64, AiClientError> {
+    async fn call_api(&self, prompt: &str) -> Result<SentimentAnalysis, AiClientError> {
         let url = self.chat_url();
         let body = self.build_request(prompt);
 
@@ -219,27 +224,39 @@ impl QwenClient {
     }
 }
 
-/// 从 LLM 原始输出中提取 sentiment 值。
+/// 从 LLM 原始输出中提取结构化情绪分析。
 ///
-/// LLM 输出不可靠——可能返回纯 JSON `{"sentiment": 0.5}`，
+/// LLM 输出不可靠——可能返回纯 JSON，
 /// 也可能在 JSON 外包了 markdown 或解释文本。此函数优先直接解析，
 /// 失败时尝试从文本中提取 `{...}` 块再解析。两者都失败才返回错误。
-fn parse_sentiment_from_llm_output(content: &str) -> Result<f64, AiClientError> {
+fn parse_sentiment_from_llm_output(content: &str) -> Result<SentimentAnalysis, AiClientError> {
     // 第一遍：直接解析
     if let Ok(parsed) = serde_json::from_str::<SentimentResponse>(content) {
-        return Ok(parsed.sentiment);
+        return sentiment_analysis_from_response(parsed);
     }
 
     // 第二遍：尝试提取 JSON 对象 { ... }
     if let Some(json_block) = extract_json_object(content) {
         if let Ok(parsed) = serde_json::from_str::<SentimentResponse>(&json_block) {
             debug!("extracted sentiment from embedded JSON block");
-            return Ok(parsed.sentiment);
+            return sentiment_analysis_from_response(parsed);
         }
     }
 
     warn!(content, "failed to parse sentiment from model output");
     Err(AiClientError::ParseFailure)
+}
+
+/// Validate one model JSON object before it crosses the provider boundary.
+fn sentiment_analysis_from_response(
+    response: SentimentResponse,
+) -> Result<SentimentAnalysis, AiClientError> {
+    SentimentAnalysis::new(
+        Sentiment::new_clamped(response.score),
+        response.rationale,
+        response.warnings,
+    )
+    .map_err(|_| AiClientError::ParseFailure)
 }
 
 /// 从文本中提取第一个 `{ ... }` JSON 对象（平衡括号匹配）。
@@ -264,8 +281,14 @@ fn extract_json_object(text: &str) -> Option<String> {
 #[async_trait]
 impl AiProvider for QwenClient {
     async fn analyze(&self, prompt: &str) -> Result<Sentiment, AiClientError> {
-        let raw = self.call_api(prompt).await?;
-        Ok(Sentiment::new_clamped(raw))
+        Ok(self.call_api(prompt).await?.sentiment())
+    }
+
+    async fn analyze_with_evidence(
+        &self,
+        prompt: &str,
+    ) -> Result<SentimentAnalysis, AiClientError> {
+        self.call_api(prompt).await
     }
 }
 
@@ -285,7 +308,7 @@ mod tests {
         assert_eq!(req.model, "test-model");
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, "system");
-        assert!(req.messages[0].content.contains("sentiment"));
+        assert!(req.messages[0].content.contains("rationale"));
         assert_eq!(req.messages[1].role, "user");
         assert_eq!(req.messages[1].content, "沪深300指数今日大幅上涨");
         assert_eq!(req.temperature, 0.0);
@@ -331,18 +354,18 @@ mod tests {
 
     #[test]
     fn parse_valid_sentiment_json() {
-        let content = r#"{"sentiment": 0.7}"#;
+        let content = r#"{"score": 0.7, "rationale": "Inflation eased.", "warnings": []}"#;
         let parsed: SentimentResponse =
             serde_json::from_str(content).expect("valid sentiment JSON must parse");
-        assert!((parsed.sentiment - 0.7).abs() < f64::EPSILON);
+        assert!((parsed.score - 0.7).abs() < f64::EPSILON);
     }
 
     #[test]
     fn parse_negative_sentiment_json() {
-        let content = r#"{"sentiment": -0.5}"#;
+        let content = r#"{"score": -0.5, "rationale": "Guidance weakened.", "warnings": ["Volatility may rise."]}"#;
         let parsed: SentimentResponse =
             serde_json::from_str(content).expect("valid sentiment JSON must parse");
-        assert!((parsed.sentiment - (-0.5)).abs() < f64::EPSILON);
+        assert!((parsed.score - (-0.5)).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -361,7 +384,8 @@ mod tests {
 
     #[test]
     fn system_prompt_includes_required_fields() {
-        assert!(SYSTEM_PROMPT.contains("sentiment"));
+        assert!(SYSTEM_PROMPT.contains("rationale"));
+        assert!(SYSTEM_PROMPT.contains("warnings"));
         assert!(SYSTEM_PROMPT.contains("-1.0"));
         assert!(SYSTEM_PROMPT.contains("+1.0"));
         assert!(SYSTEM_PROMPT.contains("JSON"));
@@ -371,28 +395,35 @@ mod tests {
 
     #[test]
     fn extract_pure_json() {
-        let content = r#"{"sentiment": 0.7}"#;
+        let content = r#"{"score": 0.7, "rationale": "Test rationale.", "warnings": []}"#;
         let extracted = extract_json_object(content).unwrap();
         assert_eq!(extracted, content);
     }
 
     #[test]
     fn extract_json_from_markdown_code_block() {
-        let content = "```json\n{\"sentiment\": 0.5}\n```";
+        let content =
+            "```json\n{\"score\": 0.5, \"rationale\": \"Test rationale.\", \"warnings\": []}\n```";
         let extracted = extract_json_object(content).unwrap();
-        assert_eq!(extracted, r#"{"sentiment": 0.5}"#);
+        assert_eq!(
+            extracted,
+            r#"{"score": 0.5, "rationale": "Test rationale.", "warnings": []}"#
+        );
     }
 
     #[test]
     fn extract_json_with_prefix_text() {
-        let content = "以下是分析结果：{\"sentiment\": -0.3}，仅供参考。";
+        let content = "以下是分析结果：{\"score\": -0.3, \"rationale\": \"Test rationale.\", \"warnings\": []}，仅供参考。";
         let extracted = extract_json_object(content).unwrap();
-        assert_eq!(extracted, r#"{"sentiment": -0.3}"#);
+        assert_eq!(
+            extracted,
+            r#"{"score": -0.3, "rationale": "Test rationale.", "warnings": []}"#
+        );
     }
 
     #[test]
     fn extract_nested_json() {
-        let content = r#"{"outer": {"sentiment": 0.8}}"#;
+        let content = r#"{"outer": {"score": 0.8}}"#;
         let extracted = extract_json_object(content).unwrap();
         assert_eq!(extracted, content);
     }
@@ -404,31 +435,33 @@ mod tests {
 
     #[test]
     fn extract_json_unclosed_brace_returns_none() {
-        assert!(extract_json_object(r#"{"sentiment": 0.5"#).is_none());
+        assert!(extract_json_object(r#"{"score": 0.5"#).is_none());
     }
 
     // ── parse_sentiment_from_llm_output ──────────────────────────────────────
 
     #[test]
     fn parse_sentiment_from_pure_json() {
-        let s = parse_sentiment_from_llm_output(r#"{"sentiment": 0.7}"#).unwrap();
-        assert!((s - 0.7).abs() < f64::EPSILON);
+        let analysis = parse_sentiment_from_llm_output(r#"{"score": 0.7, "rationale": "Inflation eased.", "warnings": ["Rates remain uncertain."]}"#).unwrap();
+        assert!((analysis.sentiment().value() - 0.7).abs() < f64::EPSILON);
+        assert_eq!(analysis.rationale(), "Inflation eased.");
+        assert_eq!(analysis.warnings(), ["Rates remain uncertain."]);
     }
 
     #[test]
     fn parse_sentiment_from_markdown_wrapped_json() {
         // LLM 常见输出：在 markdown 代码块中返回 JSON
-        let content = "```json\n{\"sentiment\": -0.5}\n```";
-        let s = parse_sentiment_from_llm_output(content).unwrap();
-        assert!((s - (-0.5)).abs() < f64::EPSILON);
+        let content = "```json\n{\"score\": -0.5, \"rationale\": \"Guidance weakened.\", \"warnings\": []}\n```";
+        let analysis = parse_sentiment_from_llm_output(content).unwrap();
+        assert!((analysis.sentiment().value() - (-0.5)).abs() < f64::EPSILON);
     }
 
     #[test]
     fn parse_sentiment_with_explanatory_prefix() {
         // LLM 有时在 JSON 前加解释文本
-        let content = "根据分析，我认为市场情绪偏正面。\n{\"sentiment\": 0.3}";
-        let s = parse_sentiment_from_llm_output(content).unwrap();
-        assert!((s - 0.3).abs() < f64::EPSILON);
+        let content = "根据分析，我认为市场情绪偏正面。\n{\"score\": 0.3, \"rationale\": \"Earnings improved.\", \"warnings\": []}";
+        let analysis = parse_sentiment_from_llm_output(content).unwrap();
+        assert!((analysis.sentiment().value() - 0.3).abs() < f64::EPSILON);
     }
 
     #[test]

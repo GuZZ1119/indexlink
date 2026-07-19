@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use ai_client::{AiClientError, AiProvider, NewsItem, NewsSource, NewsSourceError, Sentiment};
+use ai_client::{
+    AiClientError, AiProvider, NewsItem, NewsSource, NewsSourceError, Sentiment, SentimentAnalysis,
+};
 use async_trait::async_trait;
 use axum::{
     body::Body,
@@ -45,6 +47,7 @@ impl NewsSource for StaticNews {
         Ok(vec![NewsItem {
             title: "Markets rise on improving inflation data".to_owned(),
             description: "Deterministic decision-preview test news.".to_owned(),
+            url: "https://example.com/market-rise".to_owned(),
             pub_date: Utc::now(),
         }])
     }
@@ -58,6 +61,19 @@ impl AiProvider for PositiveAi {
     /// Return a bounded positive sentiment without network access.
     async fn analyze(&self, _prompt: &str) -> Result<Sentiment, AiClientError> {
         Ok(Sentiment::new(0.4).expect("test sentiment is in range"))
+    }
+
+    /// Return deterministic evidence for decision-preview persistence coverage.
+    async fn analyze_with_evidence(
+        &self,
+        _prompt: &str,
+    ) -> Result<SentimentAnalysis, AiClientError> {
+        SentimentAnalysis::new(
+            Sentiment::new(0.4).expect("test sentiment is in range"),
+            "Inflation data improved market sentiment.".to_owned(),
+            vec!["Market news can change quickly.".to_owned()],
+        )
+        .map_err(|_| AiClientError::ParseFailure)
     }
 }
 
@@ -421,6 +437,15 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     );
     assert_eq!(body["decision"]["action"], json!("overweight"));
     assert_eq!(body["decision"]["sentiment_score"], json!(0.7));
+    assert_eq!(body["market_sentiment"]["score"], json!(0.4));
+    assert_eq!(
+        body["market_sentiment"]["rationale"],
+        json!("Inflation data improved market sentiment.")
+    );
+    assert_eq!(
+        body["market_sentiment"]["headlines"][0]["url"],
+        json!("https://example.com/market-rise")
+    );
     assert_eq!(body["paper_order_ack"]["status"], json!("accepted"));
     let summary = body["summary"].as_str().unwrap();
     assert!(summary.contains("fundamental_investability=0.90 (supportive)"));
@@ -433,10 +458,22 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(persisted[0].execution_snapshot["status"], json!("due"));
     assert_eq!(persisted[0].fundamental_snapshot["score"], json!(0.10));
     assert_eq!(persisted[0].trend_snapshot["regime"], json!("neutral"));
+    let sentiment_snapshot = persisted[0].sentiment_snapshot.as_ref().unwrap();
+    assert_eq!(sentiment_snapshot["source"], json!("market_sentiment"));
+    assert_eq!(sentiment_snapshot["score"], json!(0.4));
     assert_eq!(
-        persisted[0].sentiment_snapshot,
-        Some(json!({"source": "market_sentiment", "score": 0.4}))
+        sentiment_snapshot["rationale"],
+        json!("Inflation data improved market sentiment.")
     );
+    assert_eq!(
+        sentiment_snapshot["warnings"],
+        json!(["Market news can change quickly."])
+    );
+    assert_eq!(
+        sentiment_snapshot["headlines"][0]["url"],
+        json!("https://example.com/market-rise")
+    );
+    assert!(sentiment_snapshot["headlines"][0]["published_at"].is_string());
     assert_eq!(
         persisted[0].broker_order_ack.as_ref().unwrap()["status"],
         json!("accepted")

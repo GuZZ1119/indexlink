@@ -9,7 +9,7 @@ use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
 
-use crate::{AiClientError, Sentiment};
+use crate::{AiClientError, Sentiment, SentimentAnalysis};
 
 /// LLM 后端的可替换抽象。
 ///
@@ -28,11 +28,29 @@ pub trait AiProvider: Send + Sync {
     /// ai-client 不在此层降级——由上层 decision engine 按 70/20/10 → 90/10/0
     /// 策略处理错误（AI 权重归零，仅用基本面和趋势数据决策）。
     async fn analyze(&self, prompt: &str) -> Result<Sentiment, AiClientError>;
+
+    /// 分析新闻文本并返回分数、依据与风险提示。
+    ///
+    /// 旧 provider 只实现 [`Self::analyze`] 时会得到一个明确标识为通用说明的
+    /// 兼容结果；真实 Qwen adapter 会覆盖此方法并返回模型的结构化输出。
+    async fn analyze_with_evidence(
+        &self,
+        prompt: &str,
+    ) -> Result<SentimentAnalysis, AiClientError> {
+        let sentiment = self.analyze(prompt).await?;
+        SentimentAnalysis::new(
+            sentiment,
+            "The configured AI provider returned a bounded sentiment score without a detailed rationale."
+                .to_owned(),
+            Vec::new(),
+        )
+        .map_err(|_| AiClientError::ParseFailure)
+    }
 }
 
 /// AI 服务连接配置。
 ///
-/// [`Debug`] 和 [`Display`] 实现**不暴露** `api_key`。
+/// `Debug` 和 `Display` 实现**不暴露** `api_key`。
 /// 遵循项目安全规范：连接凭证不可出现在日志或错误消息中。
 pub struct AiConfig {
     /// API 基础 URL（如 `https://dashscope.aliyuncs.com/compatible-mode`）。

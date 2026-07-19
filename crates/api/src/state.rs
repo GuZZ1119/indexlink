@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use ai_client::{fetch_market_sentiment, AiProvider, NewsSource, Sentiment};
+use ai_client::{fetch_market_sentiment_report, AiProvider, MarketSentimentReport, NewsSource};
 use async_trait::async_trait;
 use broker::{
     BrokerClient, BrokerOrderAck, BrokerOrderRequest, MockBroker, PaperPortfolioSnapshot,
@@ -595,12 +595,12 @@ impl ApiState {
     }
 
     /// 拉取新闻并调用已配置的 AI provider 生成市场情绪。
-    pub(crate) async fn market_sentiment(&self) -> Result<Sentiment, ApiError> {
+    pub(crate) async fn market_sentiment(&self) -> Result<MarketSentimentReport, ApiError> {
         let dependencies = self
             .market_sentiment
             .as_ref()
             .ok_or(ApiError::ServiceUnavailable)?;
-        fetch_market_sentiment(
+        fetch_market_sentiment_report(
             dependencies.news_source.as_ref(),
             dependencies.provider.as_ref(),
         )
