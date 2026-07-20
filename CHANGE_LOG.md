@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 2026-07-20 10:55 AEST
+
+- 执行模型：GPT-5。
+- 变更类型：70/20/10 决策引擎功能回归矩阵与历史降级控制变量实验。
+- 涉及文件：
+  - `crates/decision-engine/tests/scenario_matrix.rs`
+  - `ADAPTIVE_DCA_EXPERIMENT_2026-07.md`
+  - `docs/experiments/adaptive_dca_backtest_2026-07.md`（迁移至仓库根目录后删除）
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 30 个带使用者类型、起始金额、月度金额与历史时点名称的冻结历史场景，验证 Qwen 不可用时严格使用 `90/10/0` 降级，不伪造历史 AI 信号。
+  - 新增 10 个冻结 Qwen 情绪场景，验证 Qwen 可用时正常使用 `70/20/10`，覆盖谨慎、积极、均衡、下跌风险和过热风险动作。
+  - 将实验报告移至根目录，双语记录同一现金流和估值日期下的 30 组普通定投/自适应终值对照、数据边界与不可得出的结论；结果如实记录为自适应 5/30 组终值较高、平均终值相对差 `-6.11%`，不将历史降级结果包装为完整 Qwen 回测。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p decision-engine --locked` 通过（既有单元测试 10 个、场景测试 40 个）。
+  - `cargo test -p core-domain --locked` 通过（13 个测试）。
+  - `cargo llvm-cov -p decision-engine --tests --summary-only` 通过：decision-engine 行覆盖率 `99.63%`、函数覆盖率 `100.00%`。
+
 ### 2026-07-20 01:53 AEST
 
 - 执行模型：GPT-5。
