@@ -10,8 +10,8 @@
 
 - 新增 **40 个可重复运行的功能/正确性测试**：30 个冻结历史场景覆盖 AI 不可用时的 `90/10/0` 降级路径；10 个“当前”冻结 Qwen 情绪场景覆盖正常 `70/20/10` 路径。
 - Added **40 deterministic functional/correctness tests**: 30 historical fixtures cover the `90/10/0` AI-unavailable fallback, and 10 frozen current-Qwen fixtures cover the normal `70/20/10` path.
-- 30 组历史控制变量对照中，自适应版本在 **5/30** 组终值高于普通定投；两者终值的平均相对差为 **-6.11%**（自适应低于普通定投）。这不是“自适应一定跑赢”的证据，反而揭示了当前降级策略和“延迟即持有现金”回放假设需要继续校准。
-- Across the 30 controlled historical pairs, the adaptive version finished above plain DCA in **5/30** cases. Its mean terminal-value difference was **-6.11%** versus plain DCA. This is not evidence that adaptive DCA always wins; it identifies calibration work needed in the fallback policy and the replay assumption that a delayed contribution remains cash.
+- 30 组历史控制变量对照中，自适应版本在 **8/30** 组终值高于普通定投；两者终值的平均相对差为 **-1.83%**（自适应低于普通定投）。这不是“自适应一定跑赢”的证据，但相较于“延迟即整月持有现金”的旧回放，固定 5 个交易日复判与现金滚存显著缩小了差距。
+- Across the 30 controlled historical pairs, the adaptive version finished above plain DCA in **8/30** cases. Its mean terminal-value difference was **-1.83%** versus plain DCA. This is not evidence that adaptive DCA always wins, but the fixed five-trading-day re-check and cash carry-forward materially reduce the gap versus the previous “delay means cash for the whole month” replay.
 
 > **完整性声明 / Integrity statement:** 样本固定覆盖疫情冲击、利率冲击、回撤、复苏与牛市，不按结果筛选；不会为了让自适应策略胜出而更改样本、权重或交易规则。历史期间没有可验证的逐月 Qwen 输入，因此历史部分必须明确按 AI 不可用降级，不能冒充完整的历史 `70/20/10` 回测。
 >
@@ -56,57 +56,59 @@ Historical preparation was only used to produce frozen fixtures and the control 
 
 ### 规则 / Rules
 
-每个普通定投 / 自适应定投配对共享完全相同的：开始月份、初始现金、月度现金流、12 次月末买入机会及终止估值日。普通定投每次把当月现金流按收盘价买入 SPY；自适应回放按当月冻结的 `90/10/0` 决策倍率投入，`TacticalDelay`/`Skip` 的当月现金保留为现金（0% 利息），不借贷、不加杠杆。未计入分红、税费、滑点、交易费、现金利息或真实成交约束。
+每个普通定投 / 自适应定投配对共享完全相同的：开始月份、初始现金、月度现金流、每月最后一个可用交易日这一**唯一执行日**及终止估值日。普通定投在该日固定把当月现金流按收盘价买入 SPY；自适应在同一日计算冻结的 `90/10/0` 决策倍率。若动作为 `TacticalDelay` 或 `Skip`，仅在 **5 个交易日后**复判一次；复判仍不可执行时，该月现金滚存。后续某月可执行时，滚存现金可完整投入且**不占用该月新增月度额度**，同时再按当月倍率投入当月新增现金流；不借贷、不加杠杆。未计入分红、税费、滑点、交易费或现金利息。
 
-Each plain/adaptive pair shares exactly the same start month, initial cash, monthly cash flow, 12 month-end purchase opportunities, and terminal valuation date. Plain DCA buys SPY with each monthly flow at the close. The adaptive replay invests the frozen `90/10/0` multiplier; cash for `TacticalDelay`/`Skip` remains cash at 0% interest, with no borrowing or leverage. Dividends, tax, slippage, trading fees, cash interest, and real fill constraints are excluded.
+Each plain/adaptive pair shares exactly the same start month, initial cash, monthly cash flow, one **single execution day** (the final available trading day) per month, and terminal valuation date. Plain DCA buys SPY with that month's fixed flow on the same day. The adaptive replay evaluates the frozen `90/10/0` multiplier on that day. A `TacticalDelay` or `Skip` receives exactly one re-check **five trading days later**; if still not executable, that month's cash rolls forward. When a later month is executable, all carried cash may be invested without consuming that month's new-flow cap, plus the current month's multiplier-adjusted new flow. There is no borrowing or leverage. Dividends, tax, slippage, trading fees, cash interest, and real fill constraints are excluded.
 
 **结果列说明 / Result columns:** `普通终值 / Plain end`、`自适应终值 / Adaptive end` 为美元；`差异 / Delta` = `(adaptive / plain - 1) × 100%`。它是终值差异而非年化收益率、XIRR 或对大盘的超额收益。
 
 | ID | 开始 / Start | 情境与预算 / Scenario and budget | 普通终值 / Plain end | 自适应终值 / Adaptive end | 差异 / Delta | 较高者 / Higher |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| H01 | 2020-01 | 学生 / Student, $500 + $200/月 | $3,205.22 | $2,789.14 | -12.98% | 普通 / Plain |
-| H02 | 2020-03 | 上班族 / Worker, $5,000 + $600/月 | $14,983.47 | $11,600.00 | -22.58% | 普通 / Plain |
-| H03 | 2020-04 | 家庭 / Family, $30,000 + $2,000/月 | $66,989.58 | $52,049.48 | -22.30% | 普通 / Plain |
-| H04 | 2020-06 | 学生 / Student, $500 + $200/月 | $3,226.30 | $2,711.76 | -15.95% | 普通 / Plain |
-| H05 | 2020-09 | 上班族 / Worker, $5,000 + $600/月 | $14,428.68 | $11,715.31 | -18.81% | 普通 / Plain |
-| H06 | 2021-01 | 家庭 / Family, $30,000 + $2,000/月 | $63,473.67 | $52,868.68 | -16.71% | 普通 / Plain |
-| H07 | 2021-03 | 学生 / Student, $500 + $200/月 | $2,743.61 | $2,694.30 | -1.80% | 普通 / Plain |
-| H08 | 2021-06 | 上班族 / Worker, $5,000 + $600/月 | $11,061.98 | $11,361.57 | +2.71% | 自适应 / Adaptive |
-| H09 | 2021-09 | 家庭 / Family, $30,000 + $2,000/月 | $48,313.06 | $50,480.67 | +4.49% | 自适应 / Adaptive |
-| H10 | 2021-11 | 学生 / Student, $500 + $200/月 | $2,503.98 | $2,611.36 | +4.29% | 自适应 / Adaptive |
-| H11 | 2022-01 | 上班族 / Worker, $5,000 + $600/月 | $10,663.65 | $11,212.70 | +5.15% | 自适应 / Adaptive |
-| H12 | 2022-03 | 家庭 / Family, $30,000 + $2,000/月 | $48,906.64 | $50,517.52 | +3.29% | 自适应 / Adaptive |
-| H13 | 2022-06 | 学生 / Student, $500 + $200/月 | $2,883.66 | $2,859.82 | -0.83% | 普通 / Plain |
-| H14 | 2022-09 | 上班族 / Worker, $5,000 + $600/月 | $13,592.18 | $13,293.22 | -2.20% | 普通 / Plain |
-| H15 | 2022-10 | 家庭 / Family, $30,000 + $2,000/月 | $56,377.11 | $56,183.44 | -0.34% | 普通 / Plain |
-| H16 | 2023-01 | 学生 / Student, $500 + $200/月 | $3,031.81 | $2,964.14 | -2.23% | 普通 / Plain |
-| H17 | 2023-03 | 上班族 / Worker, $5,000 + $600/月 | $13,792.00 | $13,421.34 | -2.69% | 普通 / Plain |
-| H18 | 2023-06 | 家庭 / Family, $30,000 + $2,000/月 | $60,739.51 | $56,325.74 | -7.27% | 普通 / Plain |
-| H19 | 2023-08 | 学生 / Student, $500 + $200/月 | $3,114.98 | $2,891.63 | -7.17% | 普通 / Plain |
-| H20 | 2023-10 | 上班族 / Worker, $5,000 + $600/月 | $14,335.15 | $13,329.39 | -7.02% | 普通 / Plain |
-| H21 | 2024-01 | 家庭 / Family, $30,000 + $2,000/月 | $60,552.00 | $55,150.14 | -8.92% | 普通 / Plain |
-| H22 | 2024-04 | 学生 / Student, $500 + $200/月 | $2,739.91 | $2,722.77 | -0.63% | 普通 / Plain |
-| H23 | 2024-07 | 上班族 / Worker, $5,000 + $600/月 | $12,724.98 | $11,978.10 | -5.87% | 普通 / Plain |
-| H24 | 2024-09 | 家庭 / Family, $30,000 + $2,000/月 | $58,020.08 | $52,853.77 | -8.90% | 普通 / Plain |
-| H25 | 2024-11 | 学生 / Student, $500 + $200/月 | $3,047.97 | $2,839.09 | -6.85% | 普通 / Plain |
-| H26 | 2025-01 | 上班族 / Worker, $5,000 + $600/月 | $12,984.08 | $12,122.77 | -6.63% | 普通 / Plain |
-| H27 | 2025-03 | 家庭 / Family, $30,000 + $2,000/月 | $60,600.37 | $57,238.37 | -5.55% | 普通 / Plain |
-| H28 | 2025-04 | 学生 / Student, $500 + $200/月 | $2,788.91 | $2,785.45 | -0.12% | 普通 / Plain |
-| H29 | 2025-06 | 上班族 / Worker, $5,000 + $600/月 | $13,548.13 | $12,365.78 | -8.73% | 普通 / Plain |
-| H30 | 2025-07 | 家庭 / Family, $30,000 + $2,000/月 | $59,775.16 | $53,622.45 | -10.29% | 普通 / Plain |
+| H01 | 2020-01 | 学生 / Student, $500 + $200/月 | $3,268.49 | $3,019.95 | -7.60% | 普通 / Plain |
+| H02 | 2020-03 | 上班族 / Worker, $5,000 + $600/月 | $14,983.47 | $13,048.06 | -12.92% | 普通 / Plain |
+| H03 | 2020-04 | 家庭 / Family, $30,000 + $2,000/月 | $69,049.99 | $63,624.42 | -7.86% | 普通 / Plain |
+| H04 | 2020-06 | 学生 / Student, $500 + $200/月 | $3,226.30 | $3,036.98 | -5.87% | 普通 / Plain |
+| H05 | 2020-09 | 上班族 / Worker, $5,000 + $600/月 | $14,428.68 | $13,302.64 | -7.80% | 普通 / Plain |
+| H06 | 2021-01 | 家庭 / Family, $30,000 + $2,000/月 | $63,473.67 | $62,038.69 | -2.26% | 普通 / Plain |
+| H07 | 2021-03 | 学生 / Student, $500 + $200/月 | $2,743.61 | $2,706.72 | -1.34% | 普通 / Plain |
+| H08 | 2021-06 | 上班族 / Worker, $5,000 + $600/月 | $11,061.98 | $11,014.16 | -0.43% | 普通 / Plain |
+| H09 | 2021-09 | 家庭 / Family, $30,000 + $2,000/月 | $48,313.06 | $47,679.16 | -1.31% | 普通 / Plain |
+| H10 | 2021-11 | 学生 / Student, $500 + $200/月 | $2,503.98 | $2,504.78 | +0.03% | 自适应 / Adaptive |
+| H11 | 2022-01 | 上班族 / Worker, $5,000 + $600/月 | $10,663.65 | $10,777.62 | +1.07% | 自适应 / Adaptive |
+| H12 | 2022-03 | 家庭 / Family, $30,000 + $2,000/月 | $48,906.64 | $50,068.16 | +2.38% | 自适应 / Adaptive |
+| H13 | 2022-06 | 学生 / Student, $500 + $200/月 | $2,883.66 | $2,871.86 | -0.41% | 普通 / Plain |
+| H14 | 2022-09 | 上班族 / Worker, $5,000 + $600/月 | $13,592.18 | $13,437.17 | -1.14% | 普通 / Plain |
+| H15 | 2022-10 | 家庭 / Family, $30,000 + $2,000/月 | $56,377.11 | $56,468.65 | +0.16% | 自适应 / Adaptive |
+| H16 | 2023-01 | 学生 / Student, $500 + $200/月 | $3,031.81 | $3,028.84 | -0.10% | 普通 / Plain |
+| H17 | 2023-03 | 上班族 / Worker, $5,000 + $600/月 | $13,974.68 | $13,906.30 | -0.49% | 普通 / Plain |
+| H18 | 2023-06 | 家庭 / Family, $30,000 + $2,000/月 | $60,739.51 | $60,469.91 | -0.44% | 普通 / Plain |
+| H19 | 2023-08 | 学生 / Student, $500 + $200/月 | $3,114.98 | $3,098.25 | -0.54% | 普通 / Plain |
+| H20 | 2023-10 | 上班族 / Worker, $5,000 + $600/月 | $14,186.24 | $13,872.55 | -2.21% | 普通 / Plain |
+| H21 | 2024-01 | 家庭 / Family, $30,000 + $2,000/月 | $60,552.00 | $59,037.83 | -2.50% | 普通 / Plain |
+| H22 | 2024-04 | 学生 / Student, $500 + $200/月 | $2,739.91 | $2,725.13 | -0.54% | 普通 / Plain |
+| H23 | 2024-07 | 上班族 / Worker, $5,000 + $600/月 | $12,724.98 | $12,766.86 | +0.33% | 自适应 / Adaptive |
+| H24 | 2024-09 | 家庭 / Family, $30,000 + $2,000/月 | $58,020.08 | $58,301.07 | +0.48% | 自适应 / Adaptive |
+| H25 | 2024-11 | 学生 / Student, $500 + $200/月 | $3,047.97 | $3,047.27 | -0.02% | 普通 / Plain |
+| H26 | 2025-01 | 上班族 / Worker, $5,000 + $600/月 | $12,984.08 | $13,018.34 | +0.26% | 自适应 / Adaptive |
+| H27 | 2025-03 | 家庭 / Family, $30,000 + $2,000/月 | $60,600.37 | $60,618.26 | +0.03% | 自适应 / Adaptive |
+| H28 | 2025-04 | 学生 / Student, $500 + $200/月 | $2,898.99 | $2,862.93 | -1.24% | 普通 / Plain |
+| H29 | 2025-06 | 上班族 / Worker, $5,000 + $600/月 | $13,548.13 | $13,355.25 | -1.42% | 普通 / Plain |
+| H30 | 2025-07 | 家庭 / Family, $30,000 + $2,000/月 | $59,775.16 | $59,077.27 | -1.17% | 普通 / Plain |
 
 ### 汇总 / Aggregate result
 
 | 指标 / Metric | 结果 / Result |
 | --- | ---: |
 | 配对数量 / Pairs | 30 |
-| 自适应终值较高 / Adaptive higher terminal value | 5 / 30 (16.67%) |
-| 普通定投终值较高 / Plain higher terminal value | 25 / 30 (83.33%) |
-| 平均终值相对差 / Mean terminal relative difference | **-6.11%** |
+| 自适应终值较高 / Adaptive higher terminal value | 8 / 30 (26.67%) |
+| 普通定投终值较高 / Plain higher terminal value | 22 / 30 (73.33%) |
+| 平均终值相对差 / Mean terminal relative difference | **-1.83%** |
+| 固定 5 日复判次数 / Fixed five-day re-checks | 102 |
+| 复判后仍未执行次数 / Still unexecuted after re-check | 60 |
 
-**解读 / Interpretation:** 这组样本中的负差异很大程度来自降级路径在趋势风险标签出现时不投入、现金又不计利息；随后上涨会使未投入现金错过收益。这是值得修正或至少进一步检验的产品假设，而不是可以忽略的坏样本。完整研究应先定义“延迟后何时补投”“月度上限如何结转”“持有现金是否计息”，再做时间切分的样本外验证。
+**解读 / Interpretation:** 固定 5 日复判与滚存后，平均差异由旧规则的 `-6.11%` 缩小为 `-1.83%`，说明“延迟等于整月放弃”的假设过于保守。但仍有 22/30 组普通定投终值更高：趋势风险标签出现后，短期复判仍可能错过上涨或现金持续积累。完整研究仍须定义“复判后何时补投”“滚存现金是否有最大期限”“现金是否计息”，再做时间切分的样本外验证。
 
-**Interpretation:** The negative difference is substantially driven by the fallback path withholding contributions on risk labels while cash earns no interest; subsequent rallies then leave that cash behind. This is a product assumption to calibrate or investigate, not an inconvenient result to discard. A complete study must define when delayed cash is reinvested, whether a monthly cap rolls forward, and whether cash earns interest, then validate on a time-split out-of-sample period.
+**Interpretation:** With a fixed five-day re-check and carry-forward, the mean difference improves from `-6.11%` to `-1.83%`, showing that “delay means no investment for the whole month” was overly conservative. Yet plain DCA still has the higher terminal value in 22/30 cases: a short re-check can still miss a rally or leave cash accumulating after trend-risk labels. A complete study must still define when to catch up after re-checking, whether carried cash has a maximum age, and whether cash earns interest, then validate on a time-split out-of-sample period.
 
 ## 4. 当前 Qwen 正常路径功能矩阵 / Current-Qwen normal-path matrix
 
