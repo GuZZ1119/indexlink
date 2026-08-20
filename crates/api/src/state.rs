@@ -11,12 +11,13 @@ use decision_records::{
     DecisionRecordRepositoryError, DecisionRecordService,
 };
 use indexlink_storage::{
-    PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
-    PaperTradeMarker, SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository,
-    SqliteOpportunityCashRepository, SqlitePaperPerformanceRepository,
+    OpportunityCashSettlementInput, PaperPerformance, PaperPerformanceError, PaperPerformancePlan,
+    PaperPerformancePoint, PaperTradeMarker, SqliteDecisionRecordRepository,
+    SqliteInvestmentPlanRepository, SqliteOpportunityCashRepository,
+    SqlitePaperPerformanceRepository, SqlitePeriodExecutionRepository,
     SqliteScheduledDecisionRepository, SqliteStorage,
 };
-use investment_plans::{InvestmentPlanService, OpportunityCashPolicy};
+use investment_plans::InvestmentPlanService;
 use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
 use rust_decimal::{
     prelude::{FromPrimitive, ToPrimitive},
@@ -125,6 +126,7 @@ pub struct ApiState {
     paper_performance: Option<SqlitePaperPerformanceRepository>,
     scheduled_decisions: Option<SqliteScheduledDecisionRepository>,
     opportunity_cash: Option<SqliteOpportunityCashRepository>,
+    period_execution: Option<SqlitePeriodExecutionRepository>,
     version: Arc<str>,
 }
 
@@ -157,6 +159,7 @@ impl ApiState {
             DecisionRecordService::new(Arc::new(SqliteDecisionRecordRepository::new(pool.clone())));
         let scheduled_decisions = SqliteScheduledDecisionRepository::new(pool.clone());
         let opportunity_cash = SqliteOpportunityCashRepository::new(pool.clone());
+        let period_execution = SqlitePeriodExecutionRepository::new(pool.clone());
         Self {
             readiness: Arc::new(ReadinessBackend::SqliteStorage(storage)),
             plans,
@@ -167,6 +170,7 @@ impl ApiState {
             paper_performance: Some(SqlitePaperPerformanceRepository::new(pool)),
             scheduled_decisions: Some(scheduled_decisions),
             opportunity_cash: Some(opportunity_cash),
+            period_execution: Some(period_execution),
             version: version.into(),
         }
     }
@@ -235,6 +239,7 @@ impl ApiState {
             paper_performance: None,
             scheduled_decisions: None,
             opportunity_cash: None,
+            period_execution: None,
             version: version.into(),
         }
     }
@@ -338,7 +343,8 @@ impl ApiState {
     ) -> Result<PaperPerformance, ApiError> {
         let plan = self.plans().get(plan_id).await?;
         let portfolio = self.paper_portfolio().await?;
-        self.paper_performance
+        let performance = self
+            .paper_performance
             .as_ref()
             .ok_or(ApiError::ServiceUnavailable)?
             .refresh(
@@ -352,7 +358,9 @@ impl ApiState {
             )
             .await
             .inspect_err(|error| tracing::error!(%error, "paper performance refresh failed"))
-            .map_err(|_| ApiError::ServiceUnavailable)
+            .map_err(|_| ApiError::ServiceUnavailable)?;
+        self.reconcile_execution_ledgers(plan_id).await?;
+        Ok(performance)
     }
 
     /// Refresh every configured holding from one read-only paper-account snapshot and return
@@ -394,6 +402,7 @@ impl ApiState {
                 .await
                 .inspect_err(|error| tracing::error!(%error, "actual performance refresh failed"))
                 .map_err(|_| ApiError::ServiceUnavailable)?;
+            self.reconcile_execution_ledgers(plan.id).await?;
             series.push(ActualPerformanceSeries {
                 plan_id: plan.id,
                 name: plan.name,
@@ -587,18 +596,18 @@ impl ApiState {
     pub(crate) async fn record_accepted_paper_order(
         &self,
         plan_id: uuid::Uuid,
+        decision_record_id: uuid::Uuid,
         acknowledgement: &BrokerOrderAck,
         request: &BrokerOrderRequest,
-    ) {
+    ) -> Result<(), ApiError> {
         let Some(repository) = &self.paper_performance else {
-            return;
+            return Ok(());
         };
-        if let Err(error) = repository
-            .record_accepted_order(plan_id, acknowledgement, request)
+        repository
+            .record_accepted_order(plan_id, decision_record_id, acknowledgement, request)
             .await
-        {
-            tracing::error!(%error, order_id = %acknowledgement.order_id(), "accepted paper order was not added to local ledger");
-        }
+            .inspect_err(|error| tracing::error!(%error, order_id = %acknowledgement.order_id(), "accepted paper order was not added to local ledger"))
+            .map_err(|_| ApiError::ServiceUnavailable)
     }
 
     /// 返回 decision record 应用服务。
@@ -676,6 +685,20 @@ impl ApiState {
             .map_err(|_| ApiError::ServiceUnavailable)
     }
 
+    /// Release an unpersisted scheduler claim so a later tick can retry it safely.
+    pub(crate) async fn release_scheduled_decision(
+        &self,
+        plan_id: uuid::Uuid,
+        scheduled_for: &str,
+    ) {
+        let Some(repository) = self.scheduled_decisions.as_ref() else {
+            return;
+        };
+        if let Err(error) = repository.release(plan_id, scheduled_for).await {
+            tracing::error!(%error, plan_id = %plan_id, scheduled_for, "scheduled decision claim release failed");
+        }
+    }
+
     /// Return the locally carried opportunity cash for one plan.
     pub(crate) async fn opportunity_cash_balance(
         &self,
@@ -694,29 +717,78 @@ impl ApiState {
     /// Persist one accepted paper-order opportunity-cash settlement exactly once.
     pub(crate) async fn settle_opportunity_cash(
         &self,
-        plan_id: uuid::Uuid,
-        decision_record_id: uuid::Uuid,
-        scheduled_for: &str,
-        policy: OpportunityCashPolicy,
-        period_budget: Decimal,
-        allocated_amount: Decimal,
+        input: OpportunityCashSettlementInput<'_>,
     ) -> Result<(), ApiError> {
         let Some(repository) = self.opportunity_cash.as_ref() else {
             return Ok(());
         };
         repository
-            .settle(
-                plan_id,
-                decision_record_id,
-                scheduled_for,
-                policy,
-                period_budget,
-                allocated_amount,
-            )
+            .settle(input)
             .await
-            .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "opportunity cash settlement failed"))
+            .inspect_err(|error| tracing::error!(%error, plan_id = %input.plan_id, "opportunity cash settlement failed"))
             .map(|_| ())
             .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// Atomically reserve the plan's configured weekly/monthly budget before broker submission.
+    pub(crate) async fn reserve_period_execution(
+        &self,
+        plan_id: uuid::Uuid,
+        decision_record_id: uuid::Uuid,
+        period_key: &str,
+        limit: Decimal,
+        amount: Decimal,
+    ) -> Result<bool, ApiError> {
+        let Some(repository) = self.period_execution.as_ref() else {
+            return Ok(true);
+        };
+        repository
+            .reserve(plan_id, decision_record_id, period_key, limit, amount)
+            .await
+            .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "period execution reservation failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// Confirm that a reserved period amount reached the broker.
+    pub(crate) async fn accept_period_execution(
+        &self,
+        decision_record_id: uuid::Uuid,
+    ) -> Result<(), ApiError> {
+        let Some(repository) = self.period_execution.as_ref() else {
+            return Ok(());
+        };
+        repository
+            .accept(decision_record_id)
+            .await
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// Release a period reservation when broker submission fails before acknowledgement.
+    pub(crate) async fn release_period_execution(&self, decision_record_id: uuid::Uuid) {
+        if let Some(repository) = self.period_execution.as_ref() {
+            if let Err(error) = repository.release(decision_record_id).await {
+                tracing::error!(%error, record_id = %decision_record_id, "period execution reservation release failed");
+            }
+        }
+    }
+
+    /// Apply terminal fills to the opportunity-cash and period-budget ledgers.
+    async fn reconcile_execution_ledgers(&self, plan_id: uuid::Uuid) -> Result<(), ApiError> {
+        if let Some(repository) = self.opportunity_cash.as_ref() {
+            repository
+                .reconcile_completed_fills(plan_id)
+                .await
+                .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "opportunity cash fill reconciliation failed"))
+                .map_err(|_| ApiError::ServiceUnavailable)?;
+        }
+        if let Some(repository) = self.period_execution.as_ref() {
+            repository
+                .reconcile_completed_orders(plan_id)
+                .await
+                .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "period execution fill reconciliation failed"))
+                .map_err(|_| ApiError::ServiceUnavailable)?;
+        }
+        Ok(())
     }
 }
 

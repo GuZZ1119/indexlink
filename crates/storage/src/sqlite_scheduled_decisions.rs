@@ -31,6 +31,21 @@ impl SqliteScheduledDecisionRepository {
             .await?;
         Ok(result.rows_affected() == 1)
     }
+
+    /// Release a just-claimed run when its decision record could not be persisted.
+    ///
+    /// Only callers that own the claim should invoke this; a persisted record must never be
+    /// released because the next scheduler tick would duplicate its audit trail.
+    pub async fn release(&self, plan_id: Uuid, scheduled_for: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM scheduled_decision_runs WHERE plan_id = ?1 AND scheduled_for = ?2",
+        )
+        .bind(plan_id.to_string())
+        .bind(scheduled_for)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

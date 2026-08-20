@@ -146,6 +146,7 @@ impl SqlitePaperPerformanceRepository {
     pub async fn record_accepted_order(
         &self,
         plan_id: Uuid,
+        decision_record_id: Uuid,
         acknowledgement: &BrokerOrderAck,
         request: &BrokerOrderRequest,
     ) -> Result<(), PaperPerformanceError> {
@@ -153,13 +154,14 @@ impl SqlitePaperPerformanceRepository {
             encode_positive(request.quantity()).ok_or(PaperPerformanceError::InvalidInput)?;
         sqlx::query(
             "INSERT INTO paper_orders \
-             (order_id, plan_id, symbol, side, requested_quantity, state, filled_quantity, average_fill_price, submitted_at, observed_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', '000000000000.00000000', '000000000000.00000000', \
+             (order_id, plan_id, decision_record_id, symbol, side, requested_quantity, state, filled_quantity, average_fill_price, submitted_at, observed_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', '000000000000.00000000', '000000000000.00000000', \
                      strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) \
              ON CONFLICT(order_id) DO NOTHING",
         )
         .bind(acknowledgement.order_id())
         .bind(plan_id.to_string())
+        .bind(decision_record_id.to_string())
         .bind(request.symbol())
         .bind(side_name(request.side()))
         .bind(quantity)
@@ -637,7 +639,7 @@ mod tests {
         )
         .expect("ack must normalize");
         repository
-            .record_accepted_order(plan.id, &acknowledgement, &request)
+            .record_accepted_order(plan.id, Uuid::new_v4(), &acknowledgement, &request)
             .await
             .expect("accepted order must persist");
 

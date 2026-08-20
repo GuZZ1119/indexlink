@@ -85,7 +85,7 @@
 
 `bucket_allocation` 的比例使用 `0..=1` 的 decimal 字符串（例如 `0.80` 即 `80%`），两桶必须恰好合计 `1`。当核心桶为 `100%` 时，`risk_mode` 必须为 `fixed`，且 `opportunity_cash_policy` 只能为默认 `expire_each_period`；存在机会桶时必须显式选择 `autopilot` 或 `approval`。
 
-`opportunity_cash_policy` 可为 `expire_each_period` 或 `carry_forward`。前者在自动来源、已接受订单后清零机会桶未分配额；后者在本地 SQLite 的独立机会现金账本中滚存未分配额，并在下一次建议中受 `max_single_execution` 硬上限约束。legacy 手动 preview 保留显式数量兼容，尚不结算该现金账本。`carry_with_cap` 仍需要金额/期数上限，属于后续账本阶段。为兼容旧客户端，省略新增配置时默认 `100%` 核心桶、`fixed` 与 `expire_each_period`。
+`opportunity_cash_policy` 可为 `expire_each_period`、`carry_forward` 或 `carry_with_cap`。`carry_with_cap` 必须同时提交正的 `opportunity_cash_cap`（金额型上限）；期数型上限尚未实现。`period_execution_limit` 是同一周或月内自动 paper order 的累计金额上限；每笔自动订单先原子预留，broker 接受后确认，终态 `filled`/`closed` 的实际成交金额会回写修正占用。pending/partial 订单保守维持估计占用。legacy 手动 preview 保留显式数量兼容，尚不进入该自动金额账本。为兼容旧客户端，省略新增配置时默认 `100%` 核心桶、`fixed` 与 `expire_each_period`。
 
 `schedule_kind` 接受 `monthly`（日期为 `1..=28`）或 `weekly`（ISO 星期为 `1..=7`）。`schedule_days` 可提供同一周期的多个固定日，必须有序、无重复，且其第一项必须等于兼容字段 `schedule_day`；省略时等价于仅 `[schedule_day]`。scheduler 使用此集合按 UTC 日期运行。
 
@@ -198,7 +198,7 @@ Dashboard 与最小 Scheduler 使用的默认入口。请求体**不接受**人�
 
 服务端使用当前 UTC 月内日期。70/20 市场源不可用时返回统一 `503 service_unavailable`，不创建伪造的决策或审计记录；Qwen 不可用时仍创建记录并明确标记 `sentiment_unavailable` / `90/10/0`。响应新增 `audit_record_id`，可用 `GET /decisions/:id` 读取可读证据。省略 `paper_order` 时绝不下单。
 
-server 默认启用周期 Scheduler：每 `SCHEDULER_TICK_SECONDS`（默认 60）秒检查一次，按每个 active plan 的 `monthly`/`weekly` `schedule_days` 与 UTC 日历创建自动决策存证。SQLite 的 `(plan_id, scheduled_for)` claim 阻止重启或下一 tick 重复存证。它从不自动提交 paper order；`approval` 计划仍须用户确认。
+server 默认启用周期 Scheduler：每 `SCHEDULER_TICK_SECONDS`（默认 60）秒检查一次，按每个 active plan 的 `monthly`/`weekly` `schedule_days` 与 UTC 日历创建自动决策存证。SQLite 的 `(plan_id, scheduled_for)` claim 阻止重启或下一 tick 重复存证；重启时仅补跑当前月或当前周尚未 claim 的日期。补跑不自动下单，且使用恢复时可用的数据生成存证；`approval` 计划仍须用户确认。
 
 #### `POST /investment-plans/:id/decision-preview`
 

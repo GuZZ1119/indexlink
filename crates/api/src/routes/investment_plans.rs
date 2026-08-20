@@ -45,6 +45,12 @@ struct CreateInvestmentPlanRequest {
     risk_mode: Option<PlanRiskModeRequest>,
     /// 可选机会桶未使用金额处理策略；未提供时默认当期到期。
     opportunity_cash_policy: Option<OpportunityCashPolicyRequest>,
+    /// `carry_with_cap` 的机会现金余额上限，JSON 中必须是字符串。
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    opportunity_cash_cap: Option<Decimal>,
+    /// 同一周或月内所有订单的累计金额上限，JSON 中必须是字符串。
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    period_execution_limit: Option<Decimal>,
     /// 单次执行金额硬上限，JSON 中必须是字符串。
     #[serde(with = "rust_decimal::serde::str")]
     max_single_execution: Decimal,
@@ -68,6 +74,12 @@ struct UpdateInvestmentPlanRequest {
     risk_mode: Option<PlanRiskModeRequest>,
     /// 可选的新机会桶未使用金额处理策略。
     opportunity_cash_policy: Option<OpportunityCashPolicyRequest>,
+    /// 可选的新机会现金余额上限。
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    opportunity_cash_cap: Option<Decimal>,
+    /// 可选的新周期累计执行金额上限。
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    period_execution_limit: Option<Decimal>,
     /// 可选的新单次执行金额硬上限，JSON 中必须是字符串。
     #[serde(default, with = "rust_decimal::serde::str_option")]
     max_single_execution: Option<Decimal>,
@@ -136,6 +148,8 @@ enum OpportunityCashPolicyRequest {
     ExpireEachPeriod,
     /// 当期未使用机会预算待后续账本阶段滚存。
     CarryForward,
+    /// 未使用机会预算滚存，但余额不超过用户配置的金额上限。
+    CarryWithCap,
 }
 
 impl From<OpportunityCashPolicyRequest> for OpportunityCashPolicy {
@@ -144,6 +158,7 @@ impl From<OpportunityCashPolicyRequest> for OpportunityCashPolicy {
         match value {
             OpportunityCashPolicyRequest::ExpireEachPeriod => Self::ExpireEachPeriod,
             OpportunityCashPolicyRequest::CarryForward => Self::CarryForward,
+            OpportunityCashPolicyRequest::CarryWithCap => Self::CarryWithCap,
         }
     }
 }
@@ -173,12 +188,16 @@ impl CreateInvestmentPlanRequest {
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
+            opportunity_cash_cap,
+            period_execution_limit,
             max_single_execution,
         } = self;
         let execution_configuration = execution_configuration_from_request(
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
+            opportunity_cash_cap,
+            period_execution_limit,
             PlanExecutionConfiguration::default(),
         )?;
         Ok(CreateInvestmentPlan {
@@ -210,6 +229,8 @@ impl UpdateInvestmentPlanRequest {
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
+            opportunity_cash_cap,
+            period_execution_limit,
             max_single_execution,
             is_active,
         } = self;
@@ -227,6 +248,8 @@ impl UpdateInvestmentPlanRequest {
             bucket_allocation,
             risk_mode: risk_mode.map(Into::into),
             opportunity_cash_policy: opportunity_cash_policy.map(Into::into),
+            opportunity_cash_cap,
+            period_execution_limit,
             max_single_execution,
             is_active,
         })
@@ -238,20 +261,34 @@ fn execution_configuration_from_request(
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     risk_mode: Option<PlanRiskModeRequest>,
     opportunity_cash_policy: Option<OpportunityCashPolicyRequest>,
+    opportunity_cash_cap: Option<Decimal>,
+    period_execution_limit: Option<Decimal>,
     default: PlanExecutionConfiguration,
 ) -> Result<PlanExecutionConfiguration, ApiError> {
-    match (bucket_allocation, risk_mode, opportunity_cash_policy) {
-        (None, None, None) => Ok(default),
-        (Some(bucket_allocation), Some(risk_mode), opportunity_cash_policy) => {
-            PlanExecutionConfiguration::new_with_cash_policy(
-                bucket_allocation.into_domain()?,
-                risk_mode.into(),
-                opportunity_cash_policy
-                    .map(Into::into)
-                    .unwrap_or(OpportunityCashPolicy::ExpireEachPeriod),
-            )
-            .map_err(Into::into)
-        }
+    match (
+        bucket_allocation,
+        risk_mode,
+        opportunity_cash_policy,
+        opportunity_cash_cap,
+        period_execution_limit,
+    ) {
+        (None, None, None, None, None) => Ok(default),
+        (
+            Some(bucket_allocation),
+            Some(risk_mode),
+            opportunity_cash_policy,
+            opportunity_cash_cap,
+            period_execution_limit,
+        ) => PlanExecutionConfiguration::new_with_limits(
+            bucket_allocation.into_domain()?,
+            risk_mode.into(),
+            opportunity_cash_policy
+                .map(Into::into)
+                .unwrap_or(OpportunityCashPolicy::ExpireEachPeriod),
+            opportunity_cash_cap,
+            period_execution_limit,
+        )
+        .map_err(Into::into),
         _ => Err(ApiError::BadRequest),
     }
 }

@@ -325,6 +325,7 @@ fn opportunity_cash_policy_name(value: OpportunityCashPolicy) -> &'static str {
     match value {
         OpportunityCashPolicy::ExpireEachPeriod => "expire_each_period",
         OpportunityCashPolicy::CarryForward => "carry_forward",
+        OpportunityCashPolicy::CarryWithCap => "carry_with_cap",
     }
 }
 

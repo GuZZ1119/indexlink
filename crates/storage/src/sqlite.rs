@@ -179,6 +179,7 @@ mod tests {
                 "paper_fills".to_owned(),
                 "paper_orders".to_owned(),
                 "plan_execution_configurations".to_owned(),
+                "plan_period_execution_reservations".to_owned(),
                 "portfolio_snapshots".to_owned(),
                 "scheduled_decision_runs".to_owned(),
             ]
@@ -251,8 +252,8 @@ mod tests {
         .expect("valid decision-record parent plan must persist");
         sqlx::query(
             "INSERT INTO plan_execution_configurations \
-             (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode) \
-             VALUES ('plan-4', 'monthly', 15, 100000000, 0, 'fixed')",
+             (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy, schedule_days_json) \
+             VALUES ('plan-4', 'monthly', 15, 100000000, 0, 'fixed', 'expire_each_period', '[15]')",
         )
         .execute(storage.pool())
         .await

@@ -134,6 +134,8 @@ pub enum OpportunityCashPolicy {
     ExpireEachPeriod,
     /// 当期未使用机会预算计划在后续账本阶段滚存。
     CarryForward,
+    /// 未使用机会预算滚存，但本地余额不得超过用户设置的金额上限。
+    CarryWithCap,
 }
 
 /// 已校验的计划级双桶与风险模式配置。
@@ -148,6 +150,20 @@ pub struct PlanExecutionConfiguration {
     risk_mode: PlanRiskMode,
     /// 机会桶未使用金额的后续处理策略。
     opportunity_cash_policy: OpportunityCashPolicy,
+    /// `carry_with_cap` 的本地机会现金余额上限。
+    #[serde(
+        default,
+        with = "rust_decimal::serde::str_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    opportunity_cash_cap: Option<Decimal>,
+    /// 一个调度周期内所有已保留订单的合计金额上限。
+    #[serde(
+        default,
+        with = "rust_decimal::serde::str_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    period_execution_limit: Option<Decimal>,
 }
 
 impl PlanExecutionConfiguration {
@@ -169,17 +185,48 @@ impl PlanExecutionConfiguration {
         risk_mode: PlanRiskMode,
         opportunity_cash_policy: OpportunityCashPolicy,
     ) -> Result<Self, PlanValidationError> {
+        Self::new_with_limits(
+            bucket_allocation,
+            risk_mode,
+            opportunity_cash_policy,
+            None,
+            None,
+        )
+    }
+
+    /// 创建带机会现金与周期执行上限的已校验计划级执行配置。
+    pub fn new_with_limits(
+        bucket_allocation: TwoBucketAllocationConfig,
+        risk_mode: PlanRiskMode,
+        opportunity_cash_policy: OpportunityCashPolicy,
+        opportunity_cash_cap: Option<Decimal>,
+        period_execution_limit: Option<Decimal>,
+    ) -> Result<Self, PlanValidationError> {
         if bucket_allocation.is_core_only()
             && opportunity_cash_policy != OpportunityCashPolicy::ExpireEachPeriod
         {
             return Err(PlanValidationError::CoreOnlyRequiresExpireEachPeriodPolicy);
         }
+        if opportunity_cash_policy == OpportunityCashPolicy::CarryWithCap {
+            let Some(cap) = opportunity_cash_cap else {
+                return Err(PlanValidationError::CarryWithCapRequiresCashCap);
+            };
+            validate_positive("opportunity_cash_cap", cap)?;
+        } else if opportunity_cash_cap.is_some() {
+            return Err(PlanValidationError::CashCapRequiresCarryWithCapPolicy);
+        }
+        if let Some(limit) = period_execution_limit {
+            validate_positive("period_execution_limit", limit)?;
+        }
+
         match (bucket_allocation.is_core_only(), risk_mode) {
             (true, PlanRiskMode::Fixed)
             | (false, PlanRiskMode::Autopilot | PlanRiskMode::Approval) => Ok(Self {
                 bucket_allocation,
                 risk_mode,
                 opportunity_cash_policy,
+                opportunity_cash_cap,
+                period_execution_limit,
             }),
             (true, _) => Err(PlanValidationError::CoreOnlyRequiresFixedRiskMode),
             (false, PlanRiskMode::Fixed) => {
@@ -206,12 +253,26 @@ impl PlanExecutionConfiguration {
         self.opportunity_cash_policy
     }
 
+    /// 返回机会现金滚存上限；仅 `carry_with_cap` 配置时存在。
+    #[must_use]
+    pub fn opportunity_cash_cap(self) -> Option<Decimal> {
+        self.opportunity_cash_cap
+    }
+
+    /// 返回用户配置的周期累计执行金额上限。
+    #[must_use]
+    pub fn period_execution_limit(self) -> Option<Decimal> {
+        self.period_execution_limit
+    }
+
     /// 重新校验已构造配置，供持久化边界验证外部数据使用。
     pub fn validate(self) -> Result<(), PlanValidationError> {
-        Self::new_with_cash_policy(
+        Self::new_with_limits(
             self.bucket_allocation,
             self.risk_mode,
             self.opportunity_cash_policy,
+            self.opportunity_cash_cap,
+            self.period_execution_limit,
         )
         .map(|_| ())
     }
@@ -219,7 +280,7 @@ impl PlanExecutionConfiguration {
 
 impl Default for PlanExecutionConfiguration {
     fn default() -> Self {
-        Self::new_with_cash_policy(
+        Self::new_with_limits(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(Decimal::ONE).expect("one is a valid ratio"),
                 BucketAllocationRatio::new(Decimal::ZERO).expect("zero is a valid ratio"),
@@ -227,6 +288,8 @@ impl Default for PlanExecutionConfiguration {
             .expect("core-only ratios must sum to one"),
             PlanRiskMode::Fixed,
             OpportunityCashPolicy::ExpireEachPeriod,
+            None,
+            None,
         )
         .expect("core-only configuration must be valid")
     }
@@ -578,6 +641,20 @@ pub struct UpdateInvestmentPlan {
     pub risk_mode: Option<PlanRiskMode>,
     /// 可选的新机会桶未使用金额处理策略。
     pub opportunity_cash_policy: Option<OpportunityCashPolicy>,
+    /// 可选的机会现金滚存金额上限，仅 `carry_with_cap` 使用。
+    #[serde(
+        default,
+        with = "rust_decimal::serde::str_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub opportunity_cash_cap: Option<Decimal>,
+    /// 可选的周期累计执行金额上限。
+    #[serde(
+        default,
+        with = "rust_decimal::serde::str_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub period_execution_limit: Option<Decimal>,
     /// 可选的新单次执行金额硬上限。
     #[serde(
         default,
@@ -602,6 +679,8 @@ impl UpdateInvestmentPlan {
             && self.bucket_allocation.is_none()
             && self.risk_mode.is_none()
             && self.opportunity_cash_policy.is_none()
+            && self.opportunity_cash_cap.is_none()
+            && self.period_execution_limit.is_none()
             && self.max_single_execution.is_none()
             && self.is_active.is_none()
         {
@@ -617,6 +696,12 @@ impl UpdateInvestmentPlan {
         }
         if let Some(max) = self.max_single_execution {
             validate_positive("max_single_execution", max)?;
+        }
+        if let Some(cap) = self.opportunity_cash_cap {
+            validate_positive("opportunity_cash_cap", cap)?;
+        }
+        if let Some(limit) = self.period_execution_limit {
+            validate_positive("period_execution_limit", limit)?;
         }
         if let (Some(base), Some(max)) = (self.base_contribution, self.max_single_execution) {
             validate_amounts(base, max)?;
@@ -769,6 +854,12 @@ pub enum PlanValidationError {
     /// 全部资金位于核心桶时不允许设置没有作用的机会桶滚存策略。
     #[error("a core-only plan must use the expire_each_period opportunity cash policy")]
     CoreOnlyRequiresExpireEachPeriodPolicy,
+    /// `carry_with_cap` 未提供正的机会现金余额上限。
+    #[error("carry_with_cap requires a positive opportunity cash cap")]
+    CarryWithCapRequiresCashCap,
+    /// 非 `carry_with_cap` 策略包含无意义的机会现金余额上限。
+    #[error("an opportunity cash cap requires the carry_with_cap policy")]
+    CashCapRequiresCarryWithCapPolicy,
     /// 倍率无法安全转换为精确金额计算使用的 Decimal。
     #[error("opportunity multiplier cannot be represented as a decimal")]
     InvalidOpportunityMultiplier,
@@ -2005,6 +2096,39 @@ mod tests {
         assert_eq!(
             PreviewInvestmentPlanExecution::new(32),
             Err(PlanValidationError::InvalidExecutionPreviewDay)
+        );
+    }
+
+    /// 验证带上限的滚存策略必须显式保留一个正的金额边界。
+    #[test]
+    fn carry_with_cap_requires_a_positive_cash_cap() {
+        let allocation = TwoBucketAllocationConfig::new(
+            BucketAllocationRatio::new(money("0.70")).unwrap(),
+            BucketAllocationRatio::new(money("0.30")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            PlanExecutionConfiguration::new_with_limits(
+                allocation,
+                PlanRiskMode::Autopilot,
+                OpportunityCashPolicy::CarryWithCap,
+                None,
+                Some(money("300.00")),
+            ),
+            Err(PlanValidationError::CarryWithCapRequiresCashCap)
+        );
+        let configuration = PlanExecutionConfiguration::new_with_limits(
+            allocation,
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::CarryWithCap,
+            Some(money("500.00")),
+            Some(money("300.00")),
+        )
+        .unwrap();
+        assert_eq!(configuration.opportunity_cash_cap(), Some(money("500.00")));
+        assert_eq!(
+            configuration.period_execution_limit(),
+            Some(money("300.00"))
         );
     }
 }

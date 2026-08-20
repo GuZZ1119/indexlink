@@ -12,15 +12,16 @@ use axum::{
     Json, Router,
 };
 use broker::{BrokerOrderAck, BrokerOrderRequest, BrokerOrderSide, BrokerOrderStatus};
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use core_domain::{Action, Percentile};
 use decision_engine::{
     evaluate_decision, DecisionConfig, DecisionInput, DecisionSentiment, DecisionSignal,
     DecisionWeightMode,
 };
 use decision_records::{CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus};
+use indexlink_storage::OpportunityCashSettlementInput;
 use investment_plans::{
-    BucketAllocationRatio, ExecutionPreviewStatus, InvestmentPlanExecutionPreview,
+    BucketAllocationRatio, ExecutionPreviewStatus, InvestmentPlan, InvestmentPlanExecutionPreview,
     PreviewInvestmentPlanExecution, ScheduleKind, TwoBucketAllocationConfig,
 };
 use market_data::MarketSignalInput;
@@ -197,6 +198,8 @@ struct DecisionPreviewResponse {
 pub struct ScheduledDecisionRunSummary {
     /// Due active plans for which a new automatic audit record was created.
     pub created: u32,
+    /// Earlier fixed dates in the current period that were safely caught up after downtime.
+    pub catch_up_created: u32,
     /// Due plans already claimed for the same UTC calendar day.
     pub already_claimed: u32,
     /// Due plans skipped because automatic market data was unavailable or invalid.
@@ -272,7 +275,14 @@ async fn preview_decision(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
 
     Ok(Json(
-        preview_decision_input(&state, id, input, DecisionTrigger::ManualInput).await?,
+        preview_decision_input(
+            &state,
+            id,
+            input,
+            DecisionTrigger::ManualInput,
+            Utc::now().date_naive(),
+        )
+        .await?,
     ))
 }
 
@@ -297,35 +307,33 @@ async fn preview_automatic_decision(
     ))
 }
 
-/// Execute one due-plan scheduler tick using persisted UTC weekly/monthly fixed dates.
+/// Execute one due-plan scheduler tick, including still-unclaimed fixed dates in this period.
 pub(crate) async fn run_due_decisions(
     state: &ApiState,
 ) -> Result<ScheduledDecisionRunSummary, ApiError> {
-    let now = Utc::now();
-    let day_of_month = i16::try_from(now.day()).map_err(|_| ApiError::ServiceUnavailable)?;
-    let iso_weekday = i16::try_from(now.weekday().num_days_from_monday() + 1)
-        .map_err(|_| ApiError::ServiceUnavailable)?;
-    let scheduled_for = now.date_naive().to_string();
+    let today = Utc::now().date_naive();
     let mut summary = ScheduledDecisionRunSummary::default();
 
     for plan in state.plans().list().await? {
-        let is_due = match plan.schedule_kind {
-            ScheduleKind::Monthly => plan.schedule_days.contains(&day_of_month),
-            ScheduleKind::Weekly => plan.schedule_days.contains(&iso_weekday),
-        };
-        if !plan.is_active || !is_due {
+        if !plan.is_active {
             continue;
         }
-        match preview_automatic_for_plan_with_claim(state, plan.id, day_of_month, &scheduled_for)
-            .await
-        {
-            Ok(Some(_)) => summary.created += 1,
-            Ok(None) => summary.already_claimed += 1,
-            Err(ApiError::ServiceUnavailable | ApiError::BadRequest) => {
-                summary.unavailable += 1;
-                tracing::warn!(plan_id = %plan.id, "automatic decision skipped because market inputs were unavailable");
+        for scheduled_date in due_dates_in_current_period(&plan, today) {
+            match preview_automatic_for_plan_with_claim(state, plan.id, scheduled_date).await {
+                Ok(Some(_)) => {
+                    if scheduled_date == today {
+                        summary.created += 1;
+                    } else {
+                        summary.catch_up_created += 1;
+                    }
+                }
+                Ok(None) => summary.already_claimed += 1,
+                Err(ApiError::ServiceUnavailable | ApiError::BadRequest) => {
+                    summary.unavailable += 1;
+                    tracing::warn!(plan_id = %plan.id, scheduled_for = %scheduled_date, "automatic decision skipped because market inputs were unavailable");
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
         }
     }
 
@@ -336,10 +344,11 @@ pub(crate) async fn run_due_decisions(
 async fn preview_automatic_for_plan_with_claim(
     state: &ApiState,
     plan_id: Uuid,
-    day_of_month: i16,
-    scheduled_for: &str,
+    scheduled_for: NaiveDate,
 ) -> Result<Option<DecisionPreviewResponse>, ApiError> {
     let plan = state.plans().get(plan_id).await?;
+    let day_of_month =
+        i16::try_from(scheduled_for.day()).map_err(|_| ApiError::ServiceUnavailable)?;
     let input = automatic_decision_input(
         state,
         &plan.symbol,
@@ -351,14 +360,28 @@ async fn preview_automatic_for_plan_with_claim(
     )
     .await?;
     if !state
-        .claim_scheduled_decision(plan_id, scheduled_for)
+        .claim_scheduled_decision(plan_id, &scheduled_for.to_string())
         .await?
     {
         return Ok(None);
     }
-    preview_decision_input(state, plan_id, input, DecisionTrigger::AutomaticScheduler)
-        .await
-        .map(Some)
+    let result = preview_decision_input(
+        state,
+        plan_id,
+        input,
+        DecisionTrigger::AutomaticScheduler,
+        scheduled_for,
+    )
+    .await;
+    match result {
+        Ok(response) => Ok(Some(response)),
+        Err(error) => {
+            state
+                .release_scheduled_decision(plan_id, &scheduled_for.to_string())
+                .await;
+            Err(error)
+        }
+    }
 }
 
 /// Build one automatic preview from trusted provider data for a selected investment symbol.
@@ -371,7 +394,7 @@ async fn preview_automatic_for_plan(
 ) -> Result<DecisionPreviewResponse, ApiError> {
     let plan = state.plans().get(plan_id).await?;
     let input = automatic_decision_input(state, &plan.symbol, day_of_month, options).await?;
-    preview_decision_input(state, plan_id, input, trigger).await
+    preview_decision_input(state, plan_id, input, trigger, Utc::now().date_naive()).await
 }
 
 /// Resolve automatic market snapshots into the same validated request shape used by the engine.
@@ -421,11 +444,11 @@ async fn preview_decision_input(
     id: Uuid,
     input: DecisionPreviewRequest,
     trigger: DecisionTrigger,
+    execution_date: NaiveDate,
 ) -> Result<DecisionPreviewResponse, ApiError> {
-    let now = Utc::now();
     let execution_input = PreviewInvestmentPlanExecution::for_date(
         input.day_of_month,
-        i16::try_from(now.weekday().num_days_from_monday() + 1)
+        i16::try_from(execution_date.weekday().num_days_from_monday() + 1)
             .map_err(|_| ApiError::ServiceUnavailable)?,
     )?;
     let fundamental = input.fundamental.clone_signal()?;
@@ -496,7 +519,49 @@ async fn preview_decision_input(
         .await?;
     let paper_order_ack = if should_submit {
         let request = paper_order.as_ref().ok_or(ApiError::ServiceUnavailable)?;
-        let ack = submit_paper_order(state, request).await?;
+        let automatic_trigger = matches!(
+            trigger,
+            DecisionTrigger::AutomaticPreview | DecisionTrigger::AutomaticScheduler
+        );
+        if automatic_trigger {
+            let plan = state.plans().get(id).await?;
+            let scheduled_for = execution_date;
+            let limit = plan
+                .execution_configuration
+                .period_execution_limit()
+                .unwrap_or_else(|| {
+                    plan.max_single_execution * Decimal::from(plan.schedule_days.len() as u32)
+                });
+            let amount = execution
+                .bucket_split
+                .map_or(plan.base_contribution, |split| {
+                    split.recommended_contribution()
+                });
+            if !state
+                .reserve_period_execution(
+                    id,
+                    persisted.id,
+                    &period_key(plan.schedule_kind, scheduled_for),
+                    limit,
+                    amount,
+                )
+                .await?
+            {
+                return Err(ApiError::BadRequest);
+            }
+        }
+        let ack = match submit_paper_order(state, request).await {
+            Ok(ack) => ack,
+            Err(error) => {
+                if automatic_trigger {
+                    state.release_period_execution(persisted.id).await;
+                }
+                return Err(error);
+            }
+        };
+        if automatic_trigger {
+            state.accept_period_execution(persisted.id).await?;
+        }
         let summary = summarize_decision(&execution, &decision, Some(&ack));
         if let Err(error) = state
             .decision_records()
@@ -511,22 +576,31 @@ async fn preview_decision_input(
         {
             tracing::error!(error = %error, record_id = %persisted.id, "paper order accepted but decision record completion failed");
         }
-        state.record_accepted_paper_order(id, &ack, request).await;
+        state
+            .record_accepted_paper_order(id, persisted.id, &ack, request)
+            .await?;
         if matches!(
             trigger,
             DecisionTrigger::AutomaticPreview | DecisionTrigger::AutomaticScheduler
         ) {
             if let Some(split) = execution.bucket_split {
-                let scheduled_for = Utc::now().date_naive().to_string();
+                let scheduled_for = execution_date.to_string();
                 state
-                    .settle_opportunity_cash(
-                        id,
-                        persisted.id,
-                        &scheduled_for,
-                        split.opportunity_cash_policy(),
-                        split.opportunity_budget(),
-                        split.opportunity_contribution(),
-                    )
+                    .settle_opportunity_cash(OpportunityCashSettlementInput {
+                        plan_id: id,
+                        decision_record_id: persisted.id,
+                        scheduled_for: &scheduled_for,
+                        policy: split.opportunity_cash_policy(),
+                        cash_cap: state
+                            .plans()
+                            .get(id)
+                            .await?
+                            .execution_configuration
+                            .opportunity_cash_cap(),
+                        period_budget: split.opportunity_budget(),
+                        core_contribution: split.core_contribution(),
+                        allocated_amount: split.opportunity_contribution(),
+                    })
                     .await?;
             }
         }
@@ -544,6 +618,40 @@ async fn preview_decision_input(
         paper_order_ack,
         summary,
     })
+}
+
+/// Return a stable weekly or monthly UTC period key for the atomic budget ledger.
+fn period_key(schedule_kind: ScheduleKind, date: NaiveDate) -> String {
+    match schedule_kind {
+        ScheduleKind::Monthly => date.format("%Y-%m").to_string(),
+        ScheduleKind::Weekly => date.format("%G-W%V").to_string(),
+    }
+}
+
+/// Return the due dates from the current configured week or month up to `today`.
+///
+/// The persisted `(plan_id, scheduled_for)` claim keeps restarts idempotent. Catch-up only
+/// covers the current plan period, so a long outage never silently replays old market days.
+fn due_dates_in_current_period(plan: &InvestmentPlan, today: NaiveDate) -> Vec<NaiveDate> {
+    match plan.schedule_kind {
+        ScheduleKind::Monthly => plan
+            .schedule_days
+            .iter()
+            .filter_map(|day| NaiveDate::from_ymd_opt(today.year(), today.month(), *day as u32))
+            .filter(|date| *date <= today)
+            .collect(),
+        ScheduleKind::Weekly => {
+            let monday =
+                today - chrono::Duration::days(today.weekday().num_days_from_monday().into());
+            plan.schedule_days
+                .iter()
+                .filter_map(|weekday| {
+                    monday.checked_add_signed(chrono::Duration::days(i64::from(*weekday - 1)))
+                })
+                .filter(|date| *date <= today)
+                .collect()
+        }
+    }
 }
 
 impl TwoBucketAllocationRequest {
@@ -1001,5 +1109,72 @@ fn score_interpretation(score: f64) -> &'static str {
         "supportive"
     } else {
         "neutral"
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+    use investment_plans::{
+        BucketAllocationRatio, PlanExecutionConfiguration, PlanRiskMode, TwoBucketAllocationConfig,
+    };
+    use time::OffsetDateTime;
+
+    fn plan(kind: ScheduleKind, days: Vec<i16>) -> InvestmentPlan {
+        InvestmentPlan {
+            id: Uuid::new_v4(),
+            name: "test".to_owned(),
+            symbol: "VOO".to_owned(),
+            base_contribution: Decimal::new(100, 0),
+            currency: "USD".to_owned(),
+            schedule_kind: kind,
+            schedule_day: days[0],
+            schedule_days: days,
+            execution_configuration: PlanExecutionConfiguration::new(
+                TwoBucketAllocationConfig::new(
+                    BucketAllocationRatio::new(Decimal::ONE).unwrap(),
+                    BucketAllocationRatio::new(Decimal::ZERO).unwrap(),
+                )
+                .unwrap(),
+                PlanRiskMode::Fixed,
+            )
+            .unwrap(),
+            max_single_execution: Decimal::new(100, 0),
+            is_active: true,
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    /// Verify restart catch-up is bounded to the current monthly period.
+    #[test]
+    fn monthly_catch_up_only_includes_past_and_current_dates() {
+        let dates = due_dates_in_current_period(
+            &plan(ScheduleKind::Monthly, vec![1, 15, 25]),
+            NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(),
+        );
+        assert_eq!(
+            dates,
+            vec![
+                NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 8, 15).unwrap(),
+            ]
+        );
+    }
+
+    /// Verify weekly restart catch-up stops at the current ISO weekday.
+    #[test]
+    fn weekly_catch_up_only_includes_current_week_past_dates() {
+        let dates = due_dates_in_current_period(
+            &plan(ScheduleKind::Weekly, vec![1, 3, 6]),
+            NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(),
+        );
+        assert_eq!(
+            dates,
+            vec![
+                NaiveDate::from_ymd_opt(2026, 8, 17).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 8, 19).unwrap(),
+            ]
+        );
     }
 }

@@ -12,6 +12,7 @@ mod sqlite_decision_records;
 mod sqlite_investment_plans;
 mod sqlite_opportunity_cash;
 mod sqlite_paper_performance;
+mod sqlite_period_execution;
 mod sqlite_scheduled_decisions;
 
 use std::{str::FromStr, time::Duration};
@@ -29,12 +30,16 @@ pub use sqlite_decision_records::SqliteDecisionRecordRepository;
 /// Investment Plan repository 的 SQLite adapter。
 pub use sqlite_investment_plans::SqliteInvestmentPlanRepository;
 /// SQLite local opportunity-bucket cash ledger adapter.
-pub use sqlite_opportunity_cash::{OpportunityCashSettlement, SqliteOpportunityCashRepository};
+pub use sqlite_opportunity_cash::{
+    OpportunityCashSettlement, OpportunityCashSettlementInput, SqliteOpportunityCashRepository,
+};
 /// SQLite local paper-trading performance ledger adapter.
 pub use sqlite_paper_performance::{
     PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
     PaperTradeMarker, SqlitePaperPerformanceRepository,
 };
+/// SQLite atomic per-period execution-budget reservation adapter.
+pub use sqlite_period_execution::SqlitePeriodExecutionRepository;
 /// SQLite idempotency ledger for periodic automatic decision runs.
 pub use sqlite_scheduled_decisions::SqliteScheduledDecisionRepository;
 

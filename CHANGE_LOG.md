@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### 2026-08-20 15:30 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 Push 4 周期执行可靠性与账本闭环。
+- 涉及文件：
+  - `crates/investment-plans/src/lib.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/src/state.rs`
+  - `crates/storage/src/sqlite_opportunity_cash.rs`
+  - `crates/storage/src/sqlite_period_execution.rs`
+  - `crates/storage/src/sqlite_paper_performance.rs`
+  - `migrations/sqlite/20260820150000_add_execution_reliability.sql`
+  - `migrations/20260820150000_add_execution_reliability.sql`
+  - `V1_1_PLAN.md`、`API_MANAGEMENT.md`、`readme.md`
+- 变更内容：
+  - 新增 `carry_with_cap` 与正金额机会现金上限；保留 `carry_forward`/`expire_each_period` 兼容语义。
+  - 自动来源 paper order 在提交前对同一周/月的累计建议金额执行 SQLite 原子预留；提交失败释放预留，broker 接受后确认。终态 `filled`/`closed` 订单按实际成交量与均价回写周期占用及机会现金；pending/partial 保守保留预估额度。
+  - scheduler 现在会补跑当前月或当前周尚未 claim 的固定日期，使用 `(plan_id, scheduled_for)` 维持幂等；补跑仍只生成审计存证，不自动下单。
+  - 文档同步更新实施状态与后续顺序：评分校准、Qwen 解释层、API/Web 展示。
+- 验证：
+  - `cargo test -p investment-plans -p indexlink-storage -p indexlink-api --locked` 通过。
+
+### 2026-08-20 14:20 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：本地演示素材忽略规则。
+- 涉及文件：
+  - `.gitignore`
+  - `CHANGE_LOG.md`
+- 变更内容：将 `apps/web/public/demo-screenshots/` 与 `apps/web/public/demo-videos/` 标记为本地演示素材，不再进入 Git 工作区待提交列表。
+- 验证：`git status --short` 不再列出上述两个目录。
+
 ### 2026-08-20 14:00 CST
 
 - 执行模型：GPT-5 Codex。
