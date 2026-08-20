@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use investment_plans::{
     BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository,
-    PlanExecutionConfiguration, PlanRepositoryError, PlanRiskMode, PlanValidationError,
-    ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
+    OpportunityCashPolicy, PlanExecutionConfiguration, PlanRepositoryError, PlanRiskMode,
+    PlanValidationError, ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -14,7 +14,7 @@ use uuid::Uuid;
 const RATIO_UNITS: i64 = 100_000_000;
 const PLAN_COLUMNS: &str = "p.id::text AS id, p.name, p.symbol, p.base_contribution::text AS \
     base_contribution, p.currency, c.schedule_kind, c.schedule_day, c.core_ratio_units, \
-    c.opportunity_ratio_units, c.risk_mode, p.max_single_execution::text AS \
+    c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, p.max_single_execution::text AS \
     max_single_execution, p.is_active, (EXTRACT(EPOCH FROM p.created_at) * 1000000)::bigint AS \
     created_at_micros, (EXTRACT(EPOCH FROM p.updated_at) * 1000000)::bigint AS updated_at_micros";
 
@@ -49,7 +49,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
             execution_configuration,
             max_single_execution,
         } = input;
-        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+        let (core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) =
             execution_configuration_values(execution_configuration)?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let row = sqlx::query(
@@ -71,8 +71,8 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         let id: String = row.try_get("id").map_err(map_sqlx_error)?;
         sqlx::query(
             "INSERT INTO investment_plan_execution_configurations \
-             (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode) \
-             VALUES ($1::uuid, $2, $3, $4, $5, $6)",
+             (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) \
+             VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&id)
         .bind(schedule_kind_name(schedule_kind))
@@ -80,6 +80,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         .bind(core_ratio_units)
         .bind(opportunity_ratio_units)
         .bind(risk_mode_name(risk_mode))
+        .bind(opportunity_cash_policy_name(opportunity_cash_policy))
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -136,7 +137,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         let current = sqlx::query(
             "SELECT p.base_contribution::text AS base_contribution, \
              p.max_single_execution::text AS max_single_execution, c.schedule_kind, \
-             c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode \
+             c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy \
              FROM investment_plans p JOIN investment_plan_execution_configurations c \
              ON c.plan_id = p.id WHERE p.id = $1::uuid FOR UPDATE OF p, c",
         )
@@ -171,8 +172,15 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
             .bucket_allocation
             .unwrap_or(current_configuration.bucket_allocation());
         let risk_mode = input.risk_mode.unwrap_or(current_configuration.risk_mode());
-        let configuration = PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
-        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+        let opportunity_cash_policy = input
+            .opportunity_cash_policy
+            .unwrap_or(current_configuration.opportunity_cash_policy());
+        let configuration = PlanExecutionConfiguration::new_with_cash_policy(
+            bucket_allocation,
+            risk_mode,
+            opportunity_cash_policy,
+        )?;
+        let (core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) =
             execution_configuration_values(configuration)?;
         let base_contribution = input.base_contribution.map(|value| value.to_string());
         let max_single_execution = input.max_single_execution.map(|value| value.to_string());
@@ -198,7 +206,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         .map_err(map_sqlx_error)?;
         sqlx::query(
             "UPDATE investment_plan_execution_configurations SET schedule_day = $2, \
-             core_ratio_units = $3, opportunity_ratio_units = $4, risk_mode = $5 \
+             core_ratio_units = $3, opportunity_ratio_units = $4, risk_mode = $5, opportunity_cash_policy = $6 \
              WHERE plan_id = $1::uuid",
         )
         .bind(id.to_string())
@@ -206,6 +214,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         .bind(core_ratio_units)
         .bind(opportunity_ratio_units)
         .bind(risk_mode_name(risk_mode))
+        .bind(opportunity_cash_policy_name(opportunity_cash_policy))
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -309,6 +318,14 @@ fn risk_mode_name(value: PlanRiskMode) -> &'static str {
     }
 }
 
+/// Encode the opportunity cash policy as a stable PostgreSQL value.
+fn opportunity_cash_policy_name(value: OpportunityCashPolicy) -> &'static str {
+    match value {
+        OpportunityCashPolicy::ExpireEachPeriod => "expire_each_period",
+        OpportunityCashPolicy::CarryForward => "carry_forward",
+    }
+}
+
 fn execution_configuration_from_row(
     row: &PgRow,
 ) -> Result<PlanExecutionConfiguration, PlanRepositoryError> {
@@ -329,17 +346,32 @@ fn execution_configuration_from_row(
         "approval" => PlanRiskMode::Approval,
         _ => return Err(PlanRepositoryError::Unavailable),
     };
-    PlanExecutionConfiguration::new(bucket_allocation, risk_mode).map_err(Into::into)
+    let opportunity_cash_policy = match row
+        .try_get::<String, _>("opportunity_cash_policy")
+        .map_err(map_sqlx_error)?
+        .as_str()
+    {
+        "expire_each_period" => OpportunityCashPolicy::ExpireEachPeriod,
+        "carry_forward" => OpportunityCashPolicy::CarryForward,
+        _ => return Err(PlanRepositoryError::Unavailable),
+    };
+    PlanExecutionConfiguration::new_with_cash_policy(
+        bucket_allocation,
+        risk_mode,
+        opportunity_cash_policy,
+    )
+    .map_err(Into::into)
 }
 
 fn execution_configuration_values(
     configuration: PlanExecutionConfiguration,
-) -> Result<(i64, i64, PlanRiskMode), PlanRepositoryError> {
+) -> Result<(i64, i64, PlanRiskMode, OpportunityCashPolicy), PlanRepositoryError> {
     let bucket_allocation = configuration.bucket_allocation();
     Ok((
         encode_ratio_units(bucket_allocation.core_ratio())?,
         encode_ratio_units(bucket_allocation.opportunity_ratio())?,
         configuration.risk_mode(),
+        configuration.opportunity_cash_policy(),
     ))
 }
 

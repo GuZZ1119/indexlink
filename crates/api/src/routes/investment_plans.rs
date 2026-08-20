@@ -11,8 +11,8 @@ use axum::{
 };
 use investment_plans::{
     BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanExecutionPreview,
-    PlanExecutionConfiguration, PlanRiskMode, PreviewInvestmentPlanExecution, ScheduleKind,
-    TwoBucketAllocationConfig, UpdateInvestmentPlan,
+    OpportunityCashPolicy, PlanExecutionConfiguration, PlanRiskMode,
+    PreviewInvestmentPlanExecution, ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -40,6 +40,8 @@ struct CreateInvestmentPlanRequest {
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// 可选风险模式；未提供时兼容旧计划，默认固定模式。
     risk_mode: Option<PlanRiskModeRequest>,
+    /// 可选机会桶未使用金额处理策略；未提供时默认当期到期。
+    opportunity_cash_policy: Option<OpportunityCashPolicyRequest>,
     /// 单次执行金额硬上限，JSON 中必须是字符串。
     #[serde(with = "rust_decimal::serde::str")]
     max_single_execution: Decimal,
@@ -59,6 +61,8 @@ struct UpdateInvestmentPlanRequest {
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// 可选的新机会桶风险模式。
     risk_mode: Option<PlanRiskModeRequest>,
+    /// 可选的新机会桶未使用金额处理策略。
+    opportunity_cash_policy: Option<OpportunityCashPolicyRequest>,
     /// 可选的新单次执行金额硬上限，JSON 中必须是字符串。
     #[serde(default, with = "rust_decimal::serde::str_option")]
     max_single_execution: Option<Decimal>,
@@ -68,11 +72,10 @@ struct UpdateInvestmentPlanRequest {
 
 /// 执行预览的入站 DTO。
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PreviewInvestmentPlanExecutionRequest {
     /// 本次预览使用的月内日期。
     day_of_month: i16,
-    /// 可选双桶分配配置；提供后仅在 due 时返回拆分金额。
-    bucket_allocation: Option<TwoBucketAllocationRequest>,
 }
 
 /// 双桶分配配置的入站 DTO。
@@ -118,6 +121,26 @@ enum PlanRiskModeRequest {
     Approval,
 }
 
+/// API 边界支持的机会桶未使用金额处理策略。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OpportunityCashPolicyRequest {
+    /// 当期未使用机会预算不自动补投。
+    ExpireEachPeriod,
+    /// 当期未使用机会预算待后续账本阶段滚存。
+    CarryForward,
+}
+
+impl From<OpportunityCashPolicyRequest> for OpportunityCashPolicy {
+    /// Convert the API cash-policy value into the domain policy.
+    fn from(value: OpportunityCashPolicyRequest) -> Self {
+        match value {
+            OpportunityCashPolicyRequest::ExpireEachPeriod => Self::ExpireEachPeriod,
+            OpportunityCashPolicyRequest::CarryForward => Self::CarryForward,
+        }
+    }
+}
+
 impl From<PlanRiskModeRequest> for PlanRiskMode {
     /// Convert the API risk-mode value into the domain risk mode.
     fn from(value: PlanRiskModeRequest) -> Self {
@@ -141,11 +164,13 @@ impl CreateInvestmentPlanRequest {
             schedule_day,
             bucket_allocation,
             risk_mode,
+            opportunity_cash_policy,
             max_single_execution,
         } = self;
         let execution_configuration = execution_configuration_from_request(
             bucket_allocation,
             risk_mode,
+            opportunity_cash_policy,
             PlanExecutionConfiguration::default(),
         )?;
         Ok(CreateInvestmentPlan {
@@ -170,6 +195,7 @@ impl UpdateInvestmentPlanRequest {
             schedule_day,
             bucket_allocation,
             risk_mode,
+            opportunity_cash_policy,
             max_single_execution,
             is_active,
         } = self;
@@ -185,6 +211,7 @@ impl UpdateInvestmentPlanRequest {
             schedule_day,
             bucket_allocation,
             risk_mode: risk_mode.map(Into::into),
+            opportunity_cash_policy: opportunity_cash_policy.map(Into::into),
             max_single_execution,
             is_active,
         })
@@ -195,13 +222,20 @@ impl UpdateInvestmentPlanRequest {
 fn execution_configuration_from_request(
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     risk_mode: Option<PlanRiskModeRequest>,
+    opportunity_cash_policy: Option<OpportunityCashPolicyRequest>,
     default: PlanExecutionConfiguration,
 ) -> Result<PlanExecutionConfiguration, ApiError> {
-    match (bucket_allocation, risk_mode) {
-        (None, None) => Ok(default),
-        (Some(bucket_allocation), Some(risk_mode)) => {
-            PlanExecutionConfiguration::new(bucket_allocation.into_domain()?, risk_mode.into())
-                .map_err(Into::into)
+    match (bucket_allocation, risk_mode, opportunity_cash_policy) {
+        (None, None, None) => Ok(default),
+        (Some(bucket_allocation), Some(risk_mode), opportunity_cash_policy) => {
+            PlanExecutionConfiguration::new_with_cash_policy(
+                bucket_allocation.into_domain()?,
+                risk_mode.into(),
+                opportunity_cash_policy
+                    .map(Into::into)
+                    .unwrap_or(OpportunityCashPolicy::ExpireEachPeriod),
+            )
+            .map_err(Into::into)
         }
         _ => Err(ApiError::BadRequest),
     }
@@ -209,22 +243,8 @@ fn execution_configuration_from_request(
 
 impl PreviewInvestmentPlanExecutionRequest {
     /// Convert the API preview DTO into validated domain inputs.
-    fn into_domain(
-        self,
-    ) -> Result<
-        (
-            PreviewInvestmentPlanExecution,
-            Option<TwoBucketAllocationConfig>,
-        ),
-        ApiError,
-    > {
-        let input = PreviewInvestmentPlanExecution::new(self.day_of_month)?;
-        let bucket_config = self
-            .bucket_allocation
-            .map(TwoBucketAllocationRequest::into_domain)
-            .transpose()?;
-
-        Ok((input, bucket_config))
+    fn into_domain(self) -> Result<PreviewInvestmentPlanExecution, ApiError> {
+        PreviewInvestmentPlanExecution::new(self.day_of_month).map_err(Into::into)
     }
 }
 
@@ -308,17 +328,8 @@ async fn preview_plan_execution(
 ) -> Result<Json<InvestmentPlanExecutionPreview>, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
-    let (input, bucket_config) = input.into_domain()?;
-
-    let preview = match bucket_config {
-        Some(bucket_config) => {
-            state
-                .plans()
-                .preview_execution_with_buckets(id, input, bucket_config)
-                .await?
-        }
-        None => state.plans().preview_execution(id, input).await?,
-    };
+    let input = input.into_domain()?;
+    let preview = state.plans().preview_execution(id, input).await?;
 
     Ok(Json(preview))
 }

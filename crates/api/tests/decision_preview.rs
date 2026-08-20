@@ -21,8 +21,9 @@ use http_body_util::BodyExt;
 use indexlink_api::{build_router, run_due_decisions, ApiState, ReadinessCheck, ReadinessError};
 use indexlink_storage::SqliteStorage;
 use investment_plans::{
-    CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository, InvestmentPlanService,
-    PlanRepositoryError, ScheduleKind, UpdateInvestmentPlan,
+    BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository,
+    InvestmentPlanService, OpportunityCashPolicy, PlanExecutionConfiguration, PlanRepositoryError,
+    PlanRiskMode, ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
 use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
 use rust_decimal::Decimal;
@@ -436,7 +437,16 @@ fn create_input() -> CreateInvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
-        execution_configuration: investment_plans::PlanExecutionConfiguration::default(),
+        execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
+            TwoBucketAllocationConfig::new(
+                BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),
+                BucketAllocationRatio::new(Decimal::new(20, 2)).unwrap(),
+            )
+            .unwrap(),
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::ExpireEachPeriod,
+        )
+        .unwrap(),
         max_single_execution: Decimal::new(1500, 0),
     }
 }
@@ -513,7 +523,9 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert!(summary.contains("fundamental_investability=0.90 (supportive)"));
     assert!(summary.contains("trend_timing=0.50 (neutral, regime=Neutral)"));
     assert!(summary.contains("market_sentiment=0.70"));
-    assert!(summary.contains("bucket_split=core=800.00 USD, opportunity=200.00 USD"));
+    assert!(summary.contains(
+        "bucket_split=core=800.00 USD, opportunity_budget=200.00 USD, opportunity=200.00 USD, recommended=1000.00 USD"
+    ));
     assert_eq!(broker.accepted_orders().len(), 1);
     let persisted = records.records.lock().unwrap();
     assert_eq!(persisted.len(), 1);
@@ -524,6 +536,10 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(
         persisted[0].execution_snapshot["execution"]["status"],
         json!("due")
+    );
+    assert_eq!(
+        persisted[0].execution_snapshot["execution"]["bucket_split"]["recommended_contribution"],
+        json!("1000.00")
     );
     assert_eq!(
         persisted[0].fundamental_snapshot["signal"]["score"],

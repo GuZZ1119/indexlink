@@ -955,6 +955,7 @@ name = "investment-plans"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "core-domain",
  "rust_decimal",
  "serde",
  "serde_json",

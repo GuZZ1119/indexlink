@@ -46,7 +46,10 @@ const BROKER_SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
 struct DecisionPreviewRequest {
     /// Month day used by the execution preview.
     day_of_month: i16,
-    /// Optional bucket allocation used when the plan is due.
+    /// Legacy bucket allocation retained for request compatibility.
+    ///
+    /// The persisted plan configuration is authoritative and this value is not
+    /// used to override it.
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// Fundamental signal snapshot.
     fundamental: FundamentalSignalRequest,
@@ -63,7 +66,10 @@ struct DecisionPreviewRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AutomaticDecisionPreviewRequest {
-    /// Optional bucket allocation used when the plan is due.
+    /// Legacy bucket allocation retained for request compatibility.
+    ///
+    /// The persisted plan configuration is authoritative and this value is not
+    /// used to override it.
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// Optional operator-confirmed paper order submitted only after automatic evaluation.
     paper_order: Option<PaperOrderRequest>,
@@ -417,26 +423,14 @@ async fn preview_decision_input(
     let execution_input = PreviewInvestmentPlanExecution::new(input.day_of_month)?;
     let fundamental = input.fundamental.clone_signal()?;
     let trend = input.trend.clone_signal()?;
-    let bucket_config = input
+    let legacy_bucket_config = input
         .bucket_allocation
         .clone()
         .map(TwoBucketAllocationRequest::into_domain)
         .transpose()?;
-
-    let execution = match bucket_config {
-        Some(bucket_config) => {
-            state
-                .plans()
-                .preview_execution_with_buckets(id, execution_input, bucket_config)
-                .await?
-        }
-        None => state.plans().preview_execution(id, execution_input).await?,
-    };
-    let paper_order = input
-        .paper_order
-        .clone()
-        .map(|order| order.into_domain(&execution.symbol))
-        .transpose()?;
+    if legacy_bucket_config.is_some() {
+        tracing::warn!(plan_id = %id, "legacy decision-preview bucket allocation ignored; persisted plan configuration is authoritative");
+    }
     let market_sentiment = market_sentiment_for_decision(state).await;
     let market_sentiment_response = market_sentiment.as_ref().map(MarketSentimentResponse::from);
     let decision_input = DecisionInput {
@@ -449,6 +443,15 @@ async fn preview_decision_input(
             }),
     };
     let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
+    let execution = state
+        .plans()
+        .preview_execution_with_decision(id, execution_input, decision.action, decision.multiplier)
+        .await?;
+    let paper_order = input
+        .paper_order
+        .clone()
+        .map(|order| order.into_domain(&execution.symbol))
+        .transpose()?;
     let decision_response = DecisionResponse::from_signal(&decision);
     let should_submit = should_submit_paper_order(&execution, &decision, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
@@ -864,11 +867,19 @@ fn summarize_decision(
         || "none".to_owned(),
         |split| {
             format!(
-                "core={} {}, opportunity={} {}",
+                "core={} {}, opportunity_budget={} {}, opportunity={} {}, recommended={} {}, unallocated_opportunity={} {}, policy={:?}, requires_approval={}",
                 split.core_contribution(),
+                execution.currency,
+                split.opportunity_budget(),
                 execution.currency,
                 split.opportunity_contribution(),
                 execution.currency,
+                split.recommended_contribution(),
+                execution.currency,
+                split.unallocated_opportunity_contribution(),
+                execution.currency,
+                split.opportunity_cash_policy(),
+                split.requires_approval(),
             )
         },
     );

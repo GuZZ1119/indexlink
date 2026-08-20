@@ -74,6 +74,7 @@
     "opportunity_ratio": "0.20"
   },
   "risk_mode": "approval",
+  "opportunity_cash_policy": "carry_forward",
   "max_single_execution": "1500.00"
 }
 ```
@@ -82,7 +83,9 @@
 
 响应：创建后的 investment plan。服务端会规范化 `symbol` 与 `currency` 为大写。
 
-`bucket_allocation` 的比例使用 `0..=1` 的 decimal 字符串（例如 `0.80` 即 `80%`），两桶必须恰好合计 `1`。当核心桶为 `100%` 时，`risk_mode` 必须为 `fixed`；存在机会桶时必须显式选择 `autopilot` 或 `approval`。为兼容旧客户端，省略两项时默认 `100%` 核心桶和 `fixed`。
+`bucket_allocation` 的比例使用 `0..=1` 的 decimal 字符串（例如 `0.80` 即 `80%`），两桶必须恰好合计 `1`。当核心桶为 `100%` 时，`risk_mode` 必须为 `fixed`，且 `opportunity_cash_policy` 只能为默认 `expire_each_period`；存在机会桶时必须显式选择 `autopilot` 或 `approval`。
+
+`opportunity_cash_policy` 可为 `expire_each_period` 或 `carry_forward`。前者表示未使用机会预算不自动补投；后者当前仅保存用户的滚存意图与审计输出，**尚未创建现金池余额或自动补投**。`carry_with_cap` 需要金额/期数上限和现金流水，属于后续账本阶段。为兼容旧客户端，省略新增配置时默认 `100%` 核心桶、`fixed` 与 `expire_each_period`。
 
 `schedule_kind` 接受 `monthly`（`schedule_day` 为 `1..=28`）或 `weekly`（`schedule_day` 为 ISO 星期 `1..=7`）。当前 server scheduler 仍只运行既有的月度计划；周度配置已持久化但不会被误触发，启用周度调度属于后续 V1.1 阶段。
 
@@ -112,6 +115,7 @@
     "opportunity_ratio": "0.30"
   },
   "risk_mode": "autopilot",
+  "opportunity_cash_policy": "carry_forward",
   "max_single_execution": "1800.00",
   "is_active": false
 }
@@ -127,17 +131,13 @@
 
 #### `POST /investment-plans/:id/execution-preview`
 
-预览计划在指定月内日期是否执行，并在 due 时返回可选双桶拆分。
+预览计划在指定月内日期是否执行，并在 due 时根据**计划已持久化的配置**返回基准双桶拆分。
 
 请求：
 
 ```json
 {
-  "day_of_month": 15,
-  "bucket_allocation": {
-    "core_ratio": "0.80",
-    "opportunity_ratio": "0.20"
-  }
+  "day_of_month": 15
 }
 ```
 
@@ -156,7 +156,13 @@
   "bucket_split": {
     "planned_contribution": "1000.00",
     "core_contribution": "800.00",
-    "opportunity_contribution": "200.00"
+    "opportunity_budget": "200.00",
+    "opportunity_multiplier": "1",
+    "opportunity_contribution": "200.00",
+    "unallocated_opportunity_contribution": "0.00",
+    "recommended_contribution": "1000.00",
+    "opportunity_cash_policy": "carry_forward",
+    "requires_approval": true
   }
 }
 ```
@@ -170,21 +176,17 @@
 校验规则：
 
 - `day_of_month` 范围为 `1..=31`。
-- `core_ratio` 与 `opportunity_ratio` 都必须在 `0..=1`。
-- 两个桶比例合计必须等于 `1`。
+- 双桶比例与风险模式只可通过计划创建/更新接口修改，不能由预览请求覆盖。
+- `unallocated_opportunity_contribution` 只是本次未建议投入的机会预算，不是现金池余额。
 
 ### Decision Preview + Paper Broker
 
 #### `POST /investment-plans/:id/automatic-decision-preview`
 
-Dashboard 与最小 Scheduler 使用的默认入口。请求体**不接受**人工填写的 fundamental 或 trend 字段；后端为计划标的读取 OpenD/CAPE/国债/VIX 输入并计算 70/20，再读取 Qwen 情绪作为 10% 输入。请求体只允许可选双桶比例和经操作者确认的 `paper_order`：
+Dashboard 与最小 Scheduler 使用的默认入口。请求体**不接受**人工填写的 fundamental 或 trend 字段；后端为计划标的读取 OpenD/CAPE/国债/VIX 输入并计算 70/20，再读取 Qwen 情绪作为 10% 输入。双桶比例始终读取已持久化计划配置；请求体只允许经操作者确认的 `paper_order`：
 
 ```json
 {
-  "bucket_allocation": {
-    "core_ratio": "0.80",
-    "opportunity_ratio": "0.20"
-  },
   "paper_order": {
     "idempotency_key": "operator-confirmed-key",
     "side": "buy",
@@ -218,10 +220,6 @@ investment plan
 ```json
 {
   "day_of_month": 15,
-  "bucket_allocation": {
-    "core_ratio": "0.80",
-    "opportunity_ratio": "0.20"
-  },
   "fundamental": {
     "score": 0.10,
     "cape_percentile": 0.10,
@@ -245,7 +243,7 @@ investment plan
 
 响应包含：
 
-- `execution`：执行预览和双桶拆分。
+- `execution`：执行预览与持久化双桶配置产生的核心金额、机会预算、实际建议金额、未分配机会预算、滚存意图和审批要求。
 - `decision`：`final_score`、`multiplier`、`action`、`weight_mode` 和分层 score。
 - `market_sentiment`：Qwen 返回的 `score`、受长度限制的 `rationale`、最多五条 `warnings`，以及实际送入模型的 RSS `headlines`（标题、链接、UTC 发布时间）。Qwen 不负责生成来源链接。
 - `paper_order_ack`：只有 due 且 action 可执行时才出现。
@@ -463,7 +461,7 @@ OPEND_SMOKE_CONFIRM=submit-paper-order \
 
 当前 `POST /investment-plans/:id/decision-preview` 仍保留为兼容/测试入口，并由后端自动获取 Qwen market sentiment；fundamental 与 trend 仍由调用方传入。前端不再使用它填写 70/20，而应使用 `automatic-decision-preview`。两条入口都会将 execution、70/20 输入来源、可选 sentiment、decision 和 broker 快照写入本地 SQLite decision record。
 
-`summary` 已按 execution、计划金额、基本面、趋势和 regime、Qwen 情绪/降级权重、最终分数、倍率/action、双桶拆分和 paper-order 状态给出稳定分层解释。输入快照不得包含 Qwen API key、OpenD 密码、account id、token 或其他 secret。
+`summary` 已按 execution、计划金额、基本面、趋势和 regime、Qwen 情绪/降级权重、最终分数、倍率/action、双桶建议金额和 paper-order 状态给出稳定分层解释。输入快照不得包含 Qwen API key、OpenD 密码、account id、token 或其他 secret。历史客户端携带的 decision-preview `bucket_allocation` 会被校验但不再覆盖计划配置；应迁移为通过计划创建/更新接口配置双桶。
 
 ## 前端当前建议对接顺序
 

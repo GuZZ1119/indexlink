@@ -8,8 +8,9 @@ use axum::{
 use http_body_util::BodyExt;
 use indexlink_api::{build_router, ApiState, ReadinessCheck, ReadinessError};
 use investment_plans::{
-    CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository, InvestmentPlanService,
-    PlanRepositoryError, ScheduleKind, UpdateInvestmentPlan,
+    BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository,
+    InvestmentPlanService, OpportunityCashPolicy, PlanExecutionConfiguration, PlanRepositoryError,
+    PlanRiskMode, ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -168,7 +169,16 @@ fn create_input() -> CreateInvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
-        execution_configuration: investment_plans::PlanExecutionConfiguration::default(),
+        execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
+            TwoBucketAllocationConfig::new(
+                BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),
+                BucketAllocationRatio::new(Decimal::new(20, 2)).unwrap(),
+            )
+            .unwrap(),
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::ExpireEachPeriod,
+        )
+        .unwrap(),
         max_single_execution: Decimal::new(1500, 0),
     }
 }
@@ -230,6 +240,7 @@ async fn create_plan_accepts_weekly_approval_bucket_configuration() {
                             "opportunity_ratio": "0.30"
                         },
                         "risk_mode": "approval",
+                        "opportunity_cash_policy": "carry_forward",
                         "max_single_execution": "150.00"
                     })
                     .to_string(),
@@ -250,6 +261,10 @@ async fn create_plan_accepts_weekly_approval_bucket_configuration() {
     assert_eq!(
         body["execution_configuration"]["risk_mode"],
         json!("approval")
+    );
+    assert_eq!(
+        body["execution_configuration"]["opportunity_cash_policy"],
+        json!("carry_forward")
     );
 }
 
@@ -487,16 +502,7 @@ async fn preview_execution_returns_bucket_split_when_due() {
                     created.id
                 ))
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "day_of_month": 15,
-                        "bucket_allocation": {
-                            "core_ratio": "0.80",
-                            "opportunity_ratio": "0.20"
-                        }
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(json!({"day_of_month": 15}).to_string()))
                 .unwrap(),
         )
         .await
@@ -531,16 +537,7 @@ async fn preview_execution_omits_bucket_split_when_waiting() {
                     created.id
                 ))
                 .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "day_of_month": 16,
-                        "bucket_allocation": {
-                            "core_ratio": "0.80",
-                            "opportunity_ratio": "0.20"
-                        }
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(json!({"day_of_month": 16}).to_string()))
                 .unwrap(),
         )
         .await

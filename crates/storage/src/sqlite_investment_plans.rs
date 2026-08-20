@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use investment_plans::{
     BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository,
-    PlanExecutionConfiguration, PlanRepositoryError, PlanRiskMode, PlanValidationError,
-    ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
+    OpportunityCashPolicy, PlanExecutionConfiguration, PlanRepositoryError, PlanRiskMode,
+    PlanValidationError, ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
@@ -21,21 +21,21 @@ const INSERT_PLAN_SQL: &str = "INSERT INTO investment_plans \
      max_single_execution, is_active) \
     VALUES (?1, ?2, ?3, ?4, ?5, 'monthly', ?6, ?7, 1)";
 const INSERT_EXECUTION_CONFIGURATION_SQL: &str = "INSERT INTO plan_execution_configurations \
-    (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+    (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 const LIST_PLANS_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
-    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, \
+    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, \
     p.max_single_execution, p.is_active, p.created_at, p.updated_at \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     ORDER BY p.created_at ASC, p.id ASC";
 const GET_PLAN_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
-    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, \
+    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, \
     p.max_single_execution, p.is_active, p.created_at, p.updated_at \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     WHERE p.id = ?1";
 const SELECT_UPDATE_VALUES_SQL: &str = "SELECT p.base_contribution, p.max_single_execution, \
     p.schedule_day AS legacy_schedule_day, c.schedule_kind, c.schedule_day, c.core_ratio_units, \
-    c.opportunity_ratio_units, c.risk_mode \
+    c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     WHERE p.id = ?1";
 const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
@@ -50,7 +50,7 @@ const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
     ) \
     WHERE id = ?1";
 const UPDATE_EXECUTION_CONFIGURATION_SQL: &str = "UPDATE plan_execution_configurations SET \
-    schedule_day = ?2, core_ratio_units = ?3, opportunity_ratio_units = ?4, risk_mode = ?5 \
+    schedule_day = ?2, core_ratio_units = ?3, opportunity_ratio_units = ?4, risk_mode = ?5, opportunity_cash_policy = ?6 \
     WHERE plan_id = ?1";
 const SET_ACTIVE_SQL: &str = "UPDATE investment_plans SET \
     is_active = ?2, \
@@ -89,7 +89,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
         let id = Uuid::new_v4();
         let schedule_day = input.schedule_day;
         let configuration = input.execution_configuration;
-        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+        let (core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) =
             execution_configuration_values(configuration)?;
         let mut transaction = self
             .pool
@@ -114,6 +114,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bind(core_ratio_units)
             .bind(opportunity_ratio_units)
             .bind(risk_mode_name(risk_mode))
+            .bind(opportunity_cash_policy_name(opportunity_cash_policy))
             .execute(&mut *transaction)
             .await
             .map_err(map_sqlx_error)?;
@@ -202,8 +203,15 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bucket_allocation
             .unwrap_or(current_configuration.bucket_allocation());
         let risk_mode = input.risk_mode.unwrap_or(current_configuration.risk_mode());
-        let configuration = PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
-        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+        let opportunity_cash_policy = input
+            .opportunity_cash_policy
+            .unwrap_or(current_configuration.opportunity_cash_policy());
+        let configuration = PlanExecutionConfiguration::new_with_cash_policy(
+            bucket_allocation,
+            risk_mode,
+            opportunity_cash_policy,
+        )?;
+        let (core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) =
             execution_configuration_values(configuration)?;
 
         let base_contribution = input
@@ -231,6 +239,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bind(core_ratio_units)
             .bind(opportunity_ratio_units)
             .bind(risk_mode_name(risk_mode))
+            .bind(opportunity_cash_policy_name(opportunity_cash_policy))
             .execute(&mut *transaction)
             .await
             .map_err(map_sqlx_error)?;
@@ -347,6 +356,14 @@ fn risk_mode_name(value: PlanRiskMode) -> &'static str {
     }
 }
 
+/// 将机会桶现金策略编码为 SQLite 配置表使用的稳定文本。
+fn opportunity_cash_policy_name(value: OpportunityCashPolicy) -> &'static str {
+    match value {
+        OpportunityCashPolicy::ExpireEachPeriod => "expire_each_period",
+        OpportunityCashPolicy::CarryForward => "carry_forward",
+    }
+}
+
 /// 从 SQLite 行重建受校验的双桶及风险模式配置。
 fn execution_configuration_from_row(
     row: &SqliteRow,
@@ -370,18 +387,33 @@ fn execution_configuration_from_row(
         "approval" => PlanRiskMode::Approval,
         _ => return Err(PlanRepositoryError::Unavailable),
     };
-    PlanExecutionConfiguration::new(bucket_allocation, risk_mode).map_err(Into::into)
+    let opportunity_cash_policy = match row
+        .try_get::<String, _>("opportunity_cash_policy")
+        .map_err(map_sqlx_error)?
+        .as_str()
+    {
+        "expire_each_period" => OpportunityCashPolicy::ExpireEachPeriod,
+        "carry_forward" => OpportunityCashPolicy::CarryForward,
+        _ => return Err(PlanRepositoryError::Unavailable),
+    };
+    PlanExecutionConfiguration::new_with_cash_policy(
+        bucket_allocation,
+        risk_mode,
+        opportunity_cash_policy,
+    )
+    .map_err(Into::into)
 }
 
 /// 编码计划执行配置，拒绝无法被 SQLite 以固定八位精度保存的比例。
 fn execution_configuration_values(
     configuration: PlanExecutionConfiguration,
-) -> Result<(i64, i64, PlanRiskMode), PlanRepositoryError> {
+) -> Result<(i64, i64, PlanRiskMode, OpportunityCashPolicy), PlanRepositoryError> {
     let bucket_allocation = configuration.bucket_allocation();
     Ok((
         encode_ratio_units(bucket_allocation.core_ratio())?,
         encode_ratio_units(bucket_allocation.opportunity_ratio())?,
         configuration.risk_mode(),
+        configuration.opportunity_cash_policy(),
     ))
 }
 
@@ -523,13 +555,14 @@ mod tests {
     #[tokio::test]
     async fn persists_weekly_bucket_and_approval_configuration() {
         let repository = repository().await;
-        let configuration = PlanExecutionConfiguration::new(
+        let configuration = PlanExecutionConfiguration::new_with_cash_policy(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(amount("0.75")).unwrap(),
                 BucketAllocationRatio::new(amount("0.25")).unwrap(),
             )
             .unwrap(),
             PlanRiskMode::Approval,
+            OpportunityCashPolicy::CarryForward,
         )
         .unwrap();
         let created = repository
@@ -555,6 +588,10 @@ mod tests {
         assert_eq!(
             created.execution_configuration.risk_mode(),
             PlanRiskMode::Approval
+        );
+        assert_eq!(
+            created.execution_configuration.opportunity_cash_policy(),
+            OpportunityCashPolicy::CarryForward
         );
     }
 
@@ -593,6 +630,7 @@ mod tests {
                     schedule_day: Some(20),
                     bucket_allocation: None,
                     risk_mode: None,
+                    opportunity_cash_policy: None,
                     max_single_execution: Some(amount("1800.00")),
                     is_active: Some(false),
                 },

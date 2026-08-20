@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### 2026-08-20 12:00 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 Push 2 双桶建议金额与机会资金策略占位。
+- 涉及文件：
+  - `crates/investment-plans/Cargo.toml`
+  - `crates/investment-plans/src/lib.rs`
+  - `crates/storage/src/sqlite_investment_plans.rs`
+  - `crates/storage/src/investment_plans.rs`
+  - `migrations/sqlite/20260820110000_add_opportunity_cash_policy.sql`
+  - `migrations/20260820110000_add_opportunity_cash_policy.sql`
+  - `crates/api/src/routes/investment_plans.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `API_MANAGEMENT.md`
+  - `V1_1_PLAN.md`
+  - `README.md`
+- 变更内容：
+  - 计划配置新增持久化的 `opportunity_cash_policy`：`expire_each_period` 或 `carry_forward`；核心桶为 `100%` 时拒绝无意义的滚存策略。
+  - 双桶从静态比例拆分升级为可复用的金额建议：核心桶始终保留，机会桶按已有有界倍率调整；`Skip`/`TacticalDelay` 仅令机会桶建议额为零，不能否决核心桶。
+  - 在不存在已审计现金池余额的当前阶段，机会桶建议额不会超过其当期预算；返回机会预算、采用倍率、未分配金额、建议总额、现金策略意图和审批要求。
+  - `Decision Preview` 与执行预览均读取计划的持久化配置，预览请求不再允许覆盖计划双桶比例；旧 decision-preview 请求中的比例字段仅为兼容而解析，不影响结果。
+  - `carry_forward` 当前只保存用户意图和审计输出；现金池余额、`carry_with_cap`、真实可用现金校验、调度与订单金额联动均明确留待 Push 3。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p investment-plans -p indexlink-storage -p indexlink-api --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p investment-plans -p indexlink-storage -p indexlink-api --all-targets --all-features --locked -- -D warnings` 通过。
+
 ### 2026-08-20 10:30 CST
 
 - 执行模型：GPT-5 Codex。

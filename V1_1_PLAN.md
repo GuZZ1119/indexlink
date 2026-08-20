@@ -1,6 +1,6 @@
 # IndexLink V1.1 策略与执行升级计划 / Strategy and Execution Upgrade Plan
 
-> 状态 / Status：规划中，尚未改变生产策略。
+> 状态 / Status：Phase 1 已完成计划配置、双桶建议金额与 SQLite/PostgreSQL migration；现金池账本、调度和订单金额联动仍未实现。
 > 范围 / Scope：低频、可解释、可复盘的指数 ETF 定投；默认仅限模拟交易（paper trading）。
 > 非目标 / Non-goals：不承诺超额收益，不引入不可审计的高频策略，不以训练黑盒模型替代领域规则。
 
@@ -61,13 +61,13 @@ recommended_amount = core_amount + opportunity_amount
 
 ### 4.3 机会现金政策 / Opportunity Cash Policy
 
-用户必须显式选择以下之一：
+当前可配置的策略如下：
 
-- `carry_forward`：未使用机会金额进入本地现金池，后续符合条件时投入。
-- `expire_each_period`：仅执行当期机会预算，未使用部分留作现金但不再自动补投。
-- `carry_with_cap`：可滚存，但限定最大期数或最大金额。
+- `carry_forward`：保存“后续应滚存”的用户意图；在现金池账本完成前，不声称已累计余额或自动补投。
+- `expire_each_period`：仅建议当期机会预算，未使用部分不会自动补投。
+- `carry_with_cap`：待后续引入最大期数/最大金额、资金流水与消耗顺序后实现，当前不暴露为可选配置。
 
-无论选择何种政策，资金去向、余额、过期或消耗原因都必须写入 SQLite 审计账本。
+现金池账本阶段完成后，资金去向、余额、过期或消耗原因都必须写入 SQLite 审计账本。
 
 ## 5. 周期与风险响应 / Schedule and Risk Response
 

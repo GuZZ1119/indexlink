@@ -18,6 +18,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use core_domain::{Action, Multiplier};
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -122,6 +124,19 @@ pub enum PlanRiskMode {
     Approval,
 }
 
+/// 机会桶当期未使用金额的后续处理策略。
+///
+/// `CarryForward` 当前只作为已持久化的用户意图。实际现金池余额、滚存上限和账本
+/// 流水将在后续执行账本阶段实现；本阶段不会伪造历史滚存余额。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpportunityCashPolicy {
+    /// 当期未使用机会预算不参与后续自动补投。
+    ExpireEachPeriod,
+    /// 当期未使用机会预算计划在后续账本阶段滚存。
+    CarryForward,
+}
+
 /// 已校验的计划级双桶与风险模式配置。
 ///
 /// 核心桶为 `100%` 时只能使用 [`PlanRiskMode::Fixed`]；存在机会桶时必须显式选择
@@ -132,6 +147,8 @@ pub struct PlanExecutionConfiguration {
     bucket_allocation: TwoBucketAllocationConfig,
     /// 机会桶的执行授权方式。
     risk_mode: PlanRiskMode,
+    /// 机会桶未使用金额的后续处理策略。
+    opportunity_cash_policy: OpportunityCashPolicy,
 }
 
 impl PlanExecutionConfiguration {
@@ -140,11 +157,30 @@ impl PlanExecutionConfiguration {
         bucket_allocation: TwoBucketAllocationConfig,
         risk_mode: PlanRiskMode,
     ) -> Result<Self, PlanValidationError> {
+        Self::new_with_cash_policy(
+            bucket_allocation,
+            risk_mode,
+            OpportunityCashPolicy::ExpireEachPeriod,
+        )
+    }
+
+    /// 创建带机会桶未使用金额处理策略的已校验计划执行配置。
+    pub fn new_with_cash_policy(
+        bucket_allocation: TwoBucketAllocationConfig,
+        risk_mode: PlanRiskMode,
+        opportunity_cash_policy: OpportunityCashPolicy,
+    ) -> Result<Self, PlanValidationError> {
+        if bucket_allocation.is_core_only()
+            && opportunity_cash_policy != OpportunityCashPolicy::ExpireEachPeriod
+        {
+            return Err(PlanValidationError::CoreOnlyRequiresExpireEachPeriodPolicy);
+        }
         match (bucket_allocation.is_core_only(), risk_mode) {
             (true, PlanRiskMode::Fixed)
             | (false, PlanRiskMode::Autopilot | PlanRiskMode::Approval) => Ok(Self {
                 bucket_allocation,
                 risk_mode,
+                opportunity_cash_policy,
             }),
             (true, _) => Err(PlanValidationError::CoreOnlyRequiresFixedRiskMode),
             (false, PlanRiskMode::Fixed) => {
@@ -165,21 +201,33 @@ impl PlanExecutionConfiguration {
         self.risk_mode
     }
 
+    /// 返回机会桶当期未使用金额的处理策略。
+    #[must_use]
+    pub fn opportunity_cash_policy(self) -> OpportunityCashPolicy {
+        self.opportunity_cash_policy
+    }
+
     /// 重新校验已构造配置，供持久化边界验证外部数据使用。
     pub fn validate(self) -> Result<(), PlanValidationError> {
-        Self::new(self.bucket_allocation, self.risk_mode).map(|_| ())
+        Self::new_with_cash_policy(
+            self.bucket_allocation,
+            self.risk_mode,
+            self.opportunity_cash_policy,
+        )
+        .map(|_| ())
     }
 }
 
 impl Default for PlanExecutionConfiguration {
     fn default() -> Self {
-        Self::new(
+        Self::new_with_cash_policy(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(Decimal::ONE).expect("one is a valid ratio"),
                 BucketAllocationRatio::new(Decimal::ZERO).expect("zero is a valid ratio"),
             )
             .expect("core-only ratios must sum to one"),
             PlanRiskMode::Fixed,
+            OpportunityCashPolicy::ExpireEachPeriod,
         )
         .expect("core-only configuration must be valid")
     }
@@ -190,15 +238,31 @@ impl Default for PlanExecutionConfiguration {
 /// 该结果只表达本次计划投入金额在两个桶之间的拆分，不读取余额、不生成订单。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TwoBucketContributionSplit {
-    /// 本次计划投入总金额。
+    /// 本周期可用的计划预算，已经受单次执行上限限制。
     #[serde(with = "rust_decimal::serde::str")]
     planned_contribution: Decimal,
     /// 常规定投桶投入金额。
     #[serde(with = "rust_decimal::serde::str")]
     core_contribution: Decimal,
-    /// 机会桶投入金额。
+    /// 机会桶的当期预算，尚未应用决策倍率。
+    #[serde(with = "rust_decimal::serde::str")]
+    opportunity_budget: Decimal,
+    /// 机会桶实际采用的有界倍率。
+    #[serde(with = "rust_decimal::serde::str")]
+    opportunity_multiplier: Decimal,
+    /// 机会桶本次建议投入金额。
     #[serde(with = "rust_decimal::serde::str")]
     opportunity_contribution: Decimal,
+    /// 机会桶本次未建议投入金额，不等同于已持久化的现金池余额。
+    #[serde(with = "rust_decimal::serde::str")]
+    unallocated_opportunity_contribution: Decimal,
+    /// 核心桶与机会桶合计的本次建议金额。
+    #[serde(with = "rust_decimal::serde::str")]
+    recommended_contribution: Decimal,
+    /// 机会桶未使用金额的后续处理策略。
+    opportunity_cash_policy: OpportunityCashPolicy,
+    /// 当前计划是否要求操作者明确提交 paper order 才能执行。
+    requires_approval: bool,
 }
 
 impl TwoBucketContributionSplit {
@@ -207,14 +271,73 @@ impl TwoBucketContributionSplit {
         planned_contribution: Decimal,
         config: TwoBucketAllocationConfig,
     ) -> Result<Self, PlanValidationError> {
+        Self::baseline(
+            planned_contribution,
+            PlanExecutionConfiguration::new(
+                config,
+                if config.is_core_only() {
+                    PlanRiskMode::Fixed
+                } else {
+                    PlanRiskMode::Autopilot
+                },
+            )?,
+        )
+    }
+
+    /// 使用计划的持久化配置生成不带市场信号的基准拆分。
+    pub fn baseline(
+        planned_contribution: Decimal,
+        configuration: PlanExecutionConfiguration,
+    ) -> Result<Self, PlanValidationError> {
         validate_positive("planned_contribution", planned_contribution)?;
-        let core_contribution = planned_contribution * config.core_ratio().value();
+        let allocation = configuration.bucket_allocation();
+        let core_contribution = planned_contribution * allocation.core_ratio().value();
         let opportunity_contribution = planned_contribution - core_contribution;
 
         Ok(Self {
             planned_contribution,
             core_contribution,
+            opportunity_budget: opportunity_contribution,
+            opportunity_multiplier: Decimal::ONE,
             opportunity_contribution,
+            unallocated_opportunity_contribution: Decimal::ZERO,
+            recommended_contribution: planned_contribution,
+            opportunity_cash_policy: configuration.opportunity_cash_policy(),
+            requires_approval: configuration.risk_mode() == PlanRiskMode::Approval,
+        })
+    }
+
+    /// 使用已计算的决策动作和倍率生成双桶执行建议。
+    ///
+    /// 核心桶始终按比例保留。`Skip` 与 `TacticalDelay` 只会将机会桶降为零，
+    /// 不会否决核心桶。机会桶的建议金额不会超过其当期预算；后续现金池阶段
+    /// 才会允许使用经审计的滚存余额实现额外加码。
+    pub fn from_decision(
+        planned_contribution: Decimal,
+        configuration: PlanExecutionConfiguration,
+        action: Action,
+        multiplier: Multiplier,
+    ) -> Result<Self, PlanValidationError> {
+        validate_positive("planned_contribution", planned_contribution)?;
+        let allocation = configuration.bucket_allocation();
+        let core_contribution = planned_contribution * allocation.core_ratio().value();
+        let opportunity_budget = planned_contribution - core_contribution;
+        let opportunity_multiplier =
+            opportunity_multiplier(configuration.risk_mode(), action, multiplier)?;
+        let requested_opportunity = opportunity_budget * opportunity_multiplier;
+        let opportunity_contribution = requested_opportunity.min(opportunity_budget);
+        let unallocated_opportunity_contribution = opportunity_budget - opportunity_contribution;
+
+        Ok(Self {
+            planned_contribution,
+            core_contribution,
+            opportunity_budget,
+            opportunity_multiplier,
+            opportunity_contribution,
+            unallocated_opportunity_contribution,
+            recommended_contribution: core_contribution + opportunity_contribution,
+            opportunity_cash_policy: configuration.opportunity_cash_policy(),
+            requires_approval: configuration.risk_mode() == PlanRiskMode::Approval,
         })
     }
 
@@ -236,6 +359,42 @@ impl TwoBucketContributionSplit {
         self.opportunity_contribution
     }
 
+    /// 返回机会桶当期预算。
+    #[must_use]
+    pub fn opportunity_budget(self) -> Decimal {
+        self.opportunity_budget
+    }
+
+    /// 返回机会桶实际采用的有界倍率。
+    #[must_use]
+    pub fn opportunity_multiplier(self) -> Decimal {
+        self.opportunity_multiplier
+    }
+
+    /// 返回机会桶本次未建议投入金额。
+    #[must_use]
+    pub fn unallocated_opportunity_contribution(self) -> Decimal {
+        self.unallocated_opportunity_contribution
+    }
+
+    /// 返回核心桶与机会桶合计的建议金额。
+    #[must_use]
+    pub fn recommended_contribution(self) -> Decimal {
+        self.recommended_contribution
+    }
+
+    /// 返回机会桶未使用金额处理策略。
+    #[must_use]
+    pub fn opportunity_cash_policy(self) -> OpportunityCashPolicy {
+        self.opportunity_cash_policy
+    }
+
+    /// 返回本次建议是否等待用户明确确认。
+    #[must_use]
+    pub fn requires_approval(self) -> bool {
+        self.requires_approval
+    }
+
     /// 返回指定桶的投入金额。
     #[must_use]
     pub fn contribution_for(self, bucket: InvestmentBucket) -> Decimal {
@@ -244,6 +403,19 @@ impl TwoBucketContributionSplit {
             InvestmentBucket::Opportunity => self.opportunity_contribution,
         }
     }
+}
+
+/// 根据当前策略动作得出机会桶可采用的有界倍率。
+fn opportunity_multiplier(
+    risk_mode: PlanRiskMode,
+    action: Action,
+    multiplier: Multiplier,
+) -> Result<Decimal, PlanValidationError> {
+    if risk_mode == PlanRiskMode::Fixed || matches!(action, Action::Skip | Action::TacticalDelay) {
+        return Ok(Decimal::ZERO);
+    }
+
+    Decimal::from_f64(multiplier.value()).ok_or(PlanValidationError::InvalidOpportunityMultiplier)
 }
 
 /// 投资计划周期。
@@ -351,6 +523,8 @@ pub struct UpdateInvestmentPlan {
     pub bucket_allocation: Option<TwoBucketAllocationConfig>,
     /// 可选的新机会桶执行授权方式。
     pub risk_mode: Option<PlanRiskMode>,
+    /// 可选的新机会桶未使用金额处理策略。
+    pub opportunity_cash_policy: Option<OpportunityCashPolicy>,
     /// 可选的新单次执行金额硬上限。
     #[serde(
         default,
@@ -373,6 +547,7 @@ impl UpdateInvestmentPlan {
             && self.schedule_day.is_none()
             && self.bucket_allocation.is_none()
             && self.risk_mode.is_none()
+            && self.opportunity_cash_policy.is_none()
             && self.max_single_execution.is_none()
             && self.is_active.is_none()
         {
@@ -392,9 +567,16 @@ impl UpdateInvestmentPlan {
         if let (Some(base), Some(max)) = (self.base_contribution, self.max_single_execution) {
             validate_amounts(base, max)?;
         }
-        if let (Some(bucket_allocation), Some(risk_mode)) = (self.bucket_allocation, self.risk_mode)
-        {
-            PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
+        if let (Some(bucket_allocation), Some(risk_mode), Some(opportunity_cash_policy)) = (
+            self.bucket_allocation,
+            self.risk_mode,
+            self.opportunity_cash_policy,
+        ) {
+            PlanExecutionConfiguration::new_with_cash_policy(
+                bucket_allocation,
+                risk_mode,
+                opportunity_cash_policy,
+            )?;
         }
 
         Ok(Self { name, ..self })
@@ -500,6 +682,12 @@ pub enum PlanValidationError {
     /// 存在机会桶但未选择自动或审批风险模式。
     #[error("a plan with an opportunity bucket must use autopilot or approval risk mode")]
     OpportunityBucketRequiresRiskMode,
+    /// 全部资金位于核心桶时不允许设置没有作用的机会桶滚存策略。
+    #[error("a core-only plan must use the expire_each_period opportunity cash policy")]
+    CoreOnlyRequiresExpireEachPeriodPolicy,
+    /// 倍率无法安全转换为精确金额计算使用的 Decimal。
+    #[error("opportunity multiplier cannot be represented as a decimal")]
+    InvalidOpportunityMultiplier,
     /// 金额不是正数。
     #[error("{field} must be greater than zero")]
     NonPositiveAmount {
@@ -636,8 +824,8 @@ impl InvestmentPlanService {
 
     /// 预览计划在指定月内日期的执行状态。
     ///
-    /// 该用例只做启停与调度日判断，并在 due 时返回不超过单次执行上限的计划投入金额；
-    /// 真实订单、成交和双桶分配由后续阶段处理。
+    /// 该用例只做启停与调度日判断，并在 due 时返回不超过单次执行上限的计划预算及
+    /// 持久化双桶配置的基准拆分；真实订单、成交和现金池由后续阶段处理。
     pub async fn preview_execution(
         &self,
         id: Uuid,
@@ -647,18 +835,20 @@ impl InvestmentPlanService {
         preview_execution(&plan, input.day_of_month(), None).map_err(Into::into)
     }
 
-    /// 预览计划在指定月内日期的执行状态，并在 due 时附带双桶投入拆分。
+    /// 使用当前策略动作与倍率预览计划在指定月内日期的双桶执行建议。
     ///
-    /// 该用例仍不读取余额、不判断市场信号、不生成订单；它只把已确定的计划投入金额
-    /// 按已校验的双桶配置拆成 core/opportunity。
-    pub async fn preview_execution_with_buckets(
+    /// 核心桶不受普通策略动作否决；`Skip` 与 `TacticalDelay` 只会使机会桶本次不建议
+    /// 投入。该用例仍不读取余额、不生成订单，也不维护机会现金池。
+    pub async fn preview_execution_with_decision(
         &self,
         id: Uuid,
         input: PreviewInvestmentPlanExecution,
-        bucket_config: TwoBucketAllocationConfig,
+        action: Action,
+        multiplier: Multiplier,
     ) -> Result<InvestmentPlanExecutionPreview, PlanApplicationError> {
         let plan = self.repository.get(id).await?;
-        preview_execution(&plan, input.day_of_month(), Some(bucket_config)).map_err(Into::into)
+        preview_execution(&plan, input.day_of_month(), Some((action, multiplier)))
+            .map_err(Into::into)
     }
 }
 
@@ -745,7 +935,7 @@ fn validate_positive(field: &'static str, value: Decimal) -> Result<(), PlanVali
 fn preview_execution(
     plan: &InvestmentPlan,
     day_of_month: i16,
-    bucket_config: Option<TwoBucketAllocationConfig>,
+    decision: Option<(Action, Multiplier)>,
 ) -> Result<InvestmentPlanExecutionPreview, PlanValidationError> {
     let status = if !plan.is_active {
         ExecutionPreviewStatus::Inactive
@@ -760,10 +950,19 @@ fn preview_execution(
         plan.max_single_execution
     };
     let planned_contribution = (status == ExecutionPreviewStatus::Due).then_some(contribution);
-    let bucket_split = match (planned_contribution, bucket_config) {
-        (Some(contribution), Some(config)) => {
-            Some(TwoBucketContributionSplit::new(contribution, config)?)
+    let bucket_split = match (planned_contribution, decision) {
+        (Some(contribution), Some((action, multiplier))) => {
+            Some(TwoBucketContributionSplit::from_decision(
+                contribution,
+                plan.execution_configuration,
+                action,
+                multiplier,
+            )?)
         }
+        (Some(contribution), None) => Some(TwoBucketContributionSplit::baseline(
+            contribution,
+            plan.execution_configuration,
+        )?),
         _ => None,
     };
 
@@ -815,6 +1014,23 @@ mod tests {
             execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: money("1500.00"),
         }
+    }
+
+    /// 构造带机会桶的测试执行配置。
+    fn mixed_configuration(
+        core_ratio: &str,
+        risk_mode: PlanRiskMode,
+        cash_policy: OpportunityCashPolicy,
+    ) -> PlanExecutionConfiguration {
+        let core_ratio = BucketAllocationRatio::new(money(core_ratio)).unwrap();
+        let opportunity_ratio =
+            BucketAllocationRatio::new(Decimal::ONE - core_ratio.value()).unwrap();
+        PlanExecutionConfiguration::new_with_cash_policy(
+            TwoBucketAllocationConfig::new(core_ratio, opportunity_ratio).unwrap(),
+            risk_mode,
+            cash_policy,
+        )
+        .unwrap()
     }
 
     /// 将已规范化的创建输入转换成 fake repository 中的持久化计划。
@@ -1077,6 +1293,14 @@ mod tests {
                 .risk_mode(),
             PlanRiskMode::Approval
         );
+        assert_eq!(
+            PlanExecutionConfiguration::new_with_cash_policy(
+                core_only,
+                PlanRiskMode::Fixed,
+                OpportunityCashPolicy::CarryForward,
+            ),
+            Err(PlanValidationError::CoreOnlyRequiresExpireEachPeriodPolicy)
+        );
     }
 
     /// 验证周度计划可保存，但当前月度预览不会误将其视为到期计划。
@@ -1124,6 +1348,84 @@ mod tests {
             split.core_contribution() + split.opportunity_contribution(),
             split.planned_contribution()
         );
+    }
+
+    /// 验证趋势延迟只使机会桶暂不投入，不会否决核心桶。
+    #[test]
+    fn tactical_delay_keeps_core_bucket_and_leaves_opportunity_unallocated() {
+        let configuration = mixed_configuration(
+            "0.70",
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::CarryForward,
+        );
+
+        let split = TwoBucketContributionSplit::from_decision(
+            money("1000.00"),
+            configuration,
+            Action::TacticalDelay,
+            Multiplier::new_clamped(1.5),
+        )
+        .unwrap();
+
+        assert_eq!(split.core_contribution(), money("700.0000"));
+        assert_eq!(split.opportunity_budget(), money("300.0000"));
+        assert_eq!(split.opportunity_multiplier(), Decimal::ZERO);
+        assert_eq!(split.opportunity_contribution(), Decimal::ZERO);
+        assert_eq!(
+            split.unallocated_opportunity_contribution(),
+            money("300.0000")
+        );
+        assert_eq!(split.recommended_contribution(), money("700.0000"));
+        assert_eq!(
+            split.opportunity_cash_policy(),
+            OpportunityCashPolicy::CarryForward
+        );
+    }
+
+    /// 验证当前期没有已审计滚存余额时，机会桶加码不会越过当期计划预算。
+    #[test]
+    fn opportunity_overweight_is_capped_at_current_period_budget() {
+        let configuration = mixed_configuration(
+            "0.70",
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::ExpireEachPeriod,
+        );
+
+        let split = TwoBucketContributionSplit::from_decision(
+            money("1000.00"),
+            configuration,
+            Action::Overweight,
+            Multiplier::new_clamped(1.5),
+        )
+        .unwrap();
+
+        assert_eq!(split.opportunity_multiplier(), money("1.5"));
+        assert_eq!(split.opportunity_contribution(), money("300.00000"));
+        assert_eq!(split.unallocated_opportunity_contribution(), Decimal::ZERO);
+        assert_eq!(split.recommended_contribution(), money("1000.00000"));
+    }
+
+    /// 验证审批模式会将确认要求随执行建议返回。
+    #[test]
+    fn approval_mode_marks_decision_as_requiring_confirmation() {
+        let configuration = mixed_configuration(
+            "0.50",
+            PlanRiskMode::Approval,
+            OpportunityCashPolicy::ExpireEachPeriod,
+        );
+
+        let split = TwoBucketContributionSplit::from_decision(
+            money("1000.00"),
+            configuration,
+            Action::Underweight,
+            Multiplier::new_clamped(0.5),
+        )
+        .unwrap();
+
+        assert!(split.requires_approval());
+        assert_eq!(split.core_contribution(), money("500.0000"));
+        assert_eq!(split.opportunity_contribution(), money("250.00000"));
+        assert_eq!(split.recommended_contribution(), money("750.00000"));
     }
 
     /// 验证双桶投入拆分可以按桶读取金额。
@@ -1391,9 +1693,9 @@ mod tests {
         assert!(disabled.updated_at > created.updated_at);
     }
 
-    /// 验证执行预览会在执行日返回 due 和不超过单次执行上限的计划金额。
+    /// 验证执行预览会在执行日返回 due、受上限限制的预算和持久化基准拆分。
     #[tokio::test]
-    async fn service_previews_due_execution_without_bucket_logic() {
+    async fn service_previews_due_execution_with_persisted_baseline_split() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
         let created = service.create(create_input()).await.unwrap();
 
@@ -1405,7 +1707,9 @@ mod tests {
         assert_eq!(preview.plan_id, created.id);
         assert_eq!(preview.status, ExecutionPreviewStatus::Due);
         assert_eq!(preview.planned_contribution, Some(money("1000.00")));
-        assert_eq!(preview.bucket_split, None);
+        let split = preview.bucket_split.unwrap();
+        assert_eq!(split.core_contribution(), money("1000.00"));
+        assert_eq!(split.opportunity_contribution(), Decimal::ZERO);
     }
 
     /// 验证执行预览会区分等待执行和计划停用。
@@ -1436,19 +1740,16 @@ mod tests {
     #[tokio::test]
     async fn service_previews_due_execution_with_bucket_split() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
-        let created = service.create(create_input()).await.unwrap();
-        let config = TwoBucketAllocationConfig::new(
-            BucketAllocationRatio::new(money("0.80")).unwrap(),
-            BucketAllocationRatio::new(money("0.20")).unwrap(),
-        )
-        .unwrap();
+        let mut input = create_input();
+        input.execution_configuration = mixed_configuration(
+            "0.80",
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::CarryForward,
+        );
+        let created = service.create(input).await.unwrap();
 
         let preview = service
-            .preview_execution_with_buckets(
-                created.id,
-                PreviewInvestmentPlanExecution::new(15).unwrap(),
-                config,
-            )
+            .preview_execution(created.id, PreviewInvestmentPlanExecution::new(15).unwrap())
             .await
             .unwrap();
 
@@ -1456,26 +1757,28 @@ mod tests {
         assert_eq!(preview.status, ExecutionPreviewStatus::Due);
         assert_eq!(split.planned_contribution(), money("1000.00"));
         assert_eq!(split.core_contribution(), money("800.0000"));
+        assert_eq!(split.opportunity_budget(), money("200.0000"));
         assert_eq!(split.opportunity_contribution(), money("200.0000"));
+        assert_eq!(
+            split.opportunity_cash_policy(),
+            OpportunityCashPolicy::CarryForward
+        );
     }
 
     /// 验证非 due 执行预览不会附带双桶投入拆分。
     #[tokio::test]
     async fn service_omits_bucket_split_when_execution_is_not_due() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
-        let created = service.create(create_input()).await.unwrap();
-        let config = TwoBucketAllocationConfig::new(
-            BucketAllocationRatio::new(money("0.50")).unwrap(),
-            BucketAllocationRatio::new(money("0.50")).unwrap(),
-        )
-        .unwrap();
+        let mut input = create_input();
+        input.execution_configuration = mixed_configuration(
+            "0.50",
+            PlanRiskMode::Autopilot,
+            OpportunityCashPolicy::ExpireEachPeriod,
+        );
+        let created = service.create(input).await.unwrap();
 
         let waiting = service
-            .preview_execution_with_buckets(
-                created.id,
-                PreviewInvestmentPlanExecution::new(16).unwrap(),
-                config,
-            )
+            .preview_execution(created.id, PreviewInvestmentPlanExecution::new(16).unwrap())
             .await
             .unwrap();
 
@@ -1488,18 +1791,20 @@ mod tests {
     #[tokio::test]
     async fn bucket_split_preview_serializes_amounts_as_json_strings() {
         let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
-        let created = service.create(create_input()).await.unwrap();
-        let config = TwoBucketAllocationConfig::new(
-            BucketAllocationRatio::new(money("0.50")).unwrap(),
-            BucketAllocationRatio::new(money("0.50")).unwrap(),
-        )
-        .unwrap();
+        let mut input = create_input();
+        input.execution_configuration = mixed_configuration(
+            "0.50",
+            PlanRiskMode::Approval,
+            OpportunityCashPolicy::CarryForward,
+        );
+        let created = service.create(input).await.unwrap();
 
         let preview = service
-            .preview_execution_with_buckets(
+            .preview_execution_with_decision(
                 created.id,
                 PreviewInvestmentPlanExecution::new(15).unwrap(),
-                config,
+                Action::Underweight,
+                Multiplier::new_clamped(0.5),
             )
             .await
             .unwrap();
@@ -1515,6 +1820,10 @@ mod tests {
         ));
         assert!(matches!(
             encoded["bucket_split"]["opportunity_contribution"],
+            Value::String(_)
+        ));
+        assert!(matches!(
+            encoded["bucket_split"]["recommended_contribution"],
             Value::String(_)
         ));
     }
