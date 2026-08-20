@@ -194,6 +194,7 @@ fn plan(id: Uuid) -> InvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
+        schedule_days: vec![15],
         execution_configuration: investment_plans::PlanExecutionConfiguration::default(),
         max_single_execution: Decimal::new(1500, 0),
         is_active: true,

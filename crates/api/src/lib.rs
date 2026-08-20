@@ -49,10 +49,10 @@ pub fn build_router_with_cors(state: ApiState, allowed_origins: Vec<HeaderValue>
         .layer(TraceLayer::new_for_http())
 }
 
-/// Run one safe fixed-monthly automatic-decision scheduler tick.
+/// Run one safe periodic automatic-decision scheduler tick.
 ///
 /// The tick only creates auditable decisions for active plans whose configured UTC calendar day
-/// is due. It never submits a broker order: paper-order submission remains an explicit operator
+/// is due according to its persisted monthly/weekly fixed-day set. It never submits a broker order: paper-order submission remains an explicit operator
 /// confirmation step. A local SQLite idempotency ledger prevents duplicate automatic records for
 /// the same plan and UTC day.
 ///

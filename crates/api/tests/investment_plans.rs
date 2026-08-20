@@ -137,6 +137,7 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         currency: input.currency,
         schedule_kind: input.schedule_kind,
         schedule_day: input.schedule_day,
+        schedule_days: input.schedule_days,
         execution_configuration: input.execution_configuration,
         max_single_execution: input.max_single_execution,
         is_active: true,
@@ -169,6 +170,7 @@ fn create_input() -> CreateInvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
+        schedule_days: vec![15],
         execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),

@@ -174,6 +174,8 @@ mod tests {
                 "cash_flows".to_owned(),
                 "decision_records".to_owned(),
                 "investment_plans".to_owned(),
+                "opportunity_cash_balances".to_owned(),
+                "opportunity_cash_events".to_owned(),
                 "paper_fills".to_owned(),
                 "paper_orders".to_owned(),
                 "plan_execution_configurations".to_owned(),

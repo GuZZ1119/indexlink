@@ -335,6 +335,7 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         currency: input.currency,
         schedule_kind: input.schedule_kind,
         schedule_day: input.schedule_day,
+        schedule_days: input.schedule_days,
         execution_configuration: input.execution_configuration,
         max_single_execution: input.max_single_execution,
         is_active: true,
@@ -437,6 +438,7 @@ fn create_input() -> CreateInvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
+        schedule_days: vec![15],
         execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),
@@ -524,7 +526,7 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert!(summary.contains("trend_timing=0.50 (neutral, regime=Neutral)"));
     assert!(summary.contains("market_sentiment=0.70"));
     assert!(summary.contains(
-        "bucket_split=core=800.00 USD, opportunity_budget=200.00 USD, opportunity=200.00 USD, recommended=1000.00 USD"
+        "bucket_split=core=800.00 USD, opportunity_budget=200.00 USD, carried_opportunity_cash=0 USD, opportunity=200.00 USD, recommended=1000.00 USD"
     ));
     assert_eq!(broker.accepted_orders().len(), 1);
     let persisted = records.records.lock().unwrap();
@@ -578,6 +580,7 @@ async fn automatic_decision_preview_uses_server_sources_and_writes_readable_audi
     let broker = Arc::new(MockBroker::paper_only());
     let mut input = create_input();
     input.schedule_day = i16::try_from(Utc::now().day()).unwrap();
+    input.schedule_days = vec![input.schedule_day];
     let created = repository.create(input).await.unwrap();
     let records = Arc::new(FakeDecisionRecordRepository::default());
     let app = app_with_automatic_sources(
@@ -682,6 +685,50 @@ async fn scheduler_creates_one_due_audit_record_per_plan_and_utc_day() {
         records[0]["execution_snapshot"]["trigger"],
         json!("automatic_scheduler")
     );
+}
+
+/// Verify the scheduler executes a weekly plan once when today's weekday is one of several dates.
+#[tokio::test]
+async fn scheduler_executes_weekly_multi_day_plan() {
+    let storage = SqliteStorage::connect_with_options("sqlite::memory:", 1, Duration::from_secs(1))
+        .await
+        .unwrap();
+    storage.migrate().await.unwrap();
+    let state = ApiState::new(storage, "0.1.0")
+        .with_market_sentiment(Arc::new(StaticNews), Arc::new(PositiveAi))
+        .with_market_data(Arc::new(StaticMarketData));
+    let app = build_router(state.clone());
+    let weekday = Utc::now().weekday().num_days_from_monday() + 1;
+    let schedule_days = if weekday == 1 {
+        vec![1]
+    } else {
+        vec![1, weekday]
+    };
+    let created = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/investment-plans")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Weekly multi-day VOO",
+                        "symbol": "VOO",
+                        "base_contribution": "100.00",
+                        "currency": "USD",
+                        "schedule_kind": "weekly",
+                        "schedule_day": 1,
+                        "schedule_days": schedule_days,
+                        "max_single_execution": "100.00"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(run_due_decisions(&state).await.unwrap().created, 1);
 }
 
 /// Verify an unavailable Qwen pipeline uses the documented 90/10/0 fallback.

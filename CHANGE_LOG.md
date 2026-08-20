@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### 2026-08-20 14:00 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 Push 3 周期调度、机会现金滚存与自动订单金额闭环。
+- 涉及文件：
+  - `crates/investment-plans/src/lib.rs`
+  - `crates/api/src/lib.rs`
+  - `crates/api/src/state.rs`
+  - `crates/api/src/routes/investment_plans.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `apps/server/src/main.rs`
+  - `crates/storage/src/sqlite_investment_plans.rs`
+  - `crates/storage/src/sqlite_opportunity_cash.rs`
+  - `crates/storage/src/sqlite_scheduled_decisions.rs`
+  - `migrations/sqlite/20260820130000_add_schedule_days_and_opportunity_cash.sql`
+  - `migrations/20260820130000_add_schedule_days_and_opportunity_cash.sql`
+- 变更内容：
+  - 计划的月度/周度规则支持一个或多个固定日期；`schedule_day` 保留为首项兼容字段，`schedule_days` 是实际调度集合。scheduler 按 UTC 当前月内日或 ISO 星期匹配，并继续用 `(plan_id, UTC 日期)` 本地账本幂等去重。
+  - SQLite 新增独立 `opportunity_cash_balances` 与 `opportunity_cash_events`，不混入账户充值/提现 `cash_flows`。仅在自动来源决策的 broker 接受订单后，按 decision record 唯一键原子结算机会桶余额；`carry_forward` 保存未分配机会预算，`expire_each_period` 归零。
+  - Decision Preview 会读入滚存余额，并在 `max_single_execution` 硬上限内使用它；核心桶仍不可被趋势或 AI 否决。自动预览的 paper buy 使用建议金额、最新本机 OpenD 收盘价和 broker buying power 换算保守整股数量；前端提供的旧数量只能与后端计算结果一致，不能放大订单。
+  - 手动 legacy Decision Preview 保持现有显式数量契约，避免未经前端迁移就改变已有演示流程；新金额到数量闭环用于自动来源决策路径。
+- 未完成边界：
+  - scheduler 继续只生成审计决策，不会自动向 broker 提交订单；`approval` 仍须用户确认。legacy 手动 preview 为兼容旧 UI 保留显式数量，尚不结算机会现金。
+  - market order 只能以最新本机收盘价作预算估计，最终成交价/部分成交由既有 paper performance 对账处理；尚未实现自动按成交回写机会余额、每周期预算上限或 `carry_with_cap`。
+  - PostgreSQL migration 保持 schema 对等，但本 MVP 的实际运行、回归测试和现金账本均以本地 SQLite 为准。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p investment-plans -p indexlink-storage -p indexlink-api --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p investment-plans -p indexlink-storage -p indexlink-api -p indexlink-server --all-targets --all-features --locked -- -D warnings` 通过。
+
 ### 2026-08-20 12:00 CST
 
 - 执行模型：GPT-5 Codex。

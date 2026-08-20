@@ -55,9 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Spawn the safe fixed-monthly audit scheduler when enabled by local configuration.
+/// Spawn the safe periodic audit scheduler when enabled by local configuration.
 ///
-/// The task creates at most one server-sourced decision record per active plan and UTC day.
+/// The task reads each plan's monthly/weekly fixed-day set and creates at most one
+/// server-sourced decision record per active plan and UTC day.
 /// It never submits a broker order; an operator must still explicitly request paper submission.
 fn start_automatic_scheduler(state: ApiState, config: SchedulerConfig) {
     if !config.enabled {

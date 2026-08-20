@@ -8,8 +8,7 @@
 //! Scheduler 与真实订单生成均属于外部 adapter 或后续阶段。
 //!
 //! MVP 假设：单用户系统、无计划级 timezone、不验证 symbol 是否真实可交易、不生成
-//! 任何真实订单。计划可持久化月度或周度配置；当前自动调度器仍只执行既有月度计划，
-//! 周度计划将在后续调度 PR 中启用。
+//! 任何真实订单。计划可持久化月度或周度配置，并可为同一周期保存多个固定执行日。
 //!
 //! 金额统一使用 [`rust_decimal::Decimal`]。HTTP/JSON 边界必须以字符串编码金额，
 //! 避免 JavaScript Number 或 JSON 浮点转换造成精度损失。领域类型不直接实现
@@ -250,6 +249,9 @@ pub struct TwoBucketContributionSplit {
     /// 机会桶实际采用的有界倍率。
     #[serde(with = "rust_decimal::serde::str")]
     opportunity_multiplier: Decimal,
+    /// 已从此前接受订单滚存的机会现金。
+    #[serde(with = "rust_decimal::serde::str")]
+    carried_opportunity_cash: Decimal,
     /// 机会桶本次建议投入金额。
     #[serde(with = "rust_decimal::serde::str")]
     opportunity_contribution: Decimal,
@@ -299,6 +301,7 @@ impl TwoBucketContributionSplit {
             core_contribution,
             opportunity_budget: opportunity_contribution,
             opportunity_multiplier: Decimal::ONE,
+            carried_opportunity_cash: Decimal::ZERO,
             opportunity_contribution,
             unallocated_opportunity_contribution: Decimal::ZERO,
             recommended_contribution: planned_contribution,
@@ -318,14 +321,44 @@ impl TwoBucketContributionSplit {
         action: Action,
         multiplier: Multiplier,
     ) -> Result<Self, PlanValidationError> {
+        Self::from_decision_with_carry(
+            planned_contribution,
+            planned_contribution,
+            configuration,
+            action,
+            multiplier,
+            Decimal::ZERO,
+        )
+    }
+
+    /// 使用经审计的滚存余额生成双桶建议。
+    ///
+    /// `max_single_execution` 仍是单次建议的硬上限；滚存资金只能填补机会桶的
+    /// 可用上限，不能绕过该安全边界。
+    pub fn from_decision_with_carry(
+        planned_contribution: Decimal,
+        max_single_execution: Decimal,
+        configuration: PlanExecutionConfiguration,
+        action: Action,
+        multiplier: Multiplier,
+        carried_opportunity_cash: Decimal,
+    ) -> Result<Self, PlanValidationError> {
         validate_positive("planned_contribution", planned_contribution)?;
+        validate_positive("max_single_execution", max_single_execution)?;
+        if carried_opportunity_cash < Decimal::ZERO || max_single_execution < planned_contribution {
+            return Err(PlanValidationError::InvalidOpportunityCash);
+        }
         let allocation = configuration.bucket_allocation();
         let core_contribution = planned_contribution * allocation.core_ratio().value();
         let opportunity_budget = planned_contribution - core_contribution;
         let opportunity_multiplier =
             opportunity_multiplier(configuration.risk_mode(), action, multiplier)?;
         let requested_opportunity = opportunity_budget * opportunity_multiplier;
-        let opportunity_contribution = requested_opportunity.min(opportunity_budget);
+        let maximum_opportunity = max_single_execution - core_contribution;
+        let available_opportunity = opportunity_budget + carried_opportunity_cash;
+        let opportunity_contribution = requested_opportunity
+            .min(available_opportunity)
+            .min(maximum_opportunity);
         let unallocated_opportunity_contribution = opportunity_budget - opportunity_contribution;
 
         Ok(Self {
@@ -333,6 +366,7 @@ impl TwoBucketContributionSplit {
             core_contribution,
             opportunity_budget,
             opportunity_multiplier,
+            carried_opportunity_cash,
             opportunity_contribution,
             unallocated_opportunity_contribution,
             recommended_contribution: core_contribution + opportunity_contribution,
@@ -369,6 +403,12 @@ impl TwoBucketContributionSplit {
     #[must_use]
     pub fn opportunity_multiplier(self) -> Decimal {
         self.opportunity_multiplier
+    }
+
+    /// 返回本次建议可使用的此前滚存机会现金。
+    #[must_use]
+    pub fn carried_opportunity_cash(self) -> Decimal {
+        self.carried_opportunity_cash
     }
 
     /// 返回机会桶本次未建议投入金额。
@@ -446,6 +486,10 @@ pub struct InvestmentPlan {
     pub schedule_kind: ScheduleKind,
     /// 月度计划为月内日期 `1..=28`，周度计划为 ISO 星期 `1..=7`。
     pub schedule_day: i16,
+    /// 所有固定执行日，已去重并按升序排列。
+    ///
+    /// `schedule_day` 保留为第一项，以兼容旧客户端和旧数据。
+    pub schedule_days: Vec<i16>,
     /// 已校验的核心/机会桶与风险模式配置。
     pub execution_configuration: PlanExecutionConfiguration,
     /// 单次执行金额硬上限，不是 planner 输出。
@@ -475,6 +519,8 @@ pub struct CreateInvestmentPlan {
     pub schedule_kind: ScheduleKind,
     /// 月度计划为月内日期，周度计划为 ISO 星期。
     pub schedule_day: i16,
+    /// 所有固定执行日；至少包含一个有效日期。
+    pub schedule_days: Vec<i16>,
     /// 已校验的核心/机会桶与风险模式配置。
     pub execution_configuration: PlanExecutionConfiguration,
     /// 单次执行金额硬上限。
@@ -491,6 +537,10 @@ impl CreateInvestmentPlan {
         let symbol = normalize_symbol(self.symbol)?;
         let currency = normalize_currency(self.currency)?;
         validate_schedule_day(self.schedule_kind, self.schedule_day)?;
+        let schedule_days = normalize_schedule_days(self.schedule_kind, self.schedule_days)?;
+        if self.schedule_day != schedule_days[0] {
+            return Err(PlanValidationError::ScheduleDayMustMatchFirst);
+        }
         self.execution_configuration.validate()?;
         validate_amounts(self.base_contribution, self.max_single_execution)?;
 
@@ -498,6 +548,7 @@ impl CreateInvestmentPlan {
             name,
             symbol,
             currency,
+            schedule_days,
             ..self
         })
     }
@@ -519,6 +570,8 @@ pub struct UpdateInvestmentPlan {
     pub base_contribution: Option<Decimal>,
     /// 可选的新每月执行日。
     pub schedule_day: Option<i16>,
+    /// 可选的新固定执行日集合；第一项将写入兼容字段 `schedule_day`。
+    pub schedule_days: Option<Vec<i16>>,
     /// 可选的新核心/机会桶配置。
     pub bucket_allocation: Option<TwoBucketAllocationConfig>,
     /// 可选的新机会桶执行授权方式。
@@ -545,6 +598,7 @@ impl UpdateInvestmentPlan {
         if self.name.is_none()
             && self.base_contribution.is_none()
             && self.schedule_day.is_none()
+            && self.schedule_days.is_none()
             && self.bucket_allocation.is_none()
             && self.risk_mode.is_none()
             && self.opportunity_cash_policy.is_none()
@@ -585,24 +639,44 @@ impl UpdateInvestmentPlan {
 
 /// 投资计划执行预览输入。
 ///
-/// 这里只表达调度日判断所需的月内日期；timezone 和真实日历由 scheduler adapter 负责。
+/// 这里只表达调度日判断所需的 UTC 日历字段；timezone 和交易所日历由 scheduler adapter 负责。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct PreviewInvestmentPlanExecution {
     /// 当前月内日期，范围为 1..=31。
     day_of_month: i16,
+    iso_weekday: i16,
 }
 
 impl PreviewInvestmentPlanExecution {
     /// 创建已校验的执行预览输入。
     pub fn new(day_of_month: i16) -> Result<Self, PlanValidationError> {
         validate_calendar_day(day_of_month)?;
-        Ok(Self { day_of_month })
+        Ok(Self {
+            day_of_month,
+            iso_weekday: 0,
+        })
+    }
+
+    /// 根据 UTC 月内日期和 ISO 星期创建已校验预览输入。
+    pub fn for_date(day_of_month: i16, iso_weekday: i16) -> Result<Self, PlanValidationError> {
+        validate_calendar_day(day_of_month)?;
+        validate_schedule_day(ScheduleKind::Weekly, iso_weekday)?;
+        Ok(Self {
+            day_of_month,
+            iso_weekday,
+        })
     }
 
     /// 返回已校验的月内日期。
     #[must_use]
     pub fn day_of_month(&self) -> i16 {
         self.day_of_month
+    }
+
+    /// 返回 ISO 星期；仅使用旧月度构造函数时为 `0`。
+    #[must_use]
+    pub fn iso_weekday(&self) -> i16 {
+        self.iso_weekday
     }
 }
 
@@ -629,12 +703,16 @@ pub struct InvestmentPlanExecutionPreview {
     pub symbol: String,
     /// ISO 风格三位币种代码。
     pub currency: String,
-    /// MVP 仅支持 monthly。
+    /// 计划周期。
     pub schedule_kind: ScheduleKind,
     /// 计划每月执行日。
     pub schedule_day: i16,
+    /// 计划所有固定执行日。
+    pub schedule_days: Vec<i16>,
     /// 本次预览使用的月内日期。
     pub day_of_month: i16,
+    /// 本次预览使用的 ISO 星期。
+    pub iso_weekday: i16,
     /// 执行预览状态。
     pub status: ExecutionPreviewStatus,
     /// 命中执行条件时的计划投入金额，已受单次执行上限限制。
@@ -667,6 +745,12 @@ pub enum PlanValidationError {
     /// 周度执行日不在 ISO 星期 1..=7。
     #[error("weekly schedule day must be an ISO weekday between 1 and 7")]
     InvalidWeeklyScheduleDay,
+    /// 固定执行日集合为空、包含重复值或含有无效日期。
+    #[error("schedule days must be a non-empty unique valid set for the selected schedule")]
+    InvalidScheduleDays,
+    /// 兼容字段 `schedule_day` 不是固定执行日集合的第一项。
+    #[error("schedule_day must match the first schedule day")]
+    ScheduleDayMustMatchFirst,
     /// 执行预览日期不在 1..=31。
     #[error("execution preview day must be between 1 and 31")]
     InvalidExecutionPreviewDay,
@@ -688,6 +772,9 @@ pub enum PlanValidationError {
     /// 倍率无法安全转换为精确金额计算使用的 Decimal。
     #[error("opportunity multiplier cannot be represented as a decimal")]
     InvalidOpportunityMultiplier,
+    /// 机会现金池余额或其与单次金额上限的组合无效。
+    #[error("opportunity cash balance or execution limit is invalid")]
+    InvalidOpportunityCash,
     /// 金额不是正数。
     #[error("{field} must be greater than zero")]
     NonPositiveAmount {
@@ -832,7 +919,7 @@ impl InvestmentPlanService {
         input: PreviewInvestmentPlanExecution,
     ) -> Result<InvestmentPlanExecutionPreview, PlanApplicationError> {
         let plan = self.repository.get(id).await?;
-        preview_execution(&plan, input.day_of_month(), None).map_err(Into::into)
+        preview_execution(&plan, input, None).map_err(Into::into)
     }
 
     /// 使用当前策略动作与倍率预览计划在指定月内日期的双桶执行建议。
@@ -847,7 +934,20 @@ impl InvestmentPlanService {
         multiplier: Multiplier,
     ) -> Result<InvestmentPlanExecutionPreview, PlanApplicationError> {
         let plan = self.repository.get(id).await?;
-        preview_execution(&plan, input.day_of_month(), Some((action, multiplier)))
+        preview_execution(&plan, input, Some((action, multiplier))).map_err(Into::into)
+    }
+
+    /// 使用已持久化机会现金池余额预览本次建议。
+    pub async fn preview_execution_with_decision_and_cash(
+        &self,
+        id: Uuid,
+        input: PreviewInvestmentPlanExecution,
+        action: Action,
+        multiplier: Multiplier,
+        carried_opportunity_cash: Decimal,
+    ) -> Result<InvestmentPlanExecutionPreview, PlanApplicationError> {
+        let plan = self.repository.get(id).await?;
+        preview_execution_with_cash(&plan, input, action, multiplier, carried_opportunity_cash)
             .map_err(Into::into)
     }
 }
@@ -916,6 +1016,27 @@ fn validate_schedule_day(kind: ScheduleKind, day: i16) -> Result<(), PlanValidat
     }
 }
 
+/// 规范化固定执行日集合并保持稳定排序。
+fn normalize_schedule_days(
+    kind: ScheduleKind,
+    mut days: Vec<i16>,
+) -> Result<Vec<i16>, PlanValidationError> {
+    if days.is_empty() {
+        return Err(PlanValidationError::InvalidScheduleDays);
+    }
+    let supplied_len = days.len();
+    days.sort_unstable();
+    days.dedup();
+    if days.len() != supplied_len
+        || days
+            .iter()
+            .any(|day| validate_schedule_day(kind, *day).is_err())
+    {
+        return Err(PlanValidationError::InvalidScheduleDays);
+    }
+    Ok(days)
+}
+
 fn validate_calendar_day(day: i16) -> Result<(), PlanValidationError> {
     if (1..=31).contains(&day) {
         Ok(())
@@ -934,12 +1055,18 @@ fn validate_positive(field: &'static str, value: Decimal) -> Result<(), PlanVali
 
 fn preview_execution(
     plan: &InvestmentPlan,
-    day_of_month: i16,
+    input: PreviewInvestmentPlanExecution,
     decision: Option<(Action, Multiplier)>,
 ) -> Result<InvestmentPlanExecutionPreview, PlanValidationError> {
+    let is_due = match plan.schedule_kind {
+        ScheduleKind::Monthly => plan.schedule_days.contains(&input.day_of_month()),
+        ScheduleKind::Weekly => {
+            input.iso_weekday() != 0 && plan.schedule_days.contains(&input.iso_weekday())
+        }
+    };
     let status = if !plan.is_active {
         ExecutionPreviewStatus::Inactive
-    } else if plan.schedule_kind == ScheduleKind::Monthly && day_of_month == plan.schedule_day {
+    } else if is_due {
         ExecutionPreviewStatus::Due
     } else {
         ExecutionPreviewStatus::Waiting
@@ -972,11 +1099,34 @@ fn preview_execution(
         currency: plan.currency.clone(),
         schedule_kind: plan.schedule_kind,
         schedule_day: plan.schedule_day,
-        day_of_month,
+        schedule_days: plan.schedule_days.clone(),
+        day_of_month: input.day_of_month(),
+        iso_weekday: input.iso_weekday(),
         status,
         planned_contribution,
         bucket_split,
     })
+}
+
+fn preview_execution_with_cash(
+    plan: &InvestmentPlan,
+    input: PreviewInvestmentPlanExecution,
+    action: Action,
+    multiplier: Multiplier,
+    carried_opportunity_cash: Decimal,
+) -> Result<InvestmentPlanExecutionPreview, PlanValidationError> {
+    let mut preview = preview_execution(plan, input, None)?;
+    if let Some(planned_contribution) = preview.planned_contribution {
+        preview.bucket_split = Some(TwoBucketContributionSplit::from_decision_with_carry(
+            planned_contribution,
+            plan.max_single_execution,
+            plan.execution_configuration,
+            action,
+            multiplier,
+            carried_opportunity_cash,
+        )?);
+    }
+    Ok(preview)
 }
 
 fn validate_amounts(base: Decimal, max: Decimal) -> Result<(), PlanValidationError> {
@@ -1011,6 +1161,7 @@ mod tests {
             currency: " usd ".to_owned(),
             schedule_kind: ScheduleKind::Monthly,
             schedule_day: 15,
+            schedule_days: vec![15],
             execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: money("1500.00"),
         }
@@ -1044,6 +1195,7 @@ mod tests {
             currency: input.currency,
             schedule_kind: input.schedule_kind,
             schedule_day: input.schedule_day,
+            schedule_days: input.schedule_days,
             execution_configuration: input.execution_configuration,
             max_single_execution: input.max_single_execution,
             is_active: true,
@@ -1310,6 +1462,7 @@ mod tests {
         let mut input = create_input();
         input.schedule_kind = ScheduleKind::Weekly;
         input.schedule_day = 1;
+        input.schedule_days = vec![1];
         let created = service.create(input).await.unwrap();
 
         let preview = service
@@ -1835,7 +1988,12 @@ mod tests {
         plan.base_contribution = money("2000.00");
         plan.max_single_execution = money("1500.00");
 
-        let preview = preview_execution(&plan, 15, None).unwrap();
+        let preview = preview_execution(
+            &plan,
+            PreviewInvestmentPlanExecution::new(15).unwrap(),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(preview.status, ExecutionPreviewStatus::Due);
         assert_eq!(preview.planned_contribution, Some(money("1500.00")));

@@ -46,6 +46,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
             currency,
             schedule_kind,
             schedule_day,
+            schedule_days: _,
             execution_configuration,
             max_single_execution,
         } = input;
@@ -284,6 +285,7 @@ fn plan_from_row(row: PgRow) -> Result<InvestmentPlan, PlanRepositoryError> {
         currency: row.try_get("currency").map_err(map_sqlx_error)?,
         schedule_kind,
         schedule_day,
+        schedule_days: vec![schedule_day],
         execution_configuration: execution_configuration_from_row(&row)?,
         max_single_execution: parse_decimal(
             row.try_get("max_single_execution")

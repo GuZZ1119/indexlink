@@ -10,6 +10,7 @@ mod investment_plans;
 mod sqlite;
 mod sqlite_decision_records;
 mod sqlite_investment_plans;
+mod sqlite_opportunity_cash;
 mod sqlite_paper_performance;
 mod sqlite_scheduled_decisions;
 
@@ -27,12 +28,14 @@ pub use sqlite::SqliteStorage;
 pub use sqlite_decision_records::SqliteDecisionRecordRepository;
 /// Investment Plan repository 的 SQLite adapter。
 pub use sqlite_investment_plans::SqliteInvestmentPlanRepository;
+/// SQLite local opportunity-bucket cash ledger adapter.
+pub use sqlite_opportunity_cash::{OpportunityCashSettlement, SqliteOpportunityCashRepository};
 /// SQLite local paper-trading performance ledger adapter.
 pub use sqlite_paper_performance::{
     PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
     PaperTradeMarker, SqlitePaperPerformanceRepository,
 };
-/// SQLite idempotency ledger for fixed-monthly automatic decision runs.
+/// SQLite idempotency ledger for periodic automatic decision runs.
 pub use sqlite_scheduled_decisions::SqliteScheduledDecisionRepository;
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;

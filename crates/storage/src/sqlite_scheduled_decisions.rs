@@ -1,4 +1,4 @@
-//! SQLite idempotency ledger for automatic decision runs.
+//! SQLite idempotency ledger for periodic automatic decision runs.
 
 use sqlx::SqlitePool;
 use uuid::Uuid;

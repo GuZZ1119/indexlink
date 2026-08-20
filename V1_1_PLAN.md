@@ -63,7 +63,7 @@ recommended_amount = core_amount + opportunity_amount
 
 当前可配置的策略如下：
 
-- `carry_forward`：保存“后续应滚存”的用户意图；在现金池账本完成前，不声称已累计余额或自动补投。
+- `carry_forward`：已通过本地 SQLite 独立机会现金账本保存已接受订单后的未分配余额；余额可参与后续建议但始终受 `max_single_execution` 限制。`carry_with_cap` 与按实际成交回写仍待完成。
 - `expire_each_period`：仅建议当期机会预算，未使用部分不会自动补投。
 - `carry_with_cap`：待后续引入最大期数/最大金额、资金流水与消耗顺序后实现，当前不暴露为可选配置。
 

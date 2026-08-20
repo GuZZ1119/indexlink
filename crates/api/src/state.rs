@@ -13,11 +13,15 @@ use decision_records::{
 use indexlink_storage::{
     PaperPerformance, PaperPerformanceError, PaperPerformancePlan, PaperPerformancePoint,
     PaperTradeMarker, SqliteDecisionRecordRepository, SqliteInvestmentPlanRepository,
-    SqlitePaperPerformanceRepository, SqliteScheduledDecisionRepository, SqliteStorage,
+    SqliteOpportunityCashRepository, SqlitePaperPerformanceRepository,
+    SqliteScheduledDecisionRepository, SqliteStorage,
 };
-use investment_plans::InvestmentPlanService;
+use investment_plans::{InvestmentPlanService, OpportunityCashPolicy};
 use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use rust_decimal::{
+    prelude::{FromPrimitive, ToPrimitive},
+    Decimal,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -120,6 +124,7 @@ pub struct ApiState {
     market_data: Option<Arc<dyn MarketSignalProvider>>,
     paper_performance: Option<SqlitePaperPerformanceRepository>,
     scheduled_decisions: Option<SqliteScheduledDecisionRepository>,
+    opportunity_cash: Option<SqliteOpportunityCashRepository>,
     version: Arc<str>,
 }
 
@@ -151,6 +156,7 @@ impl ApiState {
         let decision_records =
             DecisionRecordService::new(Arc::new(SqliteDecisionRecordRepository::new(pool.clone())));
         let scheduled_decisions = SqliteScheduledDecisionRepository::new(pool.clone());
+        let opportunity_cash = SqliteOpportunityCashRepository::new(pool.clone());
         Self {
             readiness: Arc::new(ReadinessBackend::SqliteStorage(storage)),
             plans,
@@ -160,6 +166,7 @@ impl ApiState {
             market_data: None,
             paper_performance: Some(SqlitePaperPerformanceRepository::new(pool)),
             scheduled_decisions: Some(scheduled_decisions),
+            opportunity_cash: Some(opportunity_cash),
             version: version.into(),
         }
     }
@@ -227,6 +234,7 @@ impl ApiState {
             market_data: None,
             paper_performance: None,
             scheduled_decisions: None,
+            opportunity_cash: None,
             version: version.into(),
         }
     }
@@ -629,6 +637,26 @@ impl ApiState {
             .map_err(market_data_error)
     }
 
+    /// Return the newest trusted local close for safe budget-to-quantity conversion.
+    pub(crate) async fn latest_market_price(&self, symbol: &str) -> Result<Decimal, ApiError> {
+        let provider = self
+            .market_data
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        let point = provider
+            .fetch_price_history(symbol, 7)
+            .await
+            .inspect_err(|error| tracing::error!(%error, symbol, "latest price refresh failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)?
+            .into_iter()
+            .last()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        let price = Decimal::from_f64(point.close).ok_or(ApiError::ServiceUnavailable)?;
+        (price > Decimal::ZERO)
+            .then_some(price)
+            .ok_or(ApiError::ServiceUnavailable)
+    }
+
     /// Atomically claim one automatic decision run for a plan and UTC calendar day.
     ///
     /// This ledger is deliberately claimed immediately before record creation. Failed data
@@ -645,6 +673,49 @@ impl ApiState {
             .claim(plan_id, scheduled_for)
             .await
             .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "scheduled decision claim failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// Return the locally carried opportunity cash for one plan.
+    pub(crate) async fn opportunity_cash_balance(
+        &self,
+        plan_id: uuid::Uuid,
+    ) -> Result<Decimal, ApiError> {
+        let Some(repository) = self.opportunity_cash.as_ref() else {
+            return Ok(Decimal::ZERO);
+        };
+        repository
+            .balance(plan_id)
+            .await
+            .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "opportunity cash balance read failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// Persist one accepted paper-order opportunity-cash settlement exactly once.
+    pub(crate) async fn settle_opportunity_cash(
+        &self,
+        plan_id: uuid::Uuid,
+        decision_record_id: uuid::Uuid,
+        scheduled_for: &str,
+        policy: OpportunityCashPolicy,
+        period_budget: Decimal,
+        allocated_amount: Decimal,
+    ) -> Result<(), ApiError> {
+        let Some(repository) = self.opportunity_cash.as_ref() else {
+            return Ok(());
+        };
+        repository
+            .settle(
+                plan_id,
+                decision_record_id,
+                scheduled_for,
+                policy,
+                period_budget,
+                allocated_amount,
+            )
+            .await
+            .inspect_err(|error| tracing::error!(%error, plan_id = %plan_id, "opportunity cash settlement failed"))
+            .map(|_| ())
             .map_err(|_| ApiError::ServiceUnavailable)
     }
 }

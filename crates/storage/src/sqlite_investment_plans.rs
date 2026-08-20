@@ -21,20 +21,20 @@ const INSERT_PLAN_SQL: &str = "INSERT INTO investment_plans \
      max_single_execution, is_active) \
     VALUES (?1, ?2, ?3, ?4, ?5, 'monthly', ?6, ?7, 1)";
 const INSERT_EXECUTION_CONFIGURATION_SQL: &str = "INSERT INTO plan_execution_configurations \
-    (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+    (plan_id, schedule_kind, schedule_day, schedule_days_json, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 const LIST_PLANS_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
-    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, \
+    c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, \
     p.max_single_execution, p.is_active, p.created_at, p.updated_at \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     ORDER BY p.created_at ASC, p.id ASC";
 const GET_PLAN_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
-    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, \
+    c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, \
     p.max_single_execution, p.is_active, p.created_at, p.updated_at \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     WHERE p.id = ?1";
 const SELECT_UPDATE_VALUES_SQL: &str = "SELECT p.base_contribution, p.max_single_execution, \
-    p.schedule_day AS legacy_schedule_day, c.schedule_kind, c.schedule_day, c.core_ratio_units, \
+    p.schedule_day AS legacy_schedule_day, c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, \
     c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     WHERE p.id = ?1";
@@ -50,7 +50,7 @@ const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
     ) \
     WHERE id = ?1";
 const UPDATE_EXECUTION_CONFIGURATION_SQL: &str = "UPDATE plan_execution_configurations SET \
-    schedule_day = ?2, core_ratio_units = ?3, opportunity_ratio_units = ?4, risk_mode = ?5, opportunity_cash_policy = ?6 \
+    schedule_day = ?2, schedule_days_json = ?3, core_ratio_units = ?4, opportunity_ratio_units = ?5, risk_mode = ?6, opportunity_cash_policy = ?7 \
     WHERE plan_id = ?1";
 const SET_ACTIVE_SQL: &str = "UPDATE investment_plans SET \
     is_active = ?2, \
@@ -88,6 +88,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             encode_amount(input.max_single_execution).ok_or(PlanRepositoryError::Unavailable)?;
         let id = Uuid::new_v4();
         let schedule_day = input.schedule_day;
+        let schedule_days_json = encode_schedule_days(&input.schedule_days)?;
         let configuration = input.execution_configuration;
         let (core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy) =
             execution_configuration_values(configuration)?;
@@ -111,6 +112,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bind(id.to_string())
             .bind(schedule_kind_name(input.schedule_kind))
             .bind(schedule_day)
+            .bind(schedule_days_json)
             .bind(core_ratio_units)
             .bind(opportunity_ratio_units)
             .bind(risk_mode_name(risk_mode))
@@ -196,8 +198,28 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
                 .map_err(map_sqlx_error)?,
         )
         .map_err(|_| PlanRepositoryError::Unavailable)?;
-        let schedule_day = input.schedule_day.unwrap_or(current_schedule_day);
-        validate_schedule_day(schedule_kind, schedule_day)?;
+        let current_schedule_days = decode_schedule_days(
+            schedule_kind,
+            current
+                .try_get::<String, _>("schedule_days_json")
+                .map_err(map_sqlx_error)?
+                .as_str(),
+        )?;
+        let schedule_days = match input.schedule_days.clone() {
+            Some(days) => normalize_schedule_days(schedule_kind, days)?,
+            None => input
+                .schedule_day
+                .map(|day| normalize_schedule_days(schedule_kind, vec![day]))
+                .transpose()?
+                .unwrap_or(current_schedule_days),
+        };
+        let schedule_day = schedule_days[0];
+        if input.schedule_days.is_none()
+            && input.schedule_day.is_none()
+            && schedule_day != current_schedule_day
+        {
+            return Err(PlanRepositoryError::Unavailable);
+        }
         let current_configuration = execution_configuration_from_row(&current)?;
         let bucket_allocation = input
             .bucket_allocation
@@ -227,7 +249,11 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bind(id.to_string())
             .bind(input.name)
             .bind(base_contribution)
-            .bind(input.schedule_day)
+            .bind(
+                input
+                    .schedule_day
+                    .or(input.schedule_days.as_ref().map(|_| schedule_day)),
+            )
             .bind(max_single_execution)
             .bind(is_active)
             .execute(&mut *transaction)
@@ -236,6 +262,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
         sqlx::query(UPDATE_EXECUTION_CONFIGURATION_SQL)
             .bind(id.to_string())
             .bind(schedule_day)
+            .bind(encode_schedule_days(&schedule_days)?)
             .bind(core_ratio_units)
             .bind(opportunity_ratio_units)
             .bind(risk_mode_name(risk_mode))
@@ -310,6 +337,15 @@ fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> 
     )
     .map_err(|_| PlanRepositoryError::Unavailable)?;
     validate_schedule_day(schedule_kind, schedule_day)?;
+    let schedule_days = decode_schedule_days(
+        schedule_kind,
+        row.try_get::<String, _>("schedule_days_json")
+            .map_err(map_sqlx_error)?
+            .as_str(),
+    )?;
+    if schedule_days[0] != schedule_day {
+        return Err(PlanRepositoryError::Unavailable);
+    }
 
     Ok(InvestmentPlan {
         id: parse_uuid(row.try_get("id").map_err(map_sqlx_error)?)?,
@@ -319,6 +355,7 @@ fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> 
         currency: row.try_get("currency").map_err(map_sqlx_error)?,
         schedule_kind,
         schedule_day,
+        schedule_days,
         execution_configuration: execution_configuration_from_row(&row)?,
         max_single_execution: parse_amount(
             row.try_get("max_single_execution")
@@ -451,6 +488,38 @@ fn validate_schedule_day(kind: ScheduleKind, day: i16) -> Result<(), PlanReposit
     }
 }
 
+/// Validate and normalize schedule days at the persistence boundary.
+fn normalize_schedule_days(
+    kind: ScheduleKind,
+    mut days: Vec<i16>,
+) -> Result<Vec<i16>, PlanRepositoryError> {
+    if days.is_empty() {
+        return Err(PlanValidationError::InvalidScheduleDays.into());
+    }
+    let original_len = days.len();
+    days.sort_unstable();
+    days.dedup();
+    if days.len() != original_len
+        || days
+            .iter()
+            .any(|day| validate_schedule_day(kind, *day).is_err())
+    {
+        return Err(PlanValidationError::InvalidScheduleDays.into());
+    }
+    Ok(days)
+}
+
+/// Encode schedule days as canonical JSON for the local SQLite adapter.
+fn encode_schedule_days(days: &[i16]) -> Result<String, PlanRepositoryError> {
+    serde_json::to_string(days).map_err(|_| PlanRepositoryError::Unavailable)
+}
+
+/// Decode and validate a persisted schedule day array.
+fn decode_schedule_days(kind: ScheduleKind, value: &str) -> Result<Vec<i16>, PlanRepositoryError> {
+    let days = serde_json::from_str(value).map_err(|_| PlanRepositoryError::Unavailable)?;
+    normalize_schedule_days(kind, days)
+}
+
 /// 解析数据库存储的 UUID 文本。
 fn parse_uuid(value: String) -> Result<Uuid, PlanRepositoryError> {
     value.parse().map_err(|_| PlanRepositoryError::Unavailable)
@@ -515,6 +584,7 @@ mod tests {
             currency: "USD".to_owned(),
             schedule_kind: ScheduleKind::Monthly,
             schedule_day: 15,
+            schedule_days: vec![15],
             execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: amount("1500.00"),
         }
@@ -568,7 +638,8 @@ mod tests {
         let created = repository
             .create(CreateInvestmentPlan {
                 schedule_kind: ScheduleKind::Weekly,
-                schedule_day: 3,
+                schedule_day: 1,
+                schedule_days: vec![1, 3, 5],
                 execution_configuration: configuration,
                 ..input()
             })
@@ -576,7 +647,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(created.schedule_kind, ScheduleKind::Weekly);
-        assert_eq!(created.schedule_day, 3);
+        assert_eq!(created.schedule_day, 1);
+        assert_eq!(created.schedule_days, vec![1, 3, 5]);
         assert_eq!(
             created
                 .execution_configuration
@@ -628,6 +700,7 @@ mod tests {
                     name: Some("Growth plan".to_owned()),
                     base_contribution: Some(amount("1200.00")),
                     schedule_day: Some(20),
+                    schedule_days: None,
                     bucket_allocation: None,
                     risk_mode: None,
                     opportunity_cash_policy: None,

@@ -36,6 +36,9 @@ struct CreateInvestmentPlanRequest {
     schedule_kind: ScheduleKindRequest,
     /// 月度为月内日期，周度为 ISO 星期。
     schedule_day: i16,
+    /// 同一周期内的所有固定执行日；缺省时兼容为仅 `schedule_day`。
+    #[serde(default)]
+    schedule_days: Vec<i16>,
     /// 可选核心/机会桶比例；未提供时兼容旧计划，默认全部核心桶。
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// 可选风险模式；未提供时兼容旧计划，默认固定模式。
@@ -57,6 +60,8 @@ struct UpdateInvestmentPlanRequest {
     base_contribution: Option<Decimal>,
     /// 可选的新每月执行日。
     schedule_day: Option<i16>,
+    /// 可选的新固定执行日集合。
+    schedule_days: Option<Vec<i16>>,
     /// 可选的新核心/机会桶比例。
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// 可选的新机会桶风险模式。
@@ -76,6 +81,8 @@ struct UpdateInvestmentPlanRequest {
 struct PreviewInvestmentPlanExecutionRequest {
     /// 本次预览使用的月内日期。
     day_of_month: i16,
+    /// 可选 ISO 星期；提供时可预览周度计划。
+    iso_weekday: Option<i16>,
 }
 
 /// 双桶分配配置的入站 DTO。
@@ -162,6 +169,7 @@ impl CreateInvestmentPlanRequest {
             currency,
             schedule_kind,
             schedule_day,
+            schedule_days,
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
@@ -180,6 +188,11 @@ impl CreateInvestmentPlanRequest {
             currency,
             schedule_kind: schedule_kind.into(),
             schedule_day,
+            schedule_days: if schedule_days.is_empty() {
+                vec![schedule_day]
+            } else {
+                schedule_days
+            },
             max_single_execution,
             execution_configuration,
         })
@@ -193,6 +206,7 @@ impl UpdateInvestmentPlanRequest {
             name,
             base_contribution,
             schedule_day,
+            schedule_days,
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
@@ -209,6 +223,7 @@ impl UpdateInvestmentPlanRequest {
             name,
             base_contribution,
             schedule_day,
+            schedule_days,
             bucket_allocation,
             risk_mode: risk_mode.map(Into::into),
             opportunity_cash_policy: opportunity_cash_policy.map(Into::into),
@@ -244,7 +259,11 @@ fn execution_configuration_from_request(
 impl PreviewInvestmentPlanExecutionRequest {
     /// Convert the API preview DTO into validated domain inputs.
     fn into_domain(self) -> Result<PreviewInvestmentPlanExecution, ApiError> {
-        PreviewInvestmentPlanExecution::new(self.day_of_month).map_err(Into::into)
+        match self.iso_weekday {
+            Some(weekday) => PreviewInvestmentPlanExecution::for_date(self.day_of_month, weekday),
+            None => PreviewInvestmentPlanExecution::new(self.day_of_month),
+        }
+        .map_err(Into::into)
     }
 }
 

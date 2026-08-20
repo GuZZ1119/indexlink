@@ -28,7 +28,7 @@ use quant_engine::{
     evaluate_fundamental, evaluate_trend, FundamentalConfig, FundamentalSignal,
     FundamentalSnapshot, TrendConfig, TrendRegime, TrendSignal, TrendSnapshot,
 };
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::ToPrimitive, Decimal, RoundingStrategy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::time::timeout;
@@ -82,12 +82,12 @@ enum DecisionTrigger {
     ManualInput,
     /// An operator explicitly requested server-sourced automatic inputs.
     AutomaticPreview,
-    /// The fixed-monthly background scheduler created the automatic decision.
+    /// The configured periodic background scheduler created the automatic decision.
     AutomaticScheduler,
 }
 
 /// Bucket allocation request DTO.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 struct TwoBucketAllocationRequest {
     /// Core bucket ratio.
     #[serde(with = "rust_decimal::serde::str")]
@@ -132,9 +132,10 @@ struct PaperOrderRequest {
     side: BrokerOrderSideRequest,
     /// Market or limit order type.
     order_type: BrokerOrderTypeRequest,
-    /// Positive order quantity.
-    #[serde(with = "rust_decimal::serde::str")]
-    quantity: Decimal,
+    /// Legacy client-provided quantity. When present it must match the server-calculated
+    /// whole-share quantity from the audited recommended amount.
+    #[serde(default, with = "rust_decimal::serde::str_option")]
+    quantity: Option<Decimal>,
     /// Positive limit price when `order_type` is limit.
     #[serde(default, with = "rust_decimal::serde::str_option")]
     limit_price: Option<Decimal>,
@@ -153,7 +154,7 @@ enum TrendRegimeRequest {
 }
 
 /// API broker order side values.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum BrokerOrderSideRequest {
     /// Buy side.
@@ -163,7 +164,7 @@ enum BrokerOrderSideRequest {
 }
 
 /// API broker order type values.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum BrokerOrderTypeRequest {
     /// Market order.
@@ -191,7 +192,7 @@ struct DecisionPreviewResponse {
     summary: String,
 }
 
-/// Result counters emitted by one fixed-monthly automatic scheduler tick.
+/// Result counters emitted by one periodic automatic scheduler tick.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScheduledDecisionRunSummary {
     /// Due active plans for which a new automatic audit record was created.
@@ -296,22 +297,23 @@ async fn preview_automatic_decision(
     ))
 }
 
-/// Execute a due-plan scheduler tick using the UTC calendar day as its fixed-monthly trigger.
+/// Execute one due-plan scheduler tick using persisted UTC weekly/monthly fixed dates.
 pub(crate) async fn run_due_decisions(
     state: &ApiState,
 ) -> Result<ScheduledDecisionRunSummary, ApiError> {
     let now = Utc::now();
     let day_of_month = i16::try_from(now.day()).map_err(|_| ApiError::ServiceUnavailable)?;
+    let iso_weekday = i16::try_from(now.weekday().num_days_from_monday() + 1)
+        .map_err(|_| ApiError::ServiceUnavailable)?;
     let scheduled_for = now.date_naive().to_string();
     let mut summary = ScheduledDecisionRunSummary::default();
 
     for plan in state.plans().list().await? {
-        // V1.1 may persist weekly plans, but this scheduler deliberately keeps the
-        // existing fixed-monthly execution behavior until the weekly adapter lands.
-        if !plan.is_active
-            || plan.schedule_kind != ScheduleKind::Monthly
-            || plan.schedule_day != day_of_month
-        {
+        let is_due = match plan.schedule_kind {
+            ScheduleKind::Monthly => plan.schedule_days.contains(&day_of_month),
+            ScheduleKind::Weekly => plan.schedule_days.contains(&iso_weekday),
+        };
+        if !plan.is_active || !is_due {
             continue;
         }
         match preview_automatic_for_plan_with_claim(state, plan.id, day_of_month, &scheduled_for)
@@ -420,12 +422,16 @@ async fn preview_decision_input(
     input: DecisionPreviewRequest,
     trigger: DecisionTrigger,
 ) -> Result<DecisionPreviewResponse, ApiError> {
-    let execution_input = PreviewInvestmentPlanExecution::new(input.day_of_month)?;
+    let now = Utc::now();
+    let execution_input = PreviewInvestmentPlanExecution::for_date(
+        input.day_of_month,
+        i16::try_from(now.weekday().num_days_from_monday() + 1)
+            .map_err(|_| ApiError::ServiceUnavailable)?,
+    )?;
     let fundamental = input.fundamental.clone_signal()?;
     let trend = input.trend.clone_signal()?;
     let legacy_bucket_config = input
         .bucket_allocation
-        .clone()
         .map(TwoBucketAllocationRequest::into_domain)
         .transpose()?;
     if legacy_bucket_config.is_some() {
@@ -443,15 +449,34 @@ async fn preview_decision_input(
             }),
     };
     let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
+    let carried_opportunity_cash = state.opportunity_cash_balance(id).await?;
     let execution = state
         .plans()
-        .preview_execution_with_decision(id, execution_input, decision.action, decision.multiplier)
+        .preview_execution_with_decision_and_cash(
+            id,
+            execution_input,
+            decision.action,
+            decision.multiplier,
+            carried_opportunity_cash,
+        )
         .await?;
-    let paper_order = input
-        .paper_order
-        .clone()
-        .map(|order| order.into_domain(&execution.symbol))
-        .transpose()?;
+    let paper_order = match input.paper_order.clone() {
+        Some(order)
+            if matches!(
+                trigger,
+                DecisionTrigger::AutomaticPreview | DecisionTrigger::AutomaticScheduler
+            ) && execution.status == ExecutionPreviewStatus::Due
+                && !matches!(decision.action, Action::Skip | Action::TacticalDelay) =>
+        {
+            let quantity = recommended_quantity(state, &execution, &order).await?;
+            Some(order.into_domain(&execution.symbol, quantity)?)
+        }
+        Some(order) => {
+            let quantity = order.quantity.ok_or(ApiError::BadRequest)?;
+            Some(order.into_domain(&execution.symbol, quantity)?)
+        }
+        None => None,
+    };
     let decision_response = DecisionResponse::from_signal(&decision);
     let should_submit = should_submit_paper_order(&execution, &decision, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
@@ -487,6 +512,24 @@ async fn preview_decision_input(
             tracing::error!(error = %error, record_id = %persisted.id, "paper order accepted but decision record completion failed");
         }
         state.record_accepted_paper_order(id, &ack, request).await;
+        if matches!(
+            trigger,
+            DecisionTrigger::AutomaticPreview | DecisionTrigger::AutomaticScheduler
+        ) {
+            if let Some(split) = execution.bucket_split {
+                let scheduled_for = Utc::now().date_naive().to_string();
+                state
+                    .settle_opportunity_cash(
+                        id,
+                        persisted.id,
+                        &scheduled_for,
+                        split.opportunity_cash_policy(),
+                        split.opportunity_budget(),
+                        split.opportunity_contribution(),
+                    )
+                    .await?;
+            }
+        }
         Some(ack)
     } else {
         None
@@ -558,7 +601,7 @@ impl From<TrendSignal> for TrendSignalRequest {
 }
 
 impl PaperOrderRequest {
-    fn into_domain(self, symbol: &str) -> Result<BrokerOrderRequest, ApiError> {
+    fn into_domain(self, symbol: &str, quantity: Decimal) -> Result<BrokerOrderRequest, ApiError> {
         match self.order_type {
             BrokerOrderTypeRequest::Market => {
                 if self.limit_price.is_some() {
@@ -568,7 +611,7 @@ impl PaperOrderRequest {
                     self.idempotency_key,
                     symbol,
                     self.side.into(),
-                    self.quantity,
+                    quantity,
                     broker::BrokerEnvironment::Paper,
                 )
             }
@@ -576,13 +619,51 @@ impl PaperOrderRequest {
                 self.idempotency_key,
                 symbol,
                 self.side.into(),
-                self.quantity,
+                quantity,
                 self.limit_price.ok_or(ApiError::BadRequest)?,
                 broker::BrokerEnvironment::Paper,
             ),
         }
         .map_err(|_| ApiError::BadRequest)
     }
+}
+
+/// Convert the persisted decision recommendation into a conservative whole-share paper order.
+///
+/// A caller cannot enlarge the order by supplying its own quantity. Limit orders use their
+/// limit price; market orders use the newest local OpenD close only as a budgeting estimate.
+async fn recommended_quantity(
+    state: &ApiState,
+    execution: &InvestmentPlanExecutionPreview,
+    order: &PaperOrderRequest,
+) -> Result<Decimal, ApiError> {
+    if order.side != BrokerOrderSideRequest::Buy || execution.status != ExecutionPreviewStatus::Due
+    {
+        return Err(ApiError::BadRequest);
+    }
+    let amount = execution
+        .bucket_split
+        .map(|split| split.recommended_contribution())
+        .or(execution.planned_contribution)
+        .ok_or(ApiError::BadRequest)?;
+    let portfolio = state.paper_portfolio().await?;
+    if portfolio.currency != execution.currency || amount > portfolio.buying_power {
+        return Err(ApiError::BadRequest);
+    }
+    let price = match order.order_type {
+        BrokerOrderTypeRequest::Limit => order.limit_price.ok_or(ApiError::BadRequest)?,
+        BrokerOrderTypeRequest::Market => state.latest_market_price(&execution.symbol).await?,
+    };
+    let quantity = (amount / price).round_dp_with_strategy(0, RoundingStrategy::ToZero);
+    if quantity <= Decimal::ZERO || quantity.to_i64().is_none() {
+        return Err(ApiError::BadRequest);
+    }
+    if let Some(supplied) = order.quantity {
+        if supplied != quantity {
+            return Err(ApiError::BadRequest);
+        }
+    }
+    Ok(quantity)
 }
 
 impl TrendRegimeRequest {
@@ -867,10 +948,12 @@ fn summarize_decision(
         || "none".to_owned(),
         |split| {
             format!(
-                "core={} {}, opportunity_budget={} {}, opportunity={} {}, recommended={} {}, unallocated_opportunity={} {}, policy={:?}, requires_approval={}",
+                "core={} {}, opportunity_budget={} {}, carried_opportunity_cash={} {}, opportunity={} {}, recommended={} {}, unallocated_opportunity={} {}, policy={:?}, requires_approval={}",
                 split.core_contribution(),
                 execution.currency,
                 split.opportunity_budget(),
+                execution.currency,
+                split.carried_opportunity_cash(),
                 execution.currency,
                 split.opportunity_contribution(),
                 execution.currency,
