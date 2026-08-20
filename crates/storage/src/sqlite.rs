@@ -176,6 +176,7 @@ mod tests {
                 "investment_plans".to_owned(),
                 "paper_fills".to_owned(),
                 "paper_orders".to_owned(),
+                "plan_execution_configurations".to_owned(),
                 "portfolio_snapshots".to_owned(),
                 "scheduled_decision_runs".to_owned(),
             ]
@@ -246,6 +247,21 @@ mod tests {
         .execute(storage.pool())
         .await
         .expect("valid decision-record parent plan must persist");
+        sqlx::query(
+            "INSERT INTO plan_execution_configurations \
+             (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode) \
+             VALUES ('plan-4', 'monthly', 15, 100000000, 0, 'fixed')",
+        )
+        .execute(storage.pool())
+        .await
+        .expect("valid execution configuration must persist");
+        let invalid_execution_configuration = sqlx::query(
+            "UPDATE plan_execution_configurations SET schedule_kind = 'weekly', schedule_day = 8 \
+             WHERE plan_id = 'plan-4'",
+        )
+        .execute(storage.pool())
+        .await;
+        assert!(invalid_execution_configuration.is_err());
         let null_required_snapshot = sqlx::query(
             "INSERT INTO decision_records \
              (id, plan_id, symbol, currency, execution_status, execution_snapshot, \

@@ -69,6 +69,11 @@
   "currency": "usd",
   "schedule_kind": "monthly",
   "schedule_day": 15,
+  "bucket_allocation": {
+    "core_ratio": "0.80",
+    "opportunity_ratio": "0.20"
+  },
+  "risk_mode": "approval",
   "max_single_execution": "1500.00"
 }
 ```
@@ -76,6 +81,10 @@
 成功状态码：`201 Created`
 
 响应：创建后的 investment plan。服务端会规范化 `symbol` 与 `currency` 为大写。
+
+`bucket_allocation` 的比例使用 `0..=1` 的 decimal 字符串（例如 `0.80` 即 `80%`），两桶必须恰好合计 `1`。当核心桶为 `100%` 时，`risk_mode` 必须为 `fixed`；存在机会桶时必须显式选择 `autopilot` 或 `approval`。为兼容旧客户端，省略两项时默认 `100%` 核心桶和 `fixed`。
+
+`schedule_kind` 接受 `monthly`（`schedule_day` 为 `1..=28`）或 `weekly`（`schedule_day` 为 ISO 星期 `1..=7`）。当前 server scheduler 仍只运行既有的月度计划；周度配置已持久化但不会被误触发，启用周度调度属于后续 V1.1 阶段。
 
 #### `GET /investment-plans`
 
@@ -98,6 +107,11 @@
   "name": "Core ETF Plus",
   "base_contribution": "1200.00",
   "schedule_day": 20,
+  "bucket_allocation": {
+    "core_ratio": "0.70",
+    "opportunity_ratio": "0.30"
+  },
+  "risk_mode": "autopilot",
   "max_single_execution": "1800.00",
   "is_active": false
 }
@@ -182,7 +196,7 @@ Dashboard 与最小 Scheduler 使用的默认入口。请求体**不接受**人�
 
 服务端使用当前 UTC 月内日期。70/20 市场源不可用时返回统一 `503 service_unavailable`，不创建伪造的决策或审计记录；Qwen 不可用时仍创建记录并明确标记 `sentiment_unavailable` / `90/10/0`。响应新增 `audit_record_id`，可用 `GET /decisions/:id` 读取可读证据。省略 `paper_order` 时绝不下单。
 
-server 默认启用最小固定月日 Scheduler：每 `SCHEDULER_TICK_SECONDS`（默认 60）秒检查一次，仅在计划 `schedule_day` 与 UTC 日期相同的当天创建自动决策存证。SQLite 的 `(plan_id, scheduled_for)` claim 阻止重启或下一 tick 重复存证。它没有订单数量且从不自动提交 paper order。
+server 默认启用最小固定月日 Scheduler：每 `SCHEDULER_TICK_SECONDS`（默认 60）秒检查一次，仅在 `monthly` 计划的 `schedule_day` 与 UTC 日期相同的当天创建自动决策存证。SQLite 的 `(plan_id, scheduled_for)` claim 阻止重启或下一 tick 重复存证。它没有订单数量且从不自动提交 paper order；已配置的 `weekly` 计划会安全跳过，直到后续周度调度实现完成。
 
 #### `POST /investment-plans/:id/decision-preview`
 

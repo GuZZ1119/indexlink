@@ -334,6 +334,7 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         currency: input.currency,
         schedule_kind: input.schedule_kind,
         schedule_day: input.schedule_day,
+        execution_configuration: input.execution_configuration,
         max_single_execution: input.max_single_execution,
         is_active: true,
         created_at: now,
@@ -435,6 +436,7 @@ fn create_input() -> CreateInvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
+        execution_configuration: investment_plans::PlanExecutionConfiguration::default(),
         max_single_execution: Decimal::new(1500, 0),
     }
 }

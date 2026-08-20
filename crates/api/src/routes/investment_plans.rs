@@ -11,7 +11,8 @@ use axum::{
 };
 use investment_plans::{
     BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanExecutionPreview,
-    PreviewInvestmentPlanExecution, ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
+    PlanExecutionConfiguration, PlanRiskMode, PreviewInvestmentPlanExecution, ScheduleKind,
+    TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -31,10 +32,14 @@ struct CreateInvestmentPlanRequest {
     base_contribution: Decimal,
     /// 三位币种代码。
     currency: String,
-    /// MVP 只接受 monthly。
+    /// 每月或每周固定定投日。
     schedule_kind: ScheduleKindRequest,
-    /// 每月执行日。
+    /// 月度为月内日期，周度为 ISO 星期。
     schedule_day: i16,
+    /// 可选核心/机会桶比例；未提供时兼容旧计划，默认全部核心桶。
+    bucket_allocation: Option<TwoBucketAllocationRequest>,
+    /// 可选风险模式；未提供时兼容旧计划，默认固定模式。
+    risk_mode: Option<PlanRiskModeRequest>,
     /// 单次执行金额硬上限，JSON 中必须是字符串。
     #[serde(with = "rust_decimal::serde::str")]
     max_single_execution: Decimal,
@@ -50,6 +55,10 @@ struct UpdateInvestmentPlanRequest {
     base_contribution: Option<Decimal>,
     /// 可选的新每月执行日。
     schedule_day: Option<i16>,
+    /// 可选的新核心/机会桶比例。
+    bucket_allocation: Option<TwoBucketAllocationRequest>,
+    /// 可选的新机会桶风险模式。
+    risk_mode: Option<PlanRiskModeRequest>,
     /// 可选的新单次执行金额硬上限，JSON 中必须是字符串。
     #[serde(default, with = "rust_decimal::serde::str_option")]
     max_single_execution: Option<Decimal>,
@@ -83,6 +92,8 @@ struct TwoBucketAllocationRequest {
 enum ScheduleKindRequest {
     /// 每月固定日期触发。
     Monthly,
+    /// 每周固定 ISO 星期触发；本 PR 暂只保存配置。
+    Weekly,
 }
 
 impl From<ScheduleKindRequest> for ScheduleKind {
@@ -90,35 +101,109 @@ impl From<ScheduleKindRequest> for ScheduleKind {
     fn from(value: ScheduleKindRequest) -> Self {
         match value {
             ScheduleKindRequest::Monthly => Self::Monthly,
+            ScheduleKindRequest::Weekly => Self::Weekly,
         }
     }
 }
 
-impl From<CreateInvestmentPlanRequest> for CreateInvestmentPlan {
-    /// Convert a validated API DTO into the domain create input.
-    fn from(value: CreateInvestmentPlanRequest) -> Self {
-        Self {
-            name: value.name,
-            symbol: value.symbol,
-            base_contribution: value.base_contribution,
-            currency: value.currency,
-            schedule_kind: value.schedule_kind.into(),
-            schedule_day: value.schedule_day,
-            max_single_execution: value.max_single_execution,
+/// API 边界支持的机会桶风险模式。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PlanRiskModeRequest {
+    /// 仅核心桶的固定定投模式。
+    Fixed,
+    /// 后续由策略链路自动决定机会桶是否执行。
+    Autopilot,
+    /// 后续由用户确认机会桶执行。
+    Approval,
+}
+
+impl From<PlanRiskModeRequest> for PlanRiskMode {
+    /// Convert the API risk-mode value into the domain risk mode.
+    fn from(value: PlanRiskModeRequest) -> Self {
+        match value {
+            PlanRiskModeRequest::Fixed => Self::Fixed,
+            PlanRiskModeRequest::Autopilot => Self::Autopilot,
+            PlanRiskModeRequest::Approval => Self::Approval,
         }
     }
 }
 
-impl From<UpdateInvestmentPlanRequest> for UpdateInvestmentPlan {
-    /// Convert the API update DTO into the domain update input.
-    fn from(value: UpdateInvestmentPlanRequest) -> Self {
-        Self {
-            name: value.name,
-            base_contribution: value.base_contribution,
-            schedule_day: value.schedule_day,
-            max_single_execution: value.max_single_execution,
-            is_active: value.is_active,
+impl CreateInvestmentPlanRequest {
+    /// Convert the API DTO into validated domain input with legacy-safe defaults.
+    fn into_domain(self) -> Result<CreateInvestmentPlan, ApiError> {
+        let Self {
+            name,
+            symbol,
+            base_contribution,
+            currency,
+            schedule_kind,
+            schedule_day,
+            bucket_allocation,
+            risk_mode,
+            max_single_execution,
+        } = self;
+        let execution_configuration = execution_configuration_from_request(
+            bucket_allocation,
+            risk_mode,
+            PlanExecutionConfiguration::default(),
+        )?;
+        Ok(CreateInvestmentPlan {
+            name,
+            symbol,
+            base_contribution,
+            currency,
+            schedule_kind: schedule_kind.into(),
+            schedule_day,
+            max_single_execution,
+            execution_configuration,
+        })
+    }
+}
+
+impl UpdateInvestmentPlanRequest {
+    /// Convert the API update DTO into a domain partial update.
+    fn into_domain(self) -> Result<UpdateInvestmentPlan, ApiError> {
+        let Self {
+            name,
+            base_contribution,
+            schedule_day,
+            bucket_allocation,
+            risk_mode,
+            max_single_execution,
+            is_active,
+        } = self;
+        if bucket_allocation.is_some() != risk_mode.is_some() {
+            return Err(ApiError::BadRequest);
         }
+        let bucket_allocation = bucket_allocation
+            .map(TwoBucketAllocationRequest::into_domain)
+            .transpose()?;
+        Ok(UpdateInvestmentPlan {
+            name,
+            base_contribution,
+            schedule_day,
+            bucket_allocation,
+            risk_mode: risk_mode.map(Into::into),
+            max_single_execution,
+            is_active,
+        })
+    }
+}
+
+/// Combine optional HTTP bucket settings with a legacy-safe default configuration.
+fn execution_configuration_from_request(
+    bucket_allocation: Option<TwoBucketAllocationRequest>,
+    risk_mode: Option<PlanRiskModeRequest>,
+    default: PlanExecutionConfiguration,
+) -> Result<PlanExecutionConfiguration, ApiError> {
+    match (bucket_allocation, risk_mode) {
+        (None, None) => Ok(default),
+        (Some(bucket_allocation), Some(risk_mode)) => {
+            PlanExecutionConfiguration::new(bucket_allocation.into_domain()?, risk_mode.into())
+                .map_err(Into::into)
+        }
+        _ => Err(ApiError::BadRequest),
     }
 }
 
@@ -176,7 +261,7 @@ async fn create_plan(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     Ok((
         StatusCode::CREATED,
-        Json(state.plans().create(input.into()).await?),
+        Json(state.plans().create(input.into_domain()?).await?),
     ))
 }
 
@@ -202,7 +287,7 @@ async fn update_plan(
 ) -> Result<Json<InvestmentPlan>, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
-    Ok(Json(state.plans().update(id, input.into()).await?))
+    Ok(Json(state.plans().update(id, input.into_domain()?).await?))
 }
 
 /// 删除一个定投标的及其本地关联记录。

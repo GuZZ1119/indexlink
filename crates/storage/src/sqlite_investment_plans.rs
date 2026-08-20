@@ -2,30 +2,42 @@
 
 use async_trait::async_trait;
 use investment_plans::{
-    CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository, PlanRepositoryError,
-    PlanValidationError, ScheduleKind, UpdateInvestmentPlan,
+    BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository,
+    PlanExecutionConfiguration, PlanRepositoryError, PlanRiskMode, PlanValidationError,
+    ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::sqlite::{decode_amount, encode_amount};
 
+const RATIO_SCALE: u32 = 8;
+const RATIO_UNITS: i64 = 100_000_000;
+
 const INSERT_PLAN_SQL: &str = "INSERT INTO investment_plans \
     (id, name, symbol, base_contribution, currency, schedule_kind, schedule_day, \
      max_single_execution, is_active) \
-    VALUES (?1, ?2, ?3, ?4, ?5, 'monthly', ?6, ?7, 1) \
-    RETURNING id, name, symbol, base_contribution, currency, schedule_kind, schedule_day, \
-    max_single_execution, is_active, created_at, updated_at";
-const LIST_PLANS_SQL: &str = "SELECT id, name, symbol, base_contribution, currency, \
-    schedule_kind, schedule_day, max_single_execution, is_active, created_at, updated_at \
-    FROM investment_plans ORDER BY created_at ASC, id ASC";
-const GET_PLAN_SQL: &str = "SELECT id, name, symbol, base_contribution, currency, \
-    schedule_kind, schedule_day, max_single_execution, is_active, created_at, updated_at \
-    FROM investment_plans WHERE id = ?1";
-const SELECT_UPDATE_AMOUNTS_SQL: &str = "SELECT base_contribution, max_single_execution \
-    FROM investment_plans WHERE id = ?1";
+    VALUES (?1, ?2, ?3, ?4, ?5, 'monthly', ?6, ?7, 1)";
+const INSERT_EXECUTION_CONFIGURATION_SQL: &str = "INSERT INTO plan_execution_configurations \
+    (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+const LIST_PLANS_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
+    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, \
+    p.max_single_execution, p.is_active, p.created_at, p.updated_at \
+    FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
+    ORDER BY p.created_at ASC, p.id ASC";
+const GET_PLAN_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
+    c.schedule_kind, c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, \
+    p.max_single_execution, p.is_active, p.created_at, p.updated_at \
+    FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
+    WHERE p.id = ?1";
+const SELECT_UPDATE_VALUES_SQL: &str = "SELECT p.base_contribution, p.max_single_execution, \
+    p.schedule_day AS legacy_schedule_day, c.schedule_kind, c.schedule_day, c.core_ratio_units, \
+    c.opportunity_ratio_units, c.risk_mode \
+    FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
+    WHERE p.id = ?1";
 const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
     name = COALESCE(?2, name), \
     base_contribution = COALESCE(?3, base_contribution), \
@@ -36,18 +48,17 @@ const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
         strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') \
     ) \
-    WHERE id = ?1 \
-    RETURNING id, name, symbol, base_contribution, currency, schedule_kind, schedule_day, \
-    max_single_execution, is_active, created_at, updated_at";
+    WHERE id = ?1";
+const UPDATE_EXECUTION_CONFIGURATION_SQL: &str = "UPDATE plan_execution_configurations SET \
+    schedule_day = ?2, core_ratio_units = ?3, opportunity_ratio_units = ?4, risk_mode = ?5 \
+    WHERE plan_id = ?1";
 const SET_ACTIVE_SQL: &str = "UPDATE investment_plans SET \
     is_active = ?2, \
     updated_at = MAX( \
         strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
         strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') \
     ) \
-    WHERE id = ?1 \
-    RETURNING id, name, symbol, base_contribution, currency, schedule_kind, schedule_day, \
-    max_single_execution, is_active, created_at, updated_at";
+    WHERE id = ?1";
 const DELETE_PLAN_SQL: &str = "DELETE FROM investment_plans WHERE id = ?1";
 
 /// SQLite implementation of [`InvestmentPlanRepository`].
@@ -75,17 +86,43 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             encode_amount(input.base_contribution).ok_or(PlanRepositoryError::Unavailable)?;
         let max_single_execution =
             encode_amount(input.max_single_execution).ok_or(PlanRepositoryError::Unavailable)?;
-        let row = sqlx::query(INSERT_PLAN_SQL)
-            .bind(Uuid::new_v4().to_string())
+        let id = Uuid::new_v4();
+        let schedule_day = input.schedule_day;
+        let configuration = input.execution_configuration;
+        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+            execution_configuration_values(configuration)?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        sqlx::query(INSERT_PLAN_SQL)
+            .bind(id.to_string())
             .bind(input.name)
             .bind(input.symbol)
             .bind(base_contribution)
             .bind(input.currency)
-            .bind(input.schedule_day)
+            .bind(schedule_day)
             .bind(max_single_execution)
-            .fetch_one(&self.pool)
+            .execute(&mut *transaction)
             .await
             .map_err(map_sqlx_error)?;
+        sqlx::query(INSERT_EXECUTION_CONFIGURATION_SQL)
+            .bind(id.to_string())
+            .bind(schedule_kind_name(input.schedule_kind))
+            .bind(schedule_day)
+            .bind(core_ratio_units)
+            .bind(opportunity_ratio_units)
+            .bind(risk_mode_name(risk_mode))
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_sqlx_error)?;
+        let row = sqlx::query(GET_PLAN_SQL)
+            .bind(id.to_string())
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(map_sqlx_error)?;
+        transaction.commit().await.map_err(map_sqlx_error)?;
 
         plan_from_row(row)
     }
@@ -123,7 +160,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let current = sqlx::query(SELECT_UPDATE_AMOUNTS_SQL)
+        let current = sqlx::query(SELECT_UPDATE_VALUES_SQL)
             .bind(id.to_string())
             .fetch_optional(&mut *transaction)
             .await
@@ -146,6 +183,28 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
         let base = input.base_contribution.unwrap_or(current_base);
         let max = input.max_single_execution.unwrap_or(current_max);
         validate_final_amounts(base, max)?;
+        let schedule_kind = schedule_kind_from_name(
+            current
+                .try_get::<String, _>("schedule_kind")
+                .map_err(map_sqlx_error)?
+                .as_str(),
+        )?;
+        let current_schedule_day = i16::try_from(
+            current
+                .try_get::<i64, _>("schedule_day")
+                .map_err(map_sqlx_error)?,
+        )
+        .map_err(|_| PlanRepositoryError::Unavailable)?;
+        let schedule_day = input.schedule_day.unwrap_or(current_schedule_day);
+        validate_schedule_day(schedule_kind, schedule_day)?;
+        let current_configuration = execution_configuration_from_row(&current)?;
+        let bucket_allocation = input
+            .bucket_allocation
+            .unwrap_or(current_configuration.bucket_allocation());
+        let risk_mode = input.risk_mode.unwrap_or(current_configuration.risk_mode());
+        let configuration = PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
+        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+            execution_configuration_values(configuration)?;
 
         let base_contribution = input
             .base_contribution
@@ -156,13 +215,27 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .map(|value| encode_amount(value).ok_or(PlanRepositoryError::Unavailable))
             .transpose()?;
         let is_active = input.is_active.map(i64::from);
-        let row = sqlx::query(UPDATE_PLAN_SQL)
+        sqlx::query(UPDATE_PLAN_SQL)
             .bind(id.to_string())
             .bind(input.name)
             .bind(base_contribution)
             .bind(input.schedule_day)
             .bind(max_single_execution)
             .bind(is_active)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_sqlx_error)?;
+        sqlx::query(UPDATE_EXECUTION_CONFIGURATION_SQL)
+            .bind(id.to_string())
+            .bind(schedule_day)
+            .bind(core_ratio_units)
+            .bind(opportunity_ratio_units)
+            .bind(risk_mode_name(risk_mode))
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_sqlx_error)?;
+        let row = sqlx::query(GET_PLAN_SQL)
+            .bind(id.to_string())
             .fetch_one(&mut *transaction)
             .await
             .map_err(map_sqlx_error)?;
@@ -177,13 +250,20 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
         id: Uuid,
         is_active: bool,
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
-        let row = sqlx::query(SET_ACTIVE_SQL)
+        let result = sqlx::query(SET_ACTIVE_SQL)
             .bind(id.to_string())
             .bind(i64::from(is_active))
-            .fetch_optional(&self.pool)
+            .execute(&self.pool)
             .await
-            .map_err(map_sqlx_error)?
-            .ok_or(PlanRepositoryError::NotFound)?;
+            .map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 {
+            return Err(PlanRepositoryError::NotFound);
+        }
+        let row = sqlx::query(GET_PLAN_SQL)
+            .bind(id.to_string())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
 
         plan_from_row(row)
     }
@@ -204,19 +284,23 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
 
 /// 将 SQLite 查询结果转换为已验证的领域计划。
 fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> {
-    let schedule_kind = match row
-        .try_get::<String, _>("schedule_kind")
-        .map_err(map_sqlx_error)?
-        .as_str()
-    {
-        "monthly" => ScheduleKind::Monthly,
-        _ => return Err(PlanRepositoryError::Unavailable),
-    };
+    let schedule_kind = schedule_kind_from_name(
+        row.try_get::<String, _>("schedule_kind")
+            .map_err(map_sqlx_error)?
+            .as_str(),
+    )?;
     let is_active = match row.try_get::<i64, _>("is_active").map_err(map_sqlx_error)? {
         0 => false,
         1 => true,
         _ => return Err(PlanRepositoryError::Unavailable),
     };
+
+    let schedule_day = i16::try_from(
+        row.try_get::<i64, _>("schedule_day")
+            .map_err(map_sqlx_error)?,
+    )
+    .map_err(|_| PlanRepositoryError::Unavailable)?;
+    validate_schedule_day(schedule_kind, schedule_day)?;
 
     Ok(InvestmentPlan {
         id: parse_uuid(row.try_get("id").map_err(map_sqlx_error)?)?,
@@ -225,11 +309,8 @@ fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> 
         base_contribution: parse_amount(row.try_get("base_contribution").map_err(map_sqlx_error)?)?,
         currency: row.try_get("currency").map_err(map_sqlx_error)?,
         schedule_kind,
-        schedule_day: i16::try_from(
-            row.try_get::<i64, _>("schedule_day")
-                .map_err(map_sqlx_error)?,
-        )
-        .map_err(|_| PlanRepositoryError::Unavailable)?,
+        schedule_day,
+        execution_configuration: execution_configuration_from_row(&row)?,
         max_single_execution: parse_amount(
             row.try_get("max_single_execution")
                 .map_err(map_sqlx_error)?,
@@ -238,6 +319,104 @@ fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> 
         created_at: parse_timestamp(row.try_get("created_at").map_err(map_sqlx_error)?)?,
         updated_at: parse_timestamp(row.try_get("updated_at").map_err(map_sqlx_error)?)?,
     })
+}
+
+/// 将数据库文本解析为受支持的计划周期。
+fn schedule_kind_from_name(value: &str) -> Result<ScheduleKind, PlanRepositoryError> {
+    match value {
+        "monthly" => Ok(ScheduleKind::Monthly),
+        "weekly" => Ok(ScheduleKind::Weekly),
+        _ => Err(PlanRepositoryError::Unavailable),
+    }
+}
+
+/// 将计划周期编码为 SQLite 配置表使用的稳定文本。
+fn schedule_kind_name(value: ScheduleKind) -> &'static str {
+    match value {
+        ScheduleKind::Monthly => "monthly",
+        ScheduleKind::Weekly => "weekly",
+    }
+}
+
+/// 将风险模式编码为 SQLite 配置表使用的稳定文本。
+fn risk_mode_name(value: PlanRiskMode) -> &'static str {
+    match value {
+        PlanRiskMode::Fixed => "fixed",
+        PlanRiskMode::Autopilot => "autopilot",
+        PlanRiskMode::Approval => "approval",
+    }
+}
+
+/// 从 SQLite 行重建受校验的双桶及风险模式配置。
+fn execution_configuration_from_row(
+    row: &SqliteRow,
+) -> Result<PlanExecutionConfiguration, PlanRepositoryError> {
+    let core_ratio = decode_ratio_units(
+        row.try_get::<i64, _>("core_ratio_units")
+            .map_err(map_sqlx_error)?,
+    )?;
+    let opportunity_ratio = decode_ratio_units(
+        row.try_get::<i64, _>("opportunity_ratio_units")
+            .map_err(map_sqlx_error)?,
+    )?;
+    let bucket_allocation = TwoBucketAllocationConfig::new(core_ratio, opportunity_ratio)?;
+    let risk_mode = match row
+        .try_get::<String, _>("risk_mode")
+        .map_err(map_sqlx_error)?
+        .as_str()
+    {
+        "fixed" => PlanRiskMode::Fixed,
+        "autopilot" => PlanRiskMode::Autopilot,
+        "approval" => PlanRiskMode::Approval,
+        _ => return Err(PlanRepositoryError::Unavailable),
+    };
+    PlanExecutionConfiguration::new(bucket_allocation, risk_mode).map_err(Into::into)
+}
+
+/// 编码计划执行配置，拒绝无法被 SQLite 以固定八位精度保存的比例。
+fn execution_configuration_values(
+    configuration: PlanExecutionConfiguration,
+) -> Result<(i64, i64, PlanRiskMode), PlanRepositoryError> {
+    let bucket_allocation = configuration.bucket_allocation();
+    Ok((
+        encode_ratio_units(bucket_allocation.core_ratio())?,
+        encode_ratio_units(bucket_allocation.opportunity_ratio())?,
+        configuration.risk_mode(),
+    ))
+}
+
+/// 将一个领域比例编码为 SQLite 的八位精度整数单位。
+fn encode_ratio_units(value: BucketAllocationRatio) -> Result<i64, PlanRepositoryError> {
+    let mut decimal = value.value();
+    decimal.rescale(RATIO_SCALE);
+    if decimal != value.value() {
+        return Err(PlanRepositoryError::Unavailable);
+    }
+    let units = (decimal * Decimal::from(RATIO_UNITS))
+        .to_i64()
+        .ok_or(PlanRepositoryError::Unavailable)?;
+    (0..=RATIO_UNITS)
+        .contains(&units)
+        .then_some(units)
+        .ok_or(PlanRepositoryError::Unavailable)
+}
+
+/// 将 SQLite 固定精度整数单位解码为受校验的领域比例。
+fn decode_ratio_units(value: i64) -> Result<BucketAllocationRatio, PlanRepositoryError> {
+    if !(0..=RATIO_UNITS).contains(&value) {
+        return Err(PlanRepositoryError::Unavailable);
+    }
+    BucketAllocationRatio::new(Decimal::new(value, RATIO_SCALE)).map_err(Into::into)
+}
+
+/// 根据当前计划周期校验更新后的执行日。
+fn validate_schedule_day(kind: ScheduleKind, day: i16) -> Result<(), PlanRepositoryError> {
+    match kind {
+        ScheduleKind::Monthly if (1..=28).contains(&day) => Ok(()),
+        ScheduleKind::Weekly if (1..=7).contains(&day) => Ok(()),
+        ScheduleKind::Monthly => Err(PlanValidationError::InvalidScheduleDay.into()),
+        ScheduleKind::Weekly => Err(PlanValidationError::InvalidWeeklyScheduleDay.into()),
+    }
 }
 
 /// 解析数据库存储的 UUID 文本。
@@ -304,6 +483,7 @@ mod tests {
             currency: "USD".to_owned(),
             schedule_kind: ScheduleKind::Monthly,
             schedule_day: 15,
+            execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: amount("1500.00"),
         }
     }
@@ -339,6 +519,45 @@ mod tests {
         assert_eq!(repository.get(created.id).await.unwrap(), created);
     }
 
+    /// 验证 V1.1 周度、双桶及审批配置可在 SQLite 中完整往返。
+    #[tokio::test]
+    async fn persists_weekly_bucket_and_approval_configuration() {
+        let repository = repository().await;
+        let configuration = PlanExecutionConfiguration::new(
+            TwoBucketAllocationConfig::new(
+                BucketAllocationRatio::new(amount("0.75")).unwrap(),
+                BucketAllocationRatio::new(amount("0.25")).unwrap(),
+            )
+            .unwrap(),
+            PlanRiskMode::Approval,
+        )
+        .unwrap();
+        let created = repository
+            .create(CreateInvestmentPlan {
+                schedule_kind: ScheduleKind::Weekly,
+                schedule_day: 3,
+                execution_configuration: configuration,
+                ..input()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(created.schedule_kind, ScheduleKind::Weekly);
+        assert_eq!(created.schedule_day, 3);
+        assert_eq!(
+            created
+                .execution_configuration
+                .bucket_allocation()
+                .core_ratio()
+                .value(),
+            amount("0.75")
+        );
+        assert_eq!(
+            created.execution_configuration.risk_mode(),
+            PlanRiskMode::Approval
+        );
+    }
+
     /// 验证更新在同一 SQLite 写事务中校验最终金额组合。
     #[tokio::test]
     async fn update_preserves_atomic_amount_validation() {
@@ -372,6 +591,8 @@ mod tests {
                     name: Some("Growth plan".to_owned()),
                     base_contribution: Some(amount("1200.00")),
                     schedule_day: Some(20),
+                    bucket_allocation: None,
+                    risk_mode: None,
                     max_single_execution: Some(amount("1800.00")),
                     is_active: Some(false),
                 },
@@ -500,7 +721,7 @@ mod tests {
             INSERT_PLAN_SQL,
             LIST_PLANS_SQL,
             GET_PLAN_SQL,
-            SELECT_UPDATE_AMOUNTS_SQL,
+            SELECT_UPDATE_VALUES_SQL,
             UPDATE_PLAN_SQL,
             SET_ACTIVE_SQL,
             DELETE_PLAN_SQL,

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### 2026-08-20 10:30 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 计划配置与本地数据库迁移。
+- 涉及文件：
+  - `crates/investment-plans/src/lib.rs`
+  - `crates/storage/src/sqlite_investment_plans.rs`
+  - `crates/storage/src/investment_plans.rs`
+  - `crates/storage/src/sqlite.rs`
+  - `crates/api/src/routes/investment_plans.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `migrations/sqlite/20260820090000_add_plan_execution_configurations.sql`
+  - `migrations/20260820090000_add_plan_execution_configurations.sql`
+  - `API_MANAGEMENT.md`
+- 变更内容：
+  - 新增持久化的计划执行配置：核心/机会桶比例、`fixed` / `autopilot` / `approval` 风险模式，以及月度或周度固定执行日。
+  - 用领域构造器保证：核心桶为 `100%` 时只能选择 `fixed`；存在机会桶时必须明确选择 `autopilot` 或 `approval`。旧 HTTP 创建请求默认回退为 `100%` 核心桶和固定模式。
+  - 新增 SQLite 与 PostgreSQL migration；SQLite 通过独立配置表回填旧月度计划，避免重建已有主表并确保既有审计、账本和外键记录保持兼容。
+  - 周度配置已可读写，但当前 scheduler 与执行预览仍只运行既有月度规则；周度计划会安全等待/跳过，不产生自动订单或错误触发。
+  - 更新 API 管理文档，说明比例表示、风险模式不变量、向后兼容和周度调度边界。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p investment-plans -p indexlink-storage -p indexlink-api --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p investment-plans -p indexlink-storage -p indexlink-api --all-targets --all-features --locked -- -D warnings` 通过。
+
 ### 2026-08-20 10:00 CST
 
 - 执行模型：GPT-5 Codex。

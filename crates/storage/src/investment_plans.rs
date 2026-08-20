@@ -2,18 +2,21 @@
 
 use async_trait::async_trait;
 use investment_plans::{
-    CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository, PlanRepositoryError,
-    PlanValidationError, ScheduleKind, UpdateInvestmentPlan,
+    BucketAllocationRatio, CreateInvestmentPlan, InvestmentPlan, InvestmentPlanRepository,
+    PlanExecutionConfiguration, PlanRepositoryError, PlanRiskMode, PlanValidationError,
+    ScheduleKind, TwoBucketAllocationConfig, UpdateInvestmentPlan,
 };
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sqlx::{postgres::PgRow, PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-const PLAN_COLUMNS: &str = "id::text AS id, name, symbol, base_contribution::text AS \
-    base_contribution, currency, schedule_kind, schedule_day, max_single_execution::text AS \
-    max_single_execution, is_active, (EXTRACT(EPOCH FROM created_at) * 1000000)::bigint AS \
-    created_at_micros, (EXTRACT(EPOCH FROM updated_at) * 1000000)::bigint AS updated_at_micros";
+const RATIO_UNITS: i64 = 100_000_000;
+const PLAN_COLUMNS: &str = "p.id::text AS id, p.name, p.symbol, p.base_contribution::text AS \
+    base_contribution, p.currency, c.schedule_kind, c.schedule_day, c.core_ratio_units, \
+    c.opportunity_ratio_units, c.risk_mode, p.max_single_execution::text AS \
+    max_single_execution, p.is_active, (EXTRACT(EPOCH FROM p.created_at) * 1000000)::bigint AS \
+    created_at_micros, (EXTRACT(EPOCH FROM p.updated_at) * 1000000)::bigint AS updated_at_micros";
 
 /// PostgreSQL implementation of [`InvestmentPlanRepository`].
 #[derive(Clone, Debug)]
@@ -36,30 +39,69 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         &self,
         input: CreateInvestmentPlan,
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
-        let row = sqlx::query(&format!(
+        let CreateInvestmentPlan {
+            name,
+            symbol,
+            base_contribution,
+            currency,
+            schedule_kind,
+            schedule_day,
+            execution_configuration,
+            max_single_execution,
+        } = input;
+        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+            execution_configuration_values(execution_configuration)?;
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let row = sqlx::query(
             "INSERT INTO investment_plans \
              (name, symbol, base_contribution, currency, schedule_kind, schedule_day, \
               max_single_execution, is_active) \
              VALUES ($1, $2, $3::numeric, $4, 'monthly', $5, $6::numeric, true) \
-             RETURNING {PLAN_COLUMNS}"
-        ))
-        .bind(input.name)
-        .bind(input.symbol)
-        .bind(input.base_contribution.to_string())
-        .bind(input.currency)
-        .bind(input.schedule_day)
-        .bind(input.max_single_execution.to_string())
-        .fetch_one(&self.pool)
+             RETURNING id::text AS id",
+        )
+        .bind(name)
+        .bind(symbol)
+        .bind(base_contribution.to_string())
+        .bind(currency)
+        .bind(schedule_day)
+        .bind(max_single_execution.to_string())
+        .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-
+        let id: String = row.try_get("id").map_err(map_sqlx_error)?;
+        sqlx::query(
+            "INSERT INTO investment_plan_execution_configurations \
+             (plan_id, schedule_kind, schedule_day, core_ratio_units, opportunity_ratio_units, risk_mode) \
+             VALUES ($1::uuid, $2, $3, $4, $5, $6)",
+        )
+        .bind(&id)
+        .bind(schedule_kind_name(schedule_kind))
+        .bind(schedule_day)
+        .bind(core_ratio_units)
+        .bind(opportunity_ratio_units)
+        .bind(risk_mode_name(risk_mode))
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let row = sqlx::query(&format!(
+            "SELECT {PLAN_COLUMNS} FROM investment_plans p \
+             JOIN investment_plan_execution_configurations c ON c.plan_id = p.id \
+             WHERE p.id = $1::uuid"
+        ))
+        .bind(&id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
         plan_from_row(row)
     }
 
     /// List plans in deterministic creation order.
     async fn list(&self) -> Result<Vec<InvestmentPlan>, PlanRepositoryError> {
         let rows = sqlx::query(&format!(
-            "SELECT {PLAN_COLUMNS} FROM investment_plans ORDER BY created_at ASC, id ASC"
+            "SELECT {PLAN_COLUMNS} FROM investment_plans p \
+             JOIN investment_plan_execution_configurations c ON c.plan_id = p.id \
+             ORDER BY p.created_at ASC, p.id ASC"
         ))
         .fetch_all(&self.pool)
         .await
@@ -71,7 +113,9 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
     /// Fetch one plan by ID.
     async fn get(&self, id: Uuid) -> Result<InvestmentPlan, PlanRepositoryError> {
         let row = sqlx::query(&format!(
-            "SELECT {PLAN_COLUMNS} FROM investment_plans WHERE id = $1::uuid"
+            "SELECT {PLAN_COLUMNS} FROM investment_plans p \
+             JOIN investment_plan_execution_configurations c ON c.plan_id = p.id \
+             WHERE p.id = $1::uuid"
         ))
         .bind(id.to_string())
         .fetch_optional(&self.pool)
@@ -90,9 +134,11 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let current = sqlx::query(
-            "SELECT base_contribution::text AS base_contribution, \
-             max_single_execution::text AS max_single_execution \
-             FROM investment_plans WHERE id = $1::uuid FOR UPDATE",
+            "SELECT p.base_contribution::text AS base_contribution, \
+             p.max_single_execution::text AS max_single_execution, c.schedule_kind, \
+             c.schedule_day, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode \
+             FROM investment_plans p JOIN investment_plan_execution_configurations c \
+             ON c.plan_id = p.id WHERE p.id = $1::uuid FOR UPDATE OF p, c",
         )
         .bind(id.to_string())
         .fetch_optional(&mut *tx)
@@ -111,10 +157,27 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
                 .map_err(map_sqlx_error)?,
         )?);
         validate_final_amounts(base, max)?;
+        let schedule_kind = schedule_kind_from_name(
+            current
+                .try_get::<String, _>("schedule_kind")
+                .map_err(map_sqlx_error)?
+                .as_str(),
+        )?;
+        let current_schedule_day: i16 = current.try_get("schedule_day").map_err(map_sqlx_error)?;
+        let schedule_day = input.schedule_day.unwrap_or(current_schedule_day);
+        validate_schedule_day(schedule_kind, schedule_day)?;
+        let current_configuration = execution_configuration_from_row(&current)?;
+        let bucket_allocation = input
+            .bucket_allocation
+            .unwrap_or(current_configuration.bucket_allocation());
+        let risk_mode = input.risk_mode.unwrap_or(current_configuration.risk_mode());
+        let configuration = PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
+        let (core_ratio_units, opportunity_ratio_units, risk_mode) =
+            execution_configuration_values(configuration)?;
         let base_contribution = input.base_contribution.map(|value| value.to_string());
         let max_single_execution = input.max_single_execution.map(|value| value.to_string());
 
-        let row = sqlx::query(&format!(
+        sqlx::query(
             "UPDATE investment_plans SET \
              name = COALESCE($2, name), \
              base_contribution = COALESCE($3::numeric, base_contribution), \
@@ -122,14 +185,36 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
              max_single_execution = COALESCE($5::numeric, max_single_execution), \
              is_active = COALESCE($6, is_active), \
              updated_at = NOW() \
-             WHERE id = $1::uuid RETURNING {PLAN_COLUMNS}"
-        ))
+             WHERE id = $1::uuid",
+        )
         .bind(id.to_string())
         .bind(input.name)
         .bind(base_contribution)
         .bind(input.schedule_day)
         .bind(max_single_execution)
         .bind(input.is_active)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        sqlx::query(
+            "UPDATE investment_plan_execution_configurations SET schedule_day = $2, \
+             core_ratio_units = $3, opportunity_ratio_units = $4, risk_mode = $5 \
+             WHERE plan_id = $1::uuid",
+        )
+        .bind(id.to_string())
+        .bind(schedule_day)
+        .bind(core_ratio_units)
+        .bind(opportunity_ratio_units)
+        .bind(risk_mode_name(risk_mode))
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let row = sqlx::query(&format!(
+            "SELECT {PLAN_COLUMNS} FROM investment_plans p \
+             JOIN investment_plan_execution_configurations c ON c.plan_id = p.id \
+             WHERE p.id = $1::uuid"
+        ))
+        .bind(id.to_string())
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -144,31 +229,41 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         id: Uuid,
         is_active: bool,
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
-        let row = sqlx::query(&format!(
+        let result = sqlx::query(
             "UPDATE investment_plans \
              SET is_active = $2, updated_at = NOW() \
-             WHERE id = $1::uuid RETURNING {PLAN_COLUMNS}"
-        ))
+             WHERE id = $1::uuid",
+        )
         .bind(id.to_string())
         .bind(is_active)
-        .fetch_optional(&self.pool)
+        .execute(&self.pool)
         .await
-        .map_err(map_sqlx_error)?
-        .ok_or(PlanRepositoryError::NotFound)?;
+        .map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 {
+            return Err(PlanRepositoryError::NotFound);
+        }
+        let row = sqlx::query(&format!(
+            "SELECT {PLAN_COLUMNS} FROM investment_plans p \
+             JOIN investment_plan_execution_configurations c ON c.plan_id = p.id \
+             WHERE p.id = $1::uuid"
+        ))
+        .bind(id.to_string())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         plan_from_row(row)
     }
 }
 
 fn plan_from_row(row: PgRow) -> Result<InvestmentPlan, PlanRepositoryError> {
-    let schedule_kind = match row
-        .try_get::<String, _>("schedule_kind")
-        .map_err(map_sqlx_error)?
-        .as_str()
-    {
-        "monthly" => ScheduleKind::Monthly,
-        _ => return Err(PlanRepositoryError::Unavailable),
-    };
+    let schedule_kind = schedule_kind_from_name(
+        row.try_get::<String, _>("schedule_kind")
+            .map_err(map_sqlx_error)?
+            .as_str(),
+    )?;
+    let schedule_day: i16 = row.try_get("schedule_day").map_err(map_sqlx_error)?;
+    validate_schedule_day(schedule_kind, schedule_day)?;
 
     Ok(InvestmentPlan {
         id: parse_uuid(row.try_get("id").map_err(map_sqlx_error)?)?,
@@ -179,7 +274,8 @@ fn plan_from_row(row: PgRow) -> Result<InvestmentPlan, PlanRepositoryError> {
         )?,
         currency: row.try_get("currency").map_err(map_sqlx_error)?,
         schedule_kind,
-        schedule_day: row.try_get("schedule_day").map_err(map_sqlx_error)?,
+        schedule_day,
+        execution_configuration: execution_configuration_from_row(&row)?,
         max_single_execution: parse_decimal(
             row.try_get("max_single_execution")
                 .map_err(map_sqlx_error)?,
@@ -188,6 +284,94 @@ fn plan_from_row(row: PgRow) -> Result<InvestmentPlan, PlanRepositoryError> {
         created_at: parse_micros(row.try_get("created_at_micros").map_err(map_sqlx_error)?)?,
         updated_at: parse_micros(row.try_get("updated_at_micros").map_err(map_sqlx_error)?)?,
     })
+}
+
+fn schedule_kind_from_name(value: &str) -> Result<ScheduleKind, PlanRepositoryError> {
+    match value {
+        "monthly" => Ok(ScheduleKind::Monthly),
+        "weekly" => Ok(ScheduleKind::Weekly),
+        _ => Err(PlanRepositoryError::Unavailable),
+    }
+}
+
+fn schedule_kind_name(value: ScheduleKind) -> &'static str {
+    match value {
+        ScheduleKind::Monthly => "monthly",
+        ScheduleKind::Weekly => "weekly",
+    }
+}
+
+fn risk_mode_name(value: PlanRiskMode) -> &'static str {
+    match value {
+        PlanRiskMode::Fixed => "fixed",
+        PlanRiskMode::Autopilot => "autopilot",
+        PlanRiskMode::Approval => "approval",
+    }
+}
+
+fn execution_configuration_from_row(
+    row: &PgRow,
+) -> Result<PlanExecutionConfiguration, PlanRepositoryError> {
+    let bucket_allocation = TwoBucketAllocationConfig::new(
+        decode_ratio_units(row.try_get("core_ratio_units").map_err(map_sqlx_error)?)?,
+        decode_ratio_units(
+            row.try_get("opportunity_ratio_units")
+                .map_err(map_sqlx_error)?,
+        )?,
+    )?;
+    let risk_mode = match row
+        .try_get::<String, _>("risk_mode")
+        .map_err(map_sqlx_error)?
+        .as_str()
+    {
+        "fixed" => PlanRiskMode::Fixed,
+        "autopilot" => PlanRiskMode::Autopilot,
+        "approval" => PlanRiskMode::Approval,
+        _ => return Err(PlanRepositoryError::Unavailable),
+    };
+    PlanExecutionConfiguration::new(bucket_allocation, risk_mode).map_err(Into::into)
+}
+
+fn execution_configuration_values(
+    configuration: PlanExecutionConfiguration,
+) -> Result<(i64, i64, PlanRiskMode), PlanRepositoryError> {
+    let bucket_allocation = configuration.bucket_allocation();
+    Ok((
+        encode_ratio_units(bucket_allocation.core_ratio())?,
+        encode_ratio_units(bucket_allocation.opportunity_ratio())?,
+        configuration.risk_mode(),
+    ))
+}
+
+fn encode_ratio_units(value: BucketAllocationRatio) -> Result<i64, PlanRepositoryError> {
+    let mut decimal = value.value();
+    decimal.rescale(8);
+    if decimal != value.value() {
+        return Err(PlanRepositoryError::Unavailable);
+    }
+    let units = (decimal * Decimal::from(RATIO_UNITS))
+        .to_i64()
+        .ok_or(PlanRepositoryError::Unavailable)?;
+    (0..=RATIO_UNITS)
+        .contains(&units)
+        .then_some(units)
+        .ok_or(PlanRepositoryError::Unavailable)
+}
+
+fn decode_ratio_units(value: i64) -> Result<BucketAllocationRatio, PlanRepositoryError> {
+    if !(0..=RATIO_UNITS).contains(&value) {
+        return Err(PlanRepositoryError::Unavailable);
+    }
+    BucketAllocationRatio::new(Decimal::new(value, 8)).map_err(Into::into)
+}
+
+fn validate_schedule_day(kind: ScheduleKind, day: i16) -> Result<(), PlanRepositoryError> {
+    match kind {
+        ScheduleKind::Monthly if (1..=28).contains(&day) => Ok(()),
+        ScheduleKind::Weekly if (1..=7).contains(&day) => Ok(()),
+        ScheduleKind::Monthly => Err(PlanValidationError::InvalidScheduleDay.into()),
+        ScheduleKind::Weekly => Err(PlanValidationError::InvalidWeeklyScheduleDay.into()),
+    }
 }
 
 fn parse_uuid(value: String) -> Result<Uuid, PlanRepositoryError> {

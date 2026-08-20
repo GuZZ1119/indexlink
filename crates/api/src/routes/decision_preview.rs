@@ -21,7 +21,7 @@ use decision_engine::{
 use decision_records::{CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus};
 use investment_plans::{
     BucketAllocationRatio, ExecutionPreviewStatus, InvestmentPlanExecutionPreview,
-    PreviewInvestmentPlanExecution, TwoBucketAllocationConfig,
+    PreviewInvestmentPlanExecution, ScheduleKind, TwoBucketAllocationConfig,
 };
 use market_data::MarketSignalInput;
 use quant_engine::{
@@ -300,7 +300,12 @@ pub(crate) async fn run_due_decisions(
     let mut summary = ScheduledDecisionRunSummary::default();
 
     for plan in state.plans().list().await? {
-        if !plan.is_active || plan.schedule_day != day_of_month {
+        // V1.1 may persist weekly plans, but this scheduler deliberately keeps the
+        // existing fixed-monthly execution behavior until the weekly adapter lands.
+        if !plan.is_active
+            || plan.schedule_kind != ScheduleKind::Monthly
+            || plan.schedule_day != day_of_month
+        {
             continue;
         }
         match preview_automatic_for_plan_with_claim(state, plan.id, day_of_month, &scheduled_for)

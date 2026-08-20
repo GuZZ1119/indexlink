@@ -7,8 +7,9 @@
 //! 输入校验、执行预览、应用服务和 repository port；PostgreSQL、Axum、Broker、Qwen、
 //! Scheduler 与真实订单生成均属于外部 adapter 或后续阶段。
 //!
-//! MVP 假设：单用户系统、仅支持 monthly、无计划级 timezone、不验证 symbol 是否
-//! 真实可交易、不生成任何真实订单；双桶资金分配只作为执行预览的一部分输出。
+//! MVP 假设：单用户系统、无计划级 timezone、不验证 symbol 是否真实可交易、不生成
+//! 任何真实订单。计划可持久化月度或周度配置；当前自动调度器仍只执行既有月度计划，
+//! 周度计划将在后续调度 PR 中启用。
 //!
 //! 金额统一使用 [`rust_decimal::Decimal`]。HTTP/JSON 边界必须以字符串编码金额，
 //! 避免 JavaScript Number 或 JSON 浮点转换造成精度损失。领域类型不直接实现
@@ -99,6 +100,89 @@ impl TwoBucketAllocationConfig {
     pub fn opportunity_ratio(self) -> BucketAllocationRatio {
         self.opportunity_ratio
     }
+
+    /// 返回是否将全部计划金额分配到常规定投桶。
+    #[must_use]
+    pub fn is_core_only(self) -> bool {
+        self.core_ratio.value() == Decimal::ONE
+    }
+}
+
+/// 计划中机会桶的执行授权方式。
+///
+/// 该枚举只保存用户选择的策略边界；本 PR 不改变订单或 scheduler 的实际执行行为。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanRiskMode {
+    /// 全部资金位于核心桶，只保留固定定投配置。
+    Fixed,
+    /// 机会桶由后续已审计的策略链路自动决定是否执行。
+    Autopilot,
+    /// 机会桶计算完成后必须由用户确认，后续才可提交 paper order。
+    Approval,
+}
+
+/// 已校验的计划级双桶与风险模式配置。
+///
+/// 核心桶为 `100%` 时只能使用 [`PlanRiskMode::Fixed`]；存在机会桶时必须显式选择
+/// [`PlanRiskMode::Autopilot`] 或 [`PlanRiskMode::Approval`]，避免隐式授权。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PlanExecutionConfiguration {
+    /// 核心/机会桶的目标分配比例。
+    bucket_allocation: TwoBucketAllocationConfig,
+    /// 机会桶的执行授权方式。
+    risk_mode: PlanRiskMode,
+}
+
+impl PlanExecutionConfiguration {
+    /// 创建已校验的计划级执行配置。
+    pub fn new(
+        bucket_allocation: TwoBucketAllocationConfig,
+        risk_mode: PlanRiskMode,
+    ) -> Result<Self, PlanValidationError> {
+        match (bucket_allocation.is_core_only(), risk_mode) {
+            (true, PlanRiskMode::Fixed)
+            | (false, PlanRiskMode::Autopilot | PlanRiskMode::Approval) => Ok(Self {
+                bucket_allocation,
+                risk_mode,
+            }),
+            (true, _) => Err(PlanValidationError::CoreOnlyRequiresFixedRiskMode),
+            (false, PlanRiskMode::Fixed) => {
+                Err(PlanValidationError::OpportunityBucketRequiresRiskMode)
+            }
+        }
+    }
+
+    /// 返回计划的核心/机会桶目标比例。
+    #[must_use]
+    pub fn bucket_allocation(self) -> TwoBucketAllocationConfig {
+        self.bucket_allocation
+    }
+
+    /// 返回机会桶的执行授权方式。
+    #[must_use]
+    pub fn risk_mode(self) -> PlanRiskMode {
+        self.risk_mode
+    }
+
+    /// 重新校验已构造配置，供持久化边界验证外部数据使用。
+    pub fn validate(self) -> Result<(), PlanValidationError> {
+        Self::new(self.bucket_allocation, self.risk_mode).map(|_| ())
+    }
+}
+
+impl Default for PlanExecutionConfiguration {
+    fn default() -> Self {
+        Self::new(
+            TwoBucketAllocationConfig::new(
+                BucketAllocationRatio::new(Decimal::ONE).expect("one is a valid ratio"),
+                BucketAllocationRatio::new(Decimal::ZERO).expect("zero is a valid ratio"),
+            )
+            .expect("core-only ratios must sum to one"),
+            PlanRiskMode::Fixed,
+        )
+        .expect("core-only configuration must be valid")
+    }
 }
 
 /// 投资计划双桶投入拆分结果。
@@ -162,12 +246,14 @@ impl TwoBucketContributionSplit {
     }
 }
 
-/// MVP 支持的投资计划周期。
+/// 投资计划周期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleKind {
     /// 每月固定日期触发。
     Monthly,
+    /// 每周固定星期触发；本 PR 仅持久化配置，尚未接入自动调度器。
+    Weekly,
 }
 
 /// 持久化后的投资计划。
@@ -184,10 +270,12 @@ pub struct InvestmentPlan {
     pub base_contribution: Decimal,
     /// ISO 风格三位币种代码，已规范化为大写。
     pub currency: String,
-    /// MVP 仅支持 monthly。
+    /// 用户选择的周期。
     pub schedule_kind: ScheduleKind,
-    /// 每月执行日，范围为 1..=28。
+    /// 月度计划为月内日期 `1..=28`，周度计划为 ISO 星期 `1..=7`。
     pub schedule_day: i16,
+    /// 已校验的核心/机会桶与风险模式配置。
+    pub execution_configuration: PlanExecutionConfiguration,
     /// 单次执行金额硬上限，不是 planner 输出。
     #[serde(with = "rust_decimal::serde::str")]
     pub max_single_execution: Decimal,
@@ -211,10 +299,12 @@ pub struct CreateInvestmentPlan {
     pub base_contribution: Decimal,
     /// ISO 风格三位币种代码。
     pub currency: String,
-    /// MVP 仅支持 monthly。
+    /// 用户选择的周期。
     pub schedule_kind: ScheduleKind,
-    /// 每月执行日。
+    /// 月度计划为月内日期，周度计划为 ISO 星期。
     pub schedule_day: i16,
+    /// 已校验的核心/机会桶与风险模式配置。
+    pub execution_configuration: PlanExecutionConfiguration,
     /// 单次执行金额硬上限。
     #[serde(with = "rust_decimal::serde::str")]
     pub max_single_execution: Decimal,
@@ -228,7 +318,8 @@ impl CreateInvestmentPlan {
         let name = normalize_non_empty(self.name, MAX_NAME_LEN, PlanValidationError::InvalidName)?;
         let symbol = normalize_symbol(self.symbol)?;
         let currency = normalize_currency(self.currency)?;
-        validate_day(self.schedule_day)?;
+        validate_schedule_day(self.schedule_kind, self.schedule_day)?;
+        self.execution_configuration.validate()?;
         validate_amounts(self.base_contribution, self.max_single_execution)?;
 
         Ok(Self {
@@ -256,6 +347,10 @@ pub struct UpdateInvestmentPlan {
     pub base_contribution: Option<Decimal>,
     /// 可选的新每月执行日。
     pub schedule_day: Option<i16>,
+    /// 可选的新核心/机会桶配置。
+    pub bucket_allocation: Option<TwoBucketAllocationConfig>,
+    /// 可选的新机会桶执行授权方式。
+    pub risk_mode: Option<PlanRiskMode>,
     /// 可选的新单次执行金额硬上限。
     #[serde(
         default,
@@ -276,6 +371,8 @@ impl UpdateInvestmentPlan {
         if self.name.is_none()
             && self.base_contribution.is_none()
             && self.schedule_day.is_none()
+            && self.bucket_allocation.is_none()
+            && self.risk_mode.is_none()
             && self.max_single_execution.is_none()
             && self.is_active.is_none()
         {
@@ -286,9 +383,6 @@ impl UpdateInvestmentPlan {
             .name
             .map(|name| normalize_non_empty(name, MAX_NAME_LEN, PlanValidationError::InvalidName))
             .transpose()?;
-        if let Some(day) = self.schedule_day {
-            validate_day(day)?;
-        }
         if let Some(base) = self.base_contribution {
             validate_positive("base_contribution", base)?;
         }
@@ -297,6 +391,10 @@ impl UpdateInvestmentPlan {
         }
         if let (Some(base), Some(max)) = (self.base_contribution, self.max_single_execution) {
             validate_amounts(base, max)?;
+        }
+        if let (Some(bucket_allocation), Some(risk_mode)) = (self.bucket_allocation, self.risk_mode)
+        {
+            PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
         }
 
         Ok(Self { name, ..self })
@@ -381,9 +479,12 @@ pub enum PlanValidationError {
     /// 币种不是三位 ASCII 大写字母。
     #[error("currency must be exactly 3 ASCII uppercase letters")]
     InvalidCurrency,
-    /// 每月执行日不在 1..=28。
+    /// 月度执行日不在 1..=28。
     #[error("monthly schedule day must be between 1 and 28")]
     InvalidScheduleDay,
+    /// 周度执行日不在 ISO 星期 1..=7。
+    #[error("weekly schedule day must be an ISO weekday between 1 and 7")]
+    InvalidWeeklyScheduleDay,
     /// 执行预览日期不在 1..=31。
     #[error("execution preview day must be between 1 and 31")]
     InvalidExecutionPreviewDay,
@@ -393,6 +494,12 @@ pub enum PlanValidationError {
     /// 双桶分配比例合计不等于 1。
     #[error("bucket allocation ratios must sum to 1")]
     BucketAllocationRatiosMustSumToOne,
+    /// 仅核心桶计划未使用固定定投风险模式。
+    #[error("a core-only plan must use fixed risk mode")]
+    CoreOnlyRequiresFixedRiskMode,
+    /// 存在机会桶但未选择自动或审批风险模式。
+    #[error("a plan with an opportunity bucket must use autopilot or approval risk mode")]
+    OpportunityBucketRequiresRiskMode,
     /// 金额不是正数。
     #[error("{field} must be greater than zero")]
     NonPositiveAmount {
@@ -610,11 +717,12 @@ fn normalize_currency(value: String) -> Result<String, PlanValidationError> {
     }
 }
 
-fn validate_day(day: i16) -> Result<(), PlanValidationError> {
-    if (1..=28).contains(&day) {
-        Ok(())
-    } else {
-        Err(PlanValidationError::InvalidScheduleDay)
+fn validate_schedule_day(kind: ScheduleKind, day: i16) -> Result<(), PlanValidationError> {
+    match kind {
+        ScheduleKind::Monthly if (1..=28).contains(&day) => Ok(()),
+        ScheduleKind::Monthly => Err(PlanValidationError::InvalidScheduleDay),
+        ScheduleKind::Weekly if (1..=7).contains(&day) => Ok(()),
+        ScheduleKind::Weekly => Err(PlanValidationError::InvalidWeeklyScheduleDay),
     }
 }
 
@@ -641,7 +749,7 @@ fn preview_execution(
 ) -> Result<InvestmentPlanExecutionPreview, PlanValidationError> {
     let status = if !plan.is_active {
         ExecutionPreviewStatus::Inactive
-    } else if day_of_month == plan.schedule_day {
+    } else if plan.schedule_kind == ScheduleKind::Monthly && day_of_month == plan.schedule_day {
         ExecutionPreviewStatus::Due
     } else {
         ExecutionPreviewStatus::Waiting
@@ -704,6 +812,7 @@ mod tests {
             currency: " usd ".to_owned(),
             schedule_kind: ScheduleKind::Monthly,
             schedule_day: 15,
+            execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: money("1500.00"),
         }
     }
@@ -719,6 +828,7 @@ mod tests {
             currency: input.currency,
             schedule_kind: input.schedule_kind,
             schedule_day: input.schedule_day,
+            execution_configuration: input.execution_configuration,
             max_single_execution: input.max_single_execution,
             is_active: true,
             created_at: now,
@@ -798,6 +908,17 @@ mod tests {
                 .max_single_execution
                 .unwrap_or(plan.max_single_execution);
             validate_amounts(base, max)?;
+            if let Some(day) = input.schedule_day {
+                validate_schedule_day(plan.schedule_kind, day)?;
+            }
+            let bucket_allocation = input
+                .bucket_allocation
+                .unwrap_or(plan.execution_configuration.bucket_allocation());
+            let risk_mode = input
+                .risk_mode
+                .unwrap_or(plan.execution_configuration.risk_mode());
+            let execution_configuration =
+                PlanExecutionConfiguration::new(bucket_allocation, risk_mode)?;
 
             if let Some(name) = input.name {
                 plan.name = name;
@@ -808,6 +929,7 @@ mod tests {
             if let Some(day) = input.schedule_day {
                 plan.schedule_day = day;
             }
+            plan.execution_configuration = execution_configuration;
             if let Some(max) = input.max_single_execution {
                 plan.max_single_execution = max;
             }
@@ -925,6 +1047,55 @@ mod tests {
             ),
             Err(PlanValidationError::BucketAllocationRatiosMustSumToOne)
         );
+    }
+
+    /// 验证计划级风险模式必须与核心/机会桶占比同时满足不变量。
+    #[test]
+    fn execution_configuration_requires_explicit_mode_for_opportunity_bucket() {
+        let core_only = TwoBucketAllocationConfig::new(
+            BucketAllocationRatio::new(Decimal::ONE).unwrap(),
+            BucketAllocationRatio::new(Decimal::ZERO).unwrap(),
+        )
+        .unwrap();
+        let mixed = TwoBucketAllocationConfig::new(
+            BucketAllocationRatio::new(money("0.80")).unwrap(),
+            BucketAllocationRatio::new(money("0.20")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            PlanExecutionConfiguration::new(core_only, PlanRiskMode::Autopilot),
+            Err(PlanValidationError::CoreOnlyRequiresFixedRiskMode)
+        );
+        assert_eq!(
+            PlanExecutionConfiguration::new(mixed, PlanRiskMode::Fixed),
+            Err(PlanValidationError::OpportunityBucketRequiresRiskMode)
+        );
+        assert_eq!(
+            PlanExecutionConfiguration::new(mixed, PlanRiskMode::Approval)
+                .unwrap()
+                .risk_mode(),
+            PlanRiskMode::Approval
+        );
+    }
+
+    /// 验证周度计划可保存，但当前月度预览不会误将其视为到期计划。
+    #[tokio::test]
+    async fn weekly_schedule_is_valid_configuration_but_not_yet_monthly_due() {
+        let service = InvestmentPlanService::new(Arc::new(FakeRepository::default()));
+        let mut input = create_input();
+        input.schedule_kind = ScheduleKind::Weekly;
+        input.schedule_day = 1;
+        let created = service.create(input).await.unwrap();
+
+        let preview = service
+            .preview_execution(created.id, PreviewInvestmentPlanExecution::new(1).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(preview.schedule_kind, ScheduleKind::Weekly);
+        assert_eq!(preview.status, ExecutionPreviewStatus::Waiting);
+        assert_eq!(preview.planned_contribution, None);
     }
 
     /// 验证双桶比例以字符串形式序列化，避免浮点比例进入 JSON 边界。

@@ -136,6 +136,7 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         currency: input.currency,
         schedule_kind: input.schedule_kind,
         schedule_day: input.schedule_day,
+        execution_configuration: input.execution_configuration,
         max_single_execution: input.max_single_execution,
         is_active: true,
         created_at: now,
@@ -167,6 +168,7 @@ fn create_input() -> CreateInvestmentPlan {
         currency: "USD".to_owned(),
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
+        execution_configuration: investment_plans::PlanExecutionConfiguration::default(),
         max_single_execution: Decimal::new(1500, 0),
     }
 }
@@ -203,6 +205,85 @@ async fn create_plan_returns_normalized_plan_json() {
     assert_eq!(body["name"], json!("Core ETF"));
     assert_eq!(body["symbol"], json!("VOO"));
     assert!(body["base_contribution"].is_string());
+    assert_eq!(body["execution_configuration"]["risk_mode"], json!("fixed"));
+}
+
+/// Verify API accepts a persisted weekly plan with an explicit approval-mode bucket split.
+#[tokio::test]
+async fn create_plan_accepts_weekly_approval_bucket_configuration() {
+    let response = app(Arc::new(FakeRepository::default()))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/investment-plans")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Weekly VOO",
+                        "symbol": "VOO",
+                        "base_contribution": "100.00",
+                        "currency": "USD",
+                        "schedule_kind": "weekly",
+                        "schedule_day": 3,
+                        "bucket_allocation": {
+                            "core_ratio": "0.70",
+                            "opportunity_ratio": "0.30"
+                        },
+                        "risk_mode": "approval",
+                        "max_single_execution": "150.00"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = response_json(response).await;
+    assert_eq!(body["schedule_kind"], json!("weekly"));
+    assert_eq!(body["schedule_day"], json!(3));
+    assert_eq!(
+        body["execution_configuration"]["bucket_allocation"]["core_ratio"],
+        json!("0.70")
+    );
+    assert_eq!(
+        body["execution_configuration"]["risk_mode"],
+        json!("approval")
+    );
+}
+
+/// Verify API rejects incomplete or contradictory bucket authorization choices.
+#[tokio::test]
+async fn create_plan_rejects_incomplete_bucket_authorization() {
+    let response = app(Arc::new(FakeRepository::default()))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/investment-plans")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Incomplete config",
+                        "symbol": "VOO",
+                        "base_contribution": "100.00",
+                        "currency": "USD",
+                        "schedule_kind": "monthly",
+                        "schedule_day": 15,
+                        "bucket_allocation": {
+                            "core_ratio": "0.80",
+                            "opportunity_ratio": "0.20"
+                        },
+                        "max_single_execution": "150.00"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 /// Verify JSON extractor failures return the shared error envelope.
