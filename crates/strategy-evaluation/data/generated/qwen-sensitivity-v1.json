@@ -1,0 +1,5 @@
+{
+  "version": "qwen-sensitivity-v1-cycle-10",
+  "purpose": "Distribution sensitivity only. These frozen values are not historical Qwen reconstructions and must not be used for historical performance claims.",
+  "scores": [-0.6, 0.4, 0.0, 0.8, 0.6, 0.2, -0.2, -0.8, 0.1, -0.4]
+}

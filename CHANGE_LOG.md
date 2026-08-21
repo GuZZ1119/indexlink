@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 评分校准基线（Push 1：离线数据夹具与评估器）。
+- 涉及文件：
+  - `Cargo.toml`、`Cargo.lock`
+  - `crates/strategy-evaluation/**`
+  - `tools/generate_calibration_fixture.py`
+- 变更内容：
+  - 新增独立、离线的 `strategy-evaluation` crate；它只读取提交到仓库的版本化数据，调用既有 `evaluate_fundamental`、`evaluate_trend`、`evaluate_decision` 与 `TwoBucketContributionSplit`，不访问 API、不读取 Qwen Key、也不下单。
+  - 固定 `calibration-v1` 数据集、原始来源快照、生成器和 SHA-256 清单；美国权益范围限定为 S&P 500 与 NASDAQ Composite 指数代理，明确不是 ETF 成交价。
+  - 历史因果线固定为 90/10/0 降级；另以独立冻结 JSON 提供 Qwen 敏感性样本，仅观察动作和分数分布，禁止用于历史收益结论。
+  - 评估器只将日期 `t` 之前的 60 个按月样本传入生产函数；对照线以相同月度现金流、买入成本和期末现金口径比较固定 DCA、Core/Opportunity 意图与当前 API 实际门控口径。
+- 验证：
+  - `python3 tools/generate_calibration_fixture.py` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过（3 个聚焦测试）。
+  - `cargo run -p strategy-evaluation --locked -- crates/strategy-evaluation/data/generated/calibration-v1.report.json` 通过。
+
 ### 2026-08-20 15:30 CST
 
 - 执行模型：GPT-5 Codex。

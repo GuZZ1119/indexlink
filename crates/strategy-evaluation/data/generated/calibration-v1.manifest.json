@@ -1,0 +1,52 @@
+{
+  "dataset_version": "calibration-v1",
+  "captured_on": "2026-08-21",
+  "range": {
+    "start": "2005-01-01",
+    "end": "2026-06-30"
+  },
+  "frequency": "monthly last available trading observation",
+  "missing_value_rule": "Drop a month for an asset when any required CAPE, DGS10, VIX, or technical observation is absent; do not forward-fill or interpolate.",
+  "sources": [
+    {
+      "file": "fred_sp500_daily.csv",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500",
+      "note": "FRED SP500 daily index; used as an SPY proxy because the committed public snapshot does not claim ETF execution prices.",
+      "sha256": "94635e135f4aab22a7e77fd1c297ddf5a04cd28e592e4988e67bcf440b291416"
+    },
+    {
+      "file": "fred_nasdaqcom_daily.csv",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=NASDAQCOM",
+      "note": "FRED NASDAQ Composite daily index; used as a QQQ proxy, not as QQQ execution prices.",
+      "sha256": "f02630a4521f16197510fa81ad3f8fab60c36f5dba993f4506c4f3c58a296ff6"
+    },
+    {
+      "file": "fred_dgs10_daily.csv",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10",
+      "note": "Daily ten-year Treasury yield; the last valid observation in a calendar month is used.",
+      "sha256": "69e5371a8996b269944fbb7b4a55837ea05068c52366aff9bf5b079340a71a34"
+    },
+    {
+      "file": "cboe_vix_daily.csv",
+      "url": "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv",
+      "note": "Daily CBOE VIX close; the last valid observation in a calendar month is used.",
+      "sha256": "b057ca2243f0fb022062a03258a9e68afca7708e19a564ceedf32735c4314dc0"
+    },
+    {
+      "file": "multpl_shiller_pe.html",
+      "url": "https://www.multpl.com/shiller-pe/table/by-month",
+      "note": "Monthly Shiller CAPE HTML snapshot; values are parsed by date and never interpolated.",
+      "sha256": "d99ac7da3599a2f3eca2401f8dd5edd6c1ac4024116505b111b870f3f4916024"
+    }
+  ],
+  "generated_fixture": {
+    "file": "calibration-v1.json",
+    "sha256": "bc1761571e79c7a478d929780c70d3ec347ef8afd34782a1cc6eb81e248135de"
+  },
+  "frozen_qwen_sensitivity_fixture": {
+    "file": "qwen-sensitivity-v1.json",
+    "sha256": "56e9fc0a044b3d47c5b0aaa09e4d750aaec139aed7513c3cf211169ad3170674",
+    "scope": "Distribution sensitivity only; excluded from historical performance claims."
+  },
+  "generator": "tools/generate_calibration_fixture.py"
+}

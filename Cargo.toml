@@ -11,6 +11,7 @@ members = [
     "crates/decision-engine",
     "crates/decision-records",
     "crates/market-data",
+    "crates/strategy-evaluation",
     "apps/server",
 ]
 
