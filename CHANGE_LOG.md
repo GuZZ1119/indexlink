@@ -5,6 +5,54 @@
 ### 2026-08-21 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 C4 有期限机会预算调度研究。
+- 涉及文件：
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `crates/strategy-evaluation/src/main.rs`
+  - `crates/strategy-evaluation/data/generated/calibration-v2-c4-research.report.json`
+  - `STRATEGY_C4_RESEARCH_V1.md`
+  - `V1_1_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增仅离线研究的 C4：核心桶固定执行；机会桶以仅包含过去 12 个已完成基本面方向分数的历史排名形成 `[0.85, 1.15]` 倾斜；趋势只限制超过 `1.00` 的加码，AI 仅承担解释职责。
+  - 将每次少投的机会金额记录为带到期日的研究 lot；最多滚存三个周期，到期强制追赶；高于基线的投入只能释放已有 lot，不能预支未来外部现金流。
+  - 机器可读报告新增所有策略的机制目录、C4 现金诊断、比例敏感性中的 C4 结果和全策略公平对照。C4 修复长期现金拖累但没有证明显著 alpha 或风险调整后优势，未改动生产默认策略。
+  - 公平对照实际结果：C4 的 SPY/QQQ 相对固定 DCA 期末差分别为 `-0.04%`/`-0.05%`，现金使用率为 `99.83%`/`99.96%`；它是执行边界修正，不得表述为提高指数收益。
+  - V1.1 后续先做因子预测有效性检验，再依据预登记留出集的收益、回撤、Sortino、现金使用率与窗口胜率决定是否改动生产策略；Qwen 继续仅作解释/预警，新的机会 lot API/Web 仅在策略门槛通过后实现。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p strategy-evaluation --all-targets --all-features --locked -- -D warnings` 通过。
+  - `git diff --check` 通过。
+
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 C3 基本面/趋势解耦预登记研究。
+- 涉及文件：
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `crates/strategy-evaluation/src/main.rs`
+  - `crates/strategy-evaluation/data/generated/calibration-v2-c3-research.report.json`
+  - `STRATEGY_C3_RESEARCH_V1.md`
+  - `V1_1_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增仅离线研究的 C3：核心桶永久按用户比例投入；基本面决定机会桶 `[0.75, 1.25]` 的有界基础倍率；趋势只把“加码”连续限制到最高 `1.00`，不再输出 `TacticalDelay` 或阻断正常投入。
+  - 在不覆盖冻结 `calibration-v2` 报告的前提下生成独立 C3 机器可读结果，并增加 Sortino、最大回撤恢复月数、最差滚动窗口和 `100/0`、`80/20`、`70/30`、`50/50` 比例敏感性。
+  - C3 相比当前策略减少闲置现金并缩小终值差距，但仍落后于 C1 与匹配条件的固定 DCA；因此未修改生产默认策略、决策引擎、API、scheduler 或下单行为。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p strategy-evaluation --all-targets --all-features --locked -- -D warnings` 通过。
+  - `git diff --check` 通过。
+
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：V1.1 策略研究口径修正与连续趋势上限候选。
 - 涉及文件：
   - `tools/generate_calibration_fixture.py`

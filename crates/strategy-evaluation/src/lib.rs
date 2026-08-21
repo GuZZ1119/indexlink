@@ -36,6 +36,13 @@ const OOS_WINDOW_MONTHS: usize = 24;
 const OOS_STEP_MONTHS: usize = 12;
 const TREND_CAP_FLOOR: f64 = 0.25;
 const TREND_CAP_RISK_START: f64 = 0.50;
+const C3_FUNDAMENTAL_FLOOR: f64 = 0.75;
+const C3_ADDITION_CEILING: f64 = 1.25;
+const C3_TAIL_RISK_START: f64 = 0.75;
+const C4_FUNDAMENTAL_FLOOR: f64 = 0.85;
+const C4_ADDITION_CEILING: f64 = 1.15;
+const C4_FUNDAMENTAL_LOOKBACK_MONTHS: usize = 12;
+const C4_OPPORTUNITY_CARRY_PERIODS: usize = 3;
 
 /// Errors returned while reading or evaluating the committed calibration fixture.
 #[derive(Debug, Error)]
@@ -62,6 +69,7 @@ pub enum EvaluationError {
 pub struct CalibrationReport {
     dataset_version: String,
     assumptions: Assumptions,
+    strategy_catalog: Vec<StrategyDefinition>,
     assets: Vec<AssetReport>,
     qwen_sensitivity: QwenSensitivityReport,
 }
@@ -75,7 +83,7 @@ pub fn report_json(report: &CalibrationReport) -> Result<String, EvaluationError
 pub fn evaluate_fixture() -> Result<CalibrationReport, EvaluationError> {
     let dataset: FixtureDataset =
         serde_json::from_str(include_str!("../data/generated/calibration-v2.json"))?;
-    let configuration = execution_configuration()?;
+    let configuration = execution_configuration(Decimal::new(CORE_RATIO, 1))?;
     let mut evaluated_assets = Vec::new();
     let mut fallback_samples = Vec::new();
 
@@ -96,6 +104,7 @@ pub fn evaluate_fixture() -> Result<CalibrationReport, EvaluationError> {
             cost_model: "Each strategy buys at the first strictly later daily close × (1 + buy_cost_bps / 10,000); cash, including unallocated opportunity cash, remains in terminal wealth and earns no interest.".to_owned(),
             historical_ai_policy: "Historical causal results use DecisionSentiment::Unavailable and the current 90/10/0 fallback.".to_owned(),
         },
+        strategy_catalog: strategy_catalog(),
         assets: evaluated_assets,
         qwen_sensitivity: qwen_sensitivity(&fallback_samples),
     })
@@ -139,6 +148,14 @@ struct Assumptions {
 }
 
 #[derive(Debug, Serialize)]
+struct StrategyDefinition {
+    id: String,
+    label: String,
+    status: String,
+    mechanical_difference: String,
+}
+
+#[derive(Debug, Serialize)]
 struct AssetReport {
     asset_id: String,
     display_name: String,
@@ -156,6 +173,7 @@ struct AssetReport {
     current_api_vs_intent_terminal_difference_percent: f64,
     rolling_out_of_sample: Vec<RollingWindow>,
     experimental_candidates: Vec<CandidateReport>,
+    allocation_sensitivity: Vec<AllocationSensitivity>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +205,8 @@ struct PerformanceMetrics {
     terminal_wealth_usd: f64,
     maximum_drawdown_percent: f64,
     annualized_volatility_percent: Option<f64>,
+    sortino_ratio: Option<f64>,
+    maximum_drawdown_recovery_months: Option<u32>,
     total_external_cash_usd: f64,
     total_invested_usd: f64,
     cash_utilisation_percent: f64,
@@ -212,14 +232,38 @@ struct CandidateReport {
     performance: PerformanceMetrics,
     terminal_difference_vs_dca_percent: f64,
     rolling_out_of_sample: Vec<CandidateRollingWindow>,
+    worst_rolling_window: Option<CandidateRollingWindow>,
+    c4_cash_diagnostics: Option<C4CashDiagnostics>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct CandidateRollingWindow {
     start: String,
     end: String,
     months: usize,
     terminal_difference_vs_dca_percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct AllocationSensitivity {
+    core_ratio: f64,
+    opportunity_ratio: f64,
+    fixed_dca: PerformanceMetrics,
+    current_core_opportunity: PerformanceMetrics,
+    c1_bounded_continuous: PerformanceMetrics,
+    c2_trend_continuous_cap: PerformanceMetrics,
+    c3_fundamental_with_trend_addition_cap: PerformanceMetrics,
+    c4_bounded_budget_with_deadline: PerformanceMetrics,
+}
+
+#[derive(Debug, Serialize)]
+struct C4CashDiagnostics {
+    fundamental_warmup_months: usize,
+    maximum_carry_periods: usize,
+    forced_catch_up_usd: f64,
+    released_for_additional_investment_usd: f64,
+    matured_lot_count: usize,
+    maximum_deferred_opportunity_cash_usd: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -251,17 +295,69 @@ struct DecisionMonth {
     fallback: DecisionSignal,
 }
 
-fn execution_configuration() -> Result<PlanExecutionConfiguration, EvaluationError> {
+fn execution_configuration(
+    core_ratio: Decimal,
+) -> Result<PlanExecutionConfiguration, EvaluationError> {
+    let opportunity_ratio = Decimal::ONE - core_ratio;
     let allocation = TwoBucketAllocationConfig::new(
-        BucketAllocationRatio::new(Decimal::new(CORE_RATIO, 1))?,
-        BucketAllocationRatio::new(Decimal::new(OPPORTUNITY_RATIO, 1))?,
+        BucketAllocationRatio::new(core_ratio)?,
+        BucketAllocationRatio::new(opportunity_ratio)?,
     )?;
     PlanExecutionConfiguration::new_with_cash_policy(
         allocation,
-        PlanRiskMode::Autopilot,
-        OpportunityCashPolicy::CarryForward,
+        if opportunity_ratio.is_zero() {
+            PlanRiskMode::Fixed
+        } else {
+            PlanRiskMode::Autopilot
+        },
+        if opportunity_ratio.is_zero() {
+            OpportunityCashPolicy::ExpireEachPeriod
+        } else {
+            OpportunityCashPolicy::CarryForward
+        },
     )
     .map_err(EvaluationError::from)
+}
+
+fn strategy_catalog() -> Vec<StrategyDefinition> {
+    vec![
+        StrategyDefinition {
+            id: "fixed_dca".to_owned(),
+            label: "Fixed DCA / 固定定投".to_owned(),
+            status: "benchmark".to_owned(),
+            mechanical_difference: "Invest the full period budget on every scheduled execution date; it does not use fundamental, trend, AI, or opportunity cash.".to_owned(),
+        },
+        StrategyDefinition {
+            id: "current_core_opportunity".to_owned(),
+            label: "Current Core/Opportunity / 当前双桶".to_owned(),
+            status: "current production-shaped research line".to_owned(),
+            mechanical_difference: "Keep the core bucket, but let the current composite decision multiplier and action reduce the opportunity bucket; unspent opportunity cash rolls forward in this research configuration.".to_owned(),
+        },
+        StrategyDefinition {
+            id: "bounded_continuous_opportunity_v1".to_owned(),
+            label: "C1 bounded continuous / C1 连续有界".to_owned(),
+            status: "experimental; not a production default".to_owned(),
+            mechanical_difference: "Keep the core bucket and replace only the opportunity multiplier with 0.75 + 0.50 × current final score, bounded to [0.75, 1.25]; it removes the global trend veto.".to_owned(),
+        },
+        StrategyDefinition {
+            id: "trend_continuous_opportunity_cap_v1".to_owned(),
+            label: "C2 trend continuous cap / C2 趋势连续压低".to_owned(),
+            status: "experimental; negative control".to_owned(),
+            mechanical_difference: "Keep the core bucket, then multiply the fundamental-derived opportunity amount by a trend-risk cap in [0.25, 1.00]; it can still materially defer opportunity cash.".to_owned(),
+        },
+        StrategyDefinition {
+            id: "fundamental_with_trend_addition_cap_v1".to_owned(),
+            label: "C3 trend caps additions / C3 趋势只限加码".to_owned(),
+            status: "experimental; not a production default".to_owned(),
+            mechanical_difference: "Keep the core bucket; fundamental sets the opportunity multiplier in [0.75, 1.25], while trend only caps an overweight down to 1.00 and never emits TacticalDelay.".to_owned(),
+        },
+        StrategyDefinition {
+            id: "bounded_budget_with_deadline_v1".to_owned(),
+            label: "C4 bounded budget with deadline / C4 有期限预算调度".to_owned(),
+            status: "experimental; predeclared; not a production default".to_owned(),
+            mechanical_difference: "Keep the core bucket fixed. Rank only prior directional fundamental scores to set a [0.85, 1.15] opportunity tilt; trend caps only the part above 1.00. Deferred opportunity cash expires after three periods and is forcibly caught up, so it cannot accumulate indefinitely. AI remains explanatory-only.".to_owned(),
+        },
+    ]
 }
 
 fn evaluate_asset(asset: &FixtureAsset) -> Result<Vec<DecisionMonth>, EvaluationError> {
@@ -347,6 +443,8 @@ fn asset_report(
     let experimental_candidates = vec![
         bounded_continuous_candidate(samples, configuration, &dca)?,
         trend_continuous_cap_candidate(samples, configuration, &dca)?,
+        fundamental_trend_addition_cap_candidate(samples, configuration, &dca)?,
+        bounded_budget_with_deadline_candidate(samples, configuration, &dca)?,
     ];
 
     Ok(AssetReport {
@@ -374,6 +472,7 @@ fn asset_report(
         fixed_dca: dca,
         rolling_out_of_sample,
         experimental_candidates,
+        allocation_sensitivity: allocation_sensitivity(samples)?,
     })
 }
 
@@ -384,6 +483,7 @@ enum ExecutionMode {
     CurrentApiEffective,
     CandidateBoundedContinuous,
     CandidateTrendContinuousCap,
+    CandidateFundamentalTrendAdditionCap,
 }
 
 fn simulate(
@@ -409,6 +509,13 @@ fn simulate(
                     trend_continuous_cap_multiplier(row.fallback.fundamental_score, &row.trend);
                 (multiplier.to_action(), multiplier)
             }
+            ExecutionMode::CandidateFundamentalTrendAdditionCap => {
+                let multiplier = fundamental_trend_addition_cap_multiplier(
+                    row.fallback.fundamental_score,
+                    &row.trend,
+                );
+                (multiplier.to_action(), multiplier)
+            }
             _ => (row.fallback.action, row.fallback.multiplier),
         };
         let intended = TwoBucketContributionSplit::from_decision_with_carry(
@@ -427,6 +534,9 @@ fn simulate(
             ExecutionMode::CurrentApiEffective => intended.recommended_contribution(),
             ExecutionMode::CandidateBoundedContinuous => intended.recommended_contribution(),
             ExecutionMode::CandidateTrendContinuousCap => intended.recommended_contribution(),
+            ExecutionMode::CandidateFundamentalTrendAdditionCap => {
+                intended.recommended_contribution()
+            }
         };
         if !matches!(mode, ExecutionMode::FixedDca) {
             opportunity_cash = (opportunity_cash + intended.opportunity_budget()
@@ -480,7 +590,9 @@ fn bounded_continuous_candidate(
             fixed_dca.terminal_wealth_usd,
         ),
         performance,
+        worst_rolling_window: worst_rolling_window(&rolling_out_of_sample),
         rolling_out_of_sample,
+        c4_cash_diagnostics: None,
     })
 }
 
@@ -524,8 +636,238 @@ fn trend_continuous_cap_candidate(
             fixed_dca.terminal_wealth_usd,
         ),
         performance,
+        worst_rolling_window: worst_rolling_window(&rolling_out_of_sample),
         rolling_out_of_sample,
+        c4_cash_diagnostics: None,
     })
+}
+
+fn fundamental_trend_addition_cap_candidate(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+    fixed_dca: &PerformanceMetrics,
+) -> Result<CandidateReport, EvaluationError> {
+    let performance = simulate(
+        samples,
+        configuration,
+        ExecutionMode::CandidateFundamentalTrendAdditionCap,
+    )?;
+    let rolling_out_of_sample = (0..samples.len())
+        .step_by(OOS_STEP_MONTHS)
+        .filter_map(|start| samples.get(start..start + OOS_WINDOW_MONTHS))
+        .map(|window| {
+            let candidate = simulate(
+                window,
+                configuration,
+                ExecutionMode::CandidateFundamentalTrendAdditionCap,
+            )?;
+            let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
+            Ok(CandidateRollingWindow {
+                start: window[0].decision_date.to_string(),
+                end: window[window.len() - 1].decision_date.to_string(),
+                months: window.len(),
+                terminal_difference_vs_dca_percent: relative_difference(
+                    candidate.terminal_wealth_usd,
+                    dca.terminal_wealth_usd,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, EvaluationError>>()?;
+    Ok(CandidateReport {
+        id: "fundamental_with_trend_addition_cap_v1".to_owned(),
+        status: "experimental; predeclared; not a production default".to_owned(),
+        rule: "Keep the core bucket fixed. Use the directional fundamental score alone for an opportunity multiplier bounded to [0.75, 1.25]. Trend never reduces normal opportunity investment: it only caps a fundamental-driven overweight from 1.25 down continuously to 1.00 when max(MA200-distance, RSI, VIX) raw tail risk rises from 0.75 to 1.00. Trend never emits TacticalDelay in this evaluation-only candidate.".to_owned(),
+        terminal_difference_vs_dca_percent: relative_difference(
+            performance.terminal_wealth_usd,
+            fixed_dca.terminal_wealth_usd,
+        ),
+        worst_rolling_window: worst_rolling_window(&rolling_out_of_sample),
+        performance,
+        rolling_out_of_sample,
+        c4_cash_diagnostics: None,
+    })
+}
+
+struct C4Simulation {
+    performance: PerformanceMetrics,
+    diagnostics: C4CashDiagnostics,
+}
+
+#[derive(Debug)]
+struct DeferredOpportunityLot {
+    amount_usd: f64,
+    deadline_period: usize,
+}
+
+fn bounded_budget_with_deadline_candidate(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+    fixed_dca: &PerformanceMetrics,
+) -> Result<CandidateReport, EvaluationError> {
+    let simulation = simulate_bounded_budget_with_deadline(samples, configuration)?;
+    let rolling_out_of_sample = (0..samples.len())
+        .step_by(OOS_STEP_MONTHS)
+        .filter_map(|start| samples.get(start..start + OOS_WINDOW_MONTHS))
+        .map(|window| {
+            let candidate = simulate_bounded_budget_with_deadline(window, configuration)?;
+            let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
+            Ok(CandidateRollingWindow {
+                start: window[0].decision_date.to_string(),
+                end: window[window.len() - 1].decision_date.to_string(),
+                months: window.len(),
+                terminal_difference_vs_dca_percent: relative_difference(
+                    candidate.performance.terminal_wealth_usd,
+                    dca.terminal_wealth_usd,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, EvaluationError>>()?;
+    Ok(CandidateReport {
+        id: "bounded_budget_with_deadline_v1".to_owned(),
+        status: "experimental; predeclared; not a production default".to_owned(),
+        rule: "Keep the core bucket fixed. For the opportunity bucket, rank the current directional fundamental score only against the preceding 12 decision scores; use the resulting rank to set a [0.85, 1.15] multiplier. Trend may cap only the part above 1.00. If a multiplier is below 1.00, the difference enters a dated opportunity-cash lot; each lot must be invested after at most three scheduled periods. Higher multipliers may spend existing non-expired lots but never borrow future cash. AI remains explanatory-only.".to_owned(),
+        terminal_difference_vs_dca_percent: relative_difference(
+            simulation.performance.terminal_wealth_usd,
+            fixed_dca.terminal_wealth_usd,
+        ),
+        worst_rolling_window: worst_rolling_window(&rolling_out_of_sample),
+        performance: simulation.performance,
+        rolling_out_of_sample,
+        c4_cash_diagnostics: Some(simulation.diagnostics),
+    })
+}
+
+fn simulate_bounded_budget_with_deadline(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+) -> Result<C4Simulation, EvaluationError> {
+    let allocation = configuration.bucket_allocation();
+    let core_budget = PERIOD_BUDGET as f64
+        * allocation
+            .core_ratio()
+            .value()
+            .to_f64()
+            .ok_or(EvaluationError::InsufficientHistory)?;
+    let opportunity_budget = PERIOD_BUDGET as f64
+        * allocation
+            .opportunity_ratio()
+            .value()
+            .to_f64()
+            .ok_or(EvaluationError::InsufficientHistory)?;
+    let mut state = PortfolioState::default();
+    let mut deferred_lots = Vec::new();
+    let mut forced_catch_up_usd = 0.0_f64;
+    let mut released_for_additional_investment_usd = 0.0_f64;
+    let mut matured_lot_count = 0;
+    let mut maximum_deferred_opportunity_cash_usd = 0.0_f64;
+
+    for (period, row) in samples.iter().enumerate() {
+        state.deposit(row.decision_date, PERIOD_BUDGET as f64);
+        let multiplier = c4_opportunity_multiplier(samples, period, &row.trend);
+        let base_opportunity = opportunity_budget * multiplier.min(1.0);
+        let deferred_current = (opportunity_budget - base_opportunity).max(0.0);
+        let forced_catch_up = take_expired_lots(&mut deferred_lots, period);
+        forced_catch_up_usd += forced_catch_up.amount_usd;
+        matured_lot_count += forced_catch_up.count;
+
+        let additional_requested = opportunity_budget * (multiplier - 1.0).max(0.0);
+        let additional_released = take_oldest_lots(&mut deferred_lots, additional_requested);
+        released_for_additional_investment_usd += additional_released;
+        if deferred_current > 0.0 {
+            deferred_lots.push(DeferredOpportunityLot {
+                amount_usd: deferred_current,
+                deadline_period: period + C4_OPPORTUNITY_CARRY_PERIODS,
+            });
+        }
+        let deferred_total = deferred_lots.iter().map(|lot| lot.amount_usd).sum::<f64>();
+        maximum_deferred_opportunity_cash_usd =
+            maximum_deferred_opportunity_cash_usd.max(deferred_total);
+
+        let requested =
+            core_budget + base_opportunity + forced_catch_up.amount_usd + additional_released;
+        let spend = requested.min(MAX_SINGLE_EXECUTION as f64);
+        state.buy(row.execution_date, spend, row.execution_close);
+        state.mark_to_market(row.execution_date, row.execution_close);
+    }
+
+    let terminal_opportunity_cash_usd = deferred_lots.iter().map(|lot| lot.amount_usd).sum();
+    Ok(C4Simulation {
+        performance: state.metrics(terminal_opportunity_cash_usd),
+        diagnostics: C4CashDiagnostics {
+            fundamental_warmup_months: C4_FUNDAMENTAL_LOOKBACK_MONTHS,
+            maximum_carry_periods: C4_OPPORTUNITY_CARRY_PERIODS,
+            forced_catch_up_usd,
+            released_for_additional_investment_usd,
+            matured_lot_count,
+            maximum_deferred_opportunity_cash_usd,
+        },
+    })
+}
+
+struct ExpiredLots {
+    amount_usd: f64,
+    count: usize,
+}
+
+fn take_expired_lots(lots: &mut Vec<DeferredOpportunityLot>, period: usize) -> ExpiredLots {
+    let mut amount_usd = 0.0;
+    let mut count = 0;
+    lots.retain(|lot| {
+        if lot.deadline_period <= period {
+            amount_usd += lot.amount_usd;
+            count += 1;
+            false
+        } else {
+            true
+        }
+    });
+    ExpiredLots { amount_usd, count }
+}
+
+fn take_oldest_lots(lots: &mut Vec<DeferredOpportunityLot>, requested: f64) -> f64 {
+    let mut remaining = requested;
+    let mut released = 0.0;
+    for lot in lots.iter_mut() {
+        if remaining <= 0.0 {
+            break;
+        }
+        let amount = lot.amount_usd.min(remaining);
+        lot.amount_usd -= amount;
+        remaining -= amount;
+        released += amount;
+    }
+    lots.retain(|lot| lot.amount_usd > f64::EPSILON);
+    released
+}
+
+fn c4_opportunity_multiplier(samples: &[DecisionMonth], index: usize, trend: &TrendSignal) -> f64 {
+    let fundamental_multiplier = c4_fundamental_multiplier(samples, index);
+    fundamental_multiplier.min(c4_trend_addition_cap(trend))
+}
+
+fn c4_fundamental_multiplier(samples: &[DecisionMonth], index: usize) -> f64 {
+    if index < C4_FUNDAMENTAL_LOOKBACK_MONTHS {
+        return 1.0;
+    }
+    let current = samples[index].fallback.fundamental_score.value();
+    let history = &samples[index - C4_FUNDAMENTAL_LOOKBACK_MONTHS..index];
+    let rank = history
+        .iter()
+        .filter(|row| row.fallback.fundamental_score.value() <= current)
+        .count() as f64
+        / history.len() as f64;
+    C4_FUNDAMENTAL_FLOOR + (C4_ADDITION_CEILING - C4_FUNDAMENTAL_FLOOR) * rank
+}
+
+fn c4_trend_addition_cap(trend: &TrendSignal) -> f64 {
+    let raw_tail_risk = trend
+        .ma_distance_percentile
+        .value()
+        .max(trend.rsi_percentile.value())
+        .max(trend.vix_percentile.value());
+    let normalised_tail_risk =
+        ((raw_tail_risk - C3_TAIL_RISK_START) / (1.0 - C3_TAIL_RISK_START)).clamp(0.0, 1.0);
+    C4_ADDITION_CEILING - (C4_ADDITION_CEILING - 1.0) * normalised_tail_risk
 }
 
 fn trend_continuous_cap_multiplier(
@@ -542,6 +884,77 @@ fn trend_continuous_cap_multiplier(
         ((raw_tail_risk - TREND_CAP_RISK_START) / (1.0 - TREND_CAP_RISK_START)).clamp(0.0, 1.0);
     let trend_cap = 1.0 - (1.0 - TREND_CAP_FLOOR) * normalised_tail_risk;
     Multiplier::new_clamped(fundamental_multiplier.value() * trend_cap)
+}
+
+fn fundamental_trend_addition_cap_multiplier(
+    fundamental_score: Percentile,
+    trend: &TrendSignal,
+) -> Multiplier {
+    let fundamental_multiplier = multiplier_from_score(fundamental_score)
+        .value()
+        .clamp(C3_FUNDAMENTAL_FLOOR, C3_ADDITION_CEILING);
+    let raw_tail_risk = trend
+        .ma_distance_percentile
+        .value()
+        .max(trend.rsi_percentile.value())
+        .max(trend.vix_percentile.value());
+    let normalised_tail_risk =
+        ((raw_tail_risk - C3_TAIL_RISK_START) / (1.0 - C3_TAIL_RISK_START)).clamp(0.0, 1.0);
+    let trend_addition_cap =
+        C3_ADDITION_CEILING - (C3_ADDITION_CEILING - 1.0) * normalised_tail_risk;
+    Multiplier::new_clamped(fundamental_multiplier.min(trend_addition_cap))
+}
+
+fn allocation_sensitivity(
+    samples: &[DecisionMonth],
+) -> Result<Vec<AllocationSensitivity>, EvaluationError> {
+    [100_i64, 80, 70, 50]
+        .into_iter()
+        .map(|core_percentage| {
+            let core_ratio = Decimal::new(core_percentage, 2);
+            let configuration = execution_configuration(core_ratio)?;
+            Ok(AllocationSensitivity {
+                core_ratio: core_ratio.to_f64().unwrap_or_default(),
+                opportunity_ratio: (Decimal::ONE - core_ratio).to_f64().unwrap_or_default(),
+                fixed_dca: simulate(samples, configuration, ExecutionMode::FixedDca)?,
+                current_core_opportunity: simulate(
+                    samples,
+                    configuration,
+                    ExecutionMode::CoreOpportunityIntent,
+                )?,
+                c1_bounded_continuous: simulate(
+                    samples,
+                    configuration,
+                    ExecutionMode::CandidateBoundedContinuous,
+                )?,
+                c2_trend_continuous_cap: simulate(
+                    samples,
+                    configuration,
+                    ExecutionMode::CandidateTrendContinuousCap,
+                )?,
+                c3_fundamental_with_trend_addition_cap: simulate(
+                    samples,
+                    configuration,
+                    ExecutionMode::CandidateFundamentalTrendAdditionCap,
+                )?,
+                c4_bounded_budget_with_deadline: simulate_bounded_budget_with_deadline(
+                    samples,
+                    configuration,
+                )?
+                .performance,
+            })
+        })
+        .collect()
+}
+
+fn worst_rolling_window(windows: &[CandidateRollingWindow]) -> Option<CandidateRollingWindow> {
+    windows
+        .iter()
+        .min_by(|left, right| {
+            left.terminal_difference_vs_dca_percent
+                .total_cmp(&right.terminal_difference_vs_dca_percent)
+        })
+        .cloned()
 }
 
 fn multiplier_from_score(score: Percentile) -> Multiplier {
@@ -627,6 +1040,8 @@ impl PortfolioState {
             maximum_drawdown_percent: maximum_drawdown(&self.nav_values) * 100.0,
             annualized_volatility_percent: annualized_volatility(&self.period_returns)
                 .map(|value| value * 100.0),
+            sortino_ratio: sortino_ratio(&self.period_returns),
+            maximum_drawdown_recovery_months: maximum_drawdown_recovery_months(&self.nav_values),
             total_external_cash_usd: self.external_cash,
             total_invested_usd: self.invested,
             cash_utilisation_percent: if self.external_cash == 0.0 {
@@ -809,6 +1224,50 @@ fn annualized_volatility(returns: &[f64]) -> Option<f64> {
     Some(variance.sqrt() * 12.0_f64.sqrt())
 }
 
+fn sortino_ratio(returns: &[f64]) -> Option<f64> {
+    if returns.len() < 2 {
+        return None;
+    }
+    let downside_deviation = (returns
+        .iter()
+        .map(|value| value.min(0.0).powi(2))
+        .sum::<f64>()
+        / returns.len() as f64)
+        .sqrt();
+    (downside_deviation > 0.0)
+        .then(|| mean(returns.iter().copied()) / downside_deviation * 12.0_f64.sqrt())
+}
+
+fn maximum_drawdown_recovery_months(values: &[f64]) -> Option<u32> {
+    let mut peak_value = 0.0_f64;
+    let mut peak_index = 0_usize;
+    let mut maximum_drawdown = 0.0_f64;
+    let mut drawdown_peak = 0_usize;
+    let mut drawdown_trough = 0_usize;
+    for (index, value) in values.iter().enumerate() {
+        if *value > peak_value {
+            peak_value = *value;
+            peak_index = index;
+        }
+        if peak_value > 0.0 {
+            let drawdown = (peak_value - value) / peak_value;
+            if drawdown > maximum_drawdown {
+                maximum_drawdown = drawdown;
+                drawdown_peak = peak_index;
+                drawdown_trough = index;
+            }
+        }
+    }
+    (maximum_drawdown > 0.0).then(|| {
+        values
+            .iter()
+            .enumerate()
+            .skip(drawdown_trough + 1)
+            .find(|(_, value)| **value >= values[drawdown_peak])
+            .map(|(recovery_index, _)| (recovery_index - drawdown_trough) as u32)
+    })?
+}
+
 fn xirr(flows: &[(NaiveDate, f64)]) -> Option<f64> {
     let first = flows.first()?.0;
     let npv = |rate: f64| -> f64 {
@@ -897,10 +1356,90 @@ mod tests {
         );
     }
 
+    /// Verify C3 only removes an overweight and never uses trend to cut normal input.
+    #[test]
+    fn c3_trend_caps_only_fundamental_additions() {
+        let neutral = quant_engine::TrendSignal {
+            score: Percentile::new(0.5).unwrap(),
+            ma_distance_percentile: Percentile::new(0.5).unwrap(),
+            rsi_percentile: Percentile::new(0.5).unwrap(),
+            vix_percentile: Percentile::new(0.5).unwrap(),
+            regime: quant_engine::TrendRegime::Neutral,
+        };
+        let severe = quant_engine::TrendSignal {
+            score: Percentile::new(0.0).unwrap(),
+            ma_distance_percentile: Percentile::new(1.0).unwrap(),
+            rsi_percentile: Percentile::new(1.0).unwrap(),
+            vix_percentile: Percentile::new(1.0).unwrap(),
+            regime: quant_engine::TrendRegime::FallingKnife,
+        };
+
+        assert_eq!(
+            fundamental_trend_addition_cap_multiplier(Percentile::new(0.9).unwrap(), &neutral)
+                .value(),
+            C3_ADDITION_CEILING
+        );
+        assert_eq!(
+            fundamental_trend_addition_cap_multiplier(Percentile::new(0.9).unwrap(), &severe)
+                .value(),
+            1.0
+        );
+        assert_eq!(
+            fundamental_trend_addition_cap_multiplier(Percentile::new(0.1).unwrap(), &severe)
+                .value(),
+            C3_FUNDAMENTAL_FLOOR
+        );
+    }
+
+    /// Verify C4 uses only completed factor history and trend never cuts its base input.
+    #[test]
+    fn c4_preserves_base_opportunity_and_uses_a_bounded_prior_rank() {
+        let dataset: FixtureDataset =
+            serde_json::from_str(include_str!("../data/generated/calibration-v2.json")).unwrap();
+        let samples = evaluate_asset(&dataset.assets[0]).unwrap();
+        let severe = quant_engine::TrendSignal {
+            score: Percentile::new(0.0).unwrap(),
+            ma_distance_percentile: Percentile::new(1.0).unwrap(),
+            rsi_percentile: Percentile::new(1.0).unwrap(),
+            vix_percentile: Percentile::new(1.0).unwrap(),
+            regime: quant_engine::TrendRegime::FallingKnife,
+        };
+
+        assert_eq!(c4_fundamental_multiplier(&samples, 0), 1.0);
+        for index in C4_FUNDAMENTAL_LOOKBACK_MONTHS..samples.len() {
+            let fundamental = c4_fundamental_multiplier(&samples, index);
+            assert!((C4_FUNDAMENTAL_FLOOR..=C4_ADDITION_CEILING).contains(&fundamental));
+            let multiplier = c4_opportunity_multiplier(&samples, index, &severe);
+            assert!(multiplier >= C4_FUNDAMENTAL_FLOOR);
+            assert!(multiplier <= 1.0);
+        }
+    }
+
+    /// Verify C4 expired opportunity cash is released on its deadline, not discarded.
+    #[test]
+    fn c4_expired_cash_is_forced_to_catch_up() {
+        let mut lots = vec![
+            DeferredOpportunityLot {
+                amount_usd: 30.0,
+                deadline_period: 2,
+            },
+            DeferredOpportunityLot {
+                amount_usd: 40.0,
+                deadline_period: 3,
+            },
+        ];
+        let expired = take_expired_lots(&mut lots, 2);
+
+        assert_eq!(expired.count, 1);
+        assert_eq!(expired.amount_usd, 30.0);
+        assert_eq!(lots.len(), 1);
+        assert_eq!(lots[0].amount_usd, 40.0);
+    }
+
     /// Verify a trend cap never removes the fixed core contribution.
     #[test]
     fn trend_candidate_preserves_core_for_every_scored_observation() {
-        let configuration = execution_configuration().unwrap();
+        let configuration = execution_configuration(Decimal::new(CORE_RATIO, 1)).unwrap();
         let dataset: FixtureDataset =
             serde_json::from_str(include_str!("../data/generated/calibration-v2.json")).unwrap();
         for asset in dataset.assets {
@@ -920,6 +1459,22 @@ mod tests {
                 .unwrap();
                 assert_eq!(split.core_contribution(), Decimal::new(700, 0));
                 assert_ne!(multiplier.to_action(), Action::TacticalDelay);
+
+                let c3_multiplier = fundamental_trend_addition_cap_multiplier(
+                    sample.fallback.fundamental_score,
+                    &sample.trend,
+                );
+                let c3_split = TwoBucketContributionSplit::from_decision_with_carry(
+                    Decimal::new(PERIOD_BUDGET, 0),
+                    Decimal::new(MAX_SINGLE_EXECUTION, 0),
+                    configuration,
+                    c3_multiplier.to_action(),
+                    c3_multiplier,
+                    Decimal::ZERO,
+                )
+                .unwrap();
+                assert_eq!(c3_split.core_contribution(), Decimal::new(700, 0));
+                assert_ne!(c3_multiplier.to_action(), Action::TacticalDelay);
             }
         }
     }
@@ -930,11 +1485,20 @@ mod tests {
         let report = report_json(&evaluate_fixture().unwrap()).unwrap();
         let value: serde_json::Value = serde_json::from_str(&report).unwrap();
         for asset in value["assets"].as_array().unwrap() {
-            let metrics = &asset["core_opportunity_intent"];
-            assert!(
-                metrics["total_invested_usd"].as_f64().unwrap()
-                    <= metrics["total_external_cash_usd"].as_f64().unwrap()
+            let mut metrics = vec![&asset["core_opportunity_intent"], &asset["fixed_dca"]];
+            metrics.extend(
+                asset["experimental_candidates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|candidate| &candidate["performance"]),
             );
+            for metric in metrics {
+                assert!(
+                    metric["total_invested_usd"].as_f64().unwrap()
+                        <= metric["total_external_cash_usd"].as_f64().unwrap()
+                );
+            }
         }
     }
 }
