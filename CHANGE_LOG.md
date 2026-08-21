@@ -5,6 +5,25 @@
 ### 2026-08-21 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 评分校准基线（Push 3：预登记候选与样本外对照）。
+- 涉及文件：
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `crates/strategy-evaluation/data/generated/calibration-v1.report.json`
+  - `STRATEGY_CALIBRATION_CANDIDATES_V1.md`
+  - `V1_1_PLAN.md`
+- 变更内容：
+  - 仅新增评估专用、非生产的 C1：核心桶维持 70%，机会桶倍率预先固定为 `0.75 + 0.50 × final_score` 且限定在 `[0.75, 1.25]`，评估中不把非中性趋势升级为整笔订单 veto。
+  - 在完全相同的冻结数据、外部现金流、5 bps 成本、现金口径和 24 个月滚动样本外窗口下比较 C1 与固定 DCA；结果仍未显示稳定跑赢，因此不提升为默认策略。
+  - 明确后续候选须先登记再看留出集，禁止根据收益结果改倍率或筛选窗口。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo run -p strategy-evaluation --locked -- crates/strategy-evaluation/data/generated/calibration-v1.report.json` 通过。
+
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：V1.1 评分校准基线（Push 2：分布、风险与样本外报告）。
 - 涉及文件：
   - `crates/strategy-evaluation/src/lib.rs`

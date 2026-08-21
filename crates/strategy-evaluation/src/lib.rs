@@ -151,6 +151,7 @@ struct AssetReport {
     intent_vs_dca_terminal_difference_percent: f64,
     current_api_vs_intent_terminal_difference_percent: f64,
     rolling_out_of_sample: Vec<RollingWindow>,
+    experimental_candidates: Vec<CandidateReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +198,24 @@ struct RollingWindow {
     core_opportunity_intent: PerformanceMetrics,
     fixed_dca: PerformanceMetrics,
     terminal_difference_percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct CandidateReport {
+    id: String,
+    status: String,
+    rule: String,
+    performance: PerformanceMetrics,
+    terminal_difference_vs_dca_percent: f64,
+    rolling_out_of_sample: Vec<CandidateRollingWindow>,
+}
+
+#[derive(Debug, Serialize)]
+struct CandidateRollingWindow {
+    start: String,
+    end: String,
+    months: usize,
+    terminal_difference_vs_dca_percent: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -318,6 +337,7 @@ fn asset_report(
             })
         })
         .collect::<Result<Vec<_>, EvaluationError>>()?;
+    let experimental_candidates = vec![bounded_continuous_candidate(samples, configuration, &dca)?];
 
     Ok(AssetReport {
         asset_id: asset.id.clone(),
@@ -343,6 +363,7 @@ fn asset_report(
         current_api_effective: current_api,
         fixed_dca: dca,
         rolling_out_of_sample,
+        experimental_candidates,
     })
 }
 
@@ -351,6 +372,7 @@ enum ExecutionMode {
     FixedDca,
     CoreOpportunityIntent,
     CurrentApiEffective,
+    CandidateBoundedContinuous,
 }
 
 fn simulate(
@@ -364,12 +386,21 @@ fn simulate(
     let mut state = PortfolioState::default();
     for row in samples {
         state.deposit(row.date, PERIOD_BUDGET as f64);
+        let (action, multiplier) = match mode {
+            ExecutionMode::CandidateBoundedContinuous => {
+                let multiplier = core_domain::Multiplier::new_clamped(
+                    0.75 + 0.5 * row.fallback.final_score.value(),
+                );
+                (multiplier.to_action(), multiplier)
+            }
+            _ => (row.fallback.action, row.fallback.multiplier),
+        };
         let intended = TwoBucketContributionSplit::from_decision_with_carry(
             budget,
             maximum,
             configuration,
-            row.fallback.action,
-            row.fallback.multiplier,
+            action,
+            multiplier,
             opportunity_cash,
         )?;
         let spend = match mode {
@@ -377,7 +408,7 @@ fn simulate(
             ExecutionMode::CoreOpportunityIntent => intended.recommended_contribution(),
             ExecutionMode::CurrentApiEffective => {
                 if matches!(
-                    row.fallback.action,
+                    action,
                     core_domain::Action::Skip | core_domain::Action::TacticalDelay
                 ) {
                     Decimal::ZERO
@@ -385,6 +416,7 @@ fn simulate(
                     intended.recommended_contribution()
                 }
             }
+            ExecutionMode::CandidateBoundedContinuous => intended.recommended_contribution(),
         };
         if !matches!(mode, ExecutionMode::FixedDca) {
             opportunity_cash = (opportunity_cash + intended.opportunity_budget()
@@ -396,6 +428,50 @@ fn simulate(
         state.mark_to_market(row.date, row.close);
     }
     Ok(state.metrics(opportunity_cash.to_f64().unwrap_or_default()))
+}
+
+fn bounded_continuous_candidate(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+    fixed_dca: &PerformanceMetrics,
+) -> Result<CandidateReport, EvaluationError> {
+    let performance = simulate(
+        samples,
+        configuration,
+        ExecutionMode::CandidateBoundedContinuous,
+    )?;
+    let rolling_out_of_sample = (0..samples.len())
+        .step_by(OOS_STEP_MONTHS)
+        .filter_map(|start| samples.get(start..start + OOS_WINDOW_MONTHS))
+        .map(|window| {
+            let candidate = simulate(
+                window,
+                configuration,
+                ExecutionMode::CandidateBoundedContinuous,
+            )?;
+            let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
+            Ok(CandidateRollingWindow {
+                start: window[0].date.to_string(),
+                end: window[window.len() - 1].date.to_string(),
+                months: window.len(),
+                terminal_difference_vs_dca_percent: relative_difference(
+                    candidate.terminal_wealth_usd,
+                    dca.terminal_wealth_usd,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, EvaluationError>>()?;
+    Ok(CandidateReport {
+        id: "bounded_continuous_opportunity_v1".to_owned(),
+        status: "experimental; not a production default".to_owned(),
+        rule: "Keep the 70% core bucket; replace only opportunity execution with multiplier = 0.75 + 0.50 × current final_score, bounded to [0.75, 1.25]. Do not turn non-neutral trend regimes into a global order veto in this evaluation-only candidate.".to_owned(),
+        terminal_difference_vs_dca_percent: relative_difference(
+            performance.terminal_wealth_usd,
+            fixed_dca.terminal_wealth_usd,
+        ),
+        performance,
+        rolling_out_of_sample,
+    })
 }
 
 struct PortfolioState {

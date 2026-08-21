@@ -163,6 +163,45 @@
           },
           "terminal_difference_percent": -3.8919656206252373
         }
+      ],
+      "experimental_candidates": [
+        {
+          "id": "bounded_continuous_opportunity_v1",
+          "status": "experimental; not a production default",
+          "rule": "Keep the 70% core bucket; replace only opportunity execution with multiplier = 0.75 + 0.50 × current final_score, bounded to [0.75, 1.25]. Do not turn non-neutral trend regimes into a global order veto in this evaluation-only candidate.",
+          "performance": {
+            "xirr_percent": 19.15980688754767,
+            "terminal_wealth_usd": 71059.65018260252,
+            "maximum_drawdown_percent": 9.637016167205676,
+            "annualized_volatility_percent": 13.082009228746779,
+            "total_external_cash_usd": 49000.0,
+            "total_invested_usd": 47038.213463860055,
+            "cash_utilisation_percent": 95.99635400787766,
+            "terminal_cash_usd": 1961.7865361399436,
+            "terminal_opportunity_cash_usd": 1961.786536139946
+          },
+          "terminal_difference_vs_dca_percent": -0.8507096325087393,
+          "rolling_out_of_sample": [
+            {
+              "start": "2022-06-30",
+              "end": "2024-05-31",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.2607533588694144
+            },
+            {
+              "start": "2023-06-30",
+              "end": "2025-05-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.4613294476711216
+            },
+            {
+              "start": "2024-06-28",
+              "end": "2026-05-29",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.9416539820548131
+            }
+          ]
+        }
       ]
     },
     {
@@ -624,6 +663,111 @@
             "terminal_opportunity_cash_usd": 0.0
           },
           "terminal_difference_percent": -4.874398772141609
+        }
+      ],
+      "experimental_candidates": [
+        {
+          "id": "bounded_continuous_opportunity_v1",
+          "status": "experimental; not a production default",
+          "rule": "Keep the 70% core bucket; replace only opportunity execution with multiplier = 0.75 + 0.50 × current final_score, bounded to [0.75, 1.25]. Do not turn non-neutral trend regimes into a global order veto in this evaluation-only candidate.",
+          "performance": {
+            "xirr_percent": 16.724250235735415,
+            "terminal_wealth_usd": 803494.5664521402,
+            "maximum_drawdown_percent": 32.76382075465675,
+            "annualized_volatility_percent": 16.67130850497704,
+            "total_external_cash_usd": 189000.0,
+            "total_invested_usd": 183250.89959439202,
+            "cash_utilisation_percent": 96.95814793354074,
+            "terminal_cash_usd": 5749.100405607986,
+            "terminal_opportunity_cash_usd": 5749.100405607985
+          },
+          "terminal_difference_vs_dca_percent": -1.4582101750818088,
+          "rolling_out_of_sample": [
+            {
+              "start": "2010-10-29",
+              "end": "2012-09-28",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": 0.037902313134674515
+            },
+            {
+              "start": "2011-10-31",
+              "end": "2013-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.041254360726727946
+            },
+            {
+              "start": "2012-10-31",
+              "end": "2014-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.26407037372313535
+            },
+            {
+              "start": "2013-10-31",
+              "end": "2015-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.10791601478948865
+            },
+            {
+              "start": "2014-10-31",
+              "end": "2016-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.10689859710176774
+            },
+            {
+              "start": "2015-10-30",
+              "end": "2017-09-29",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.29425544417412963
+            },
+            {
+              "start": "2016-10-31",
+              "end": "2018-09-28",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -1.0764037061262388
+            },
+            {
+              "start": "2017-10-31",
+              "end": "2019-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.3584926404003985
+            },
+            {
+              "start": "2018-10-31",
+              "end": "2020-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.3266931831216735
+            },
+            {
+              "start": "2019-10-31",
+              "end": "2021-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.03535203114133356
+            },
+            {
+              "start": "2020-10-30",
+              "end": "2022-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": 1.0456706577842922
+            },
+            {
+              "start": "2021-10-29",
+              "end": "2023-09-29",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.03369513417512682
+            },
+            {
+              "start": "2022-10-31",
+              "end": "2024-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -0.7104447253823087
+            },
+            {
+              "start": "2023-10-31",
+              "end": "2025-09-30",
+              "months": 24,
+              "terminal_difference_vs_dca_percent": -1.1211746652042387
+            }
+          ]
         }
       ]
     }
