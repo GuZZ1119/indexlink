@@ -1,0 +1,666 @@
+{
+  "dataset_version": "calibration-v1",
+  "assumptions": {
+    "contribution_schedule": "monthly, last available observation for each asset",
+    "period_budget_usd": 1000.0,
+    "core_ratio": 0.7,
+    "opportunity_ratio": 0.3,
+    "buy_cost_bps": 5.0,
+    "cost_model": "Each strategy buys at close × (1 + buy_cost_bps / 10,000); cash, including unallocated opportunity cash, remains in terminal wealth and earns no interest.",
+    "historical_ai_policy": "Historical causal results use DecisionSentiment::Unavailable and the current 90/10/0 fallback."
+  },
+  "assets": [
+    {
+      "asset_id": "sp500_index_proxy",
+      "display_name": "S&P 500 index (SPY proxy)",
+      "source_symbol": "SP500",
+      "decision_observations": 49,
+      "first_decision_date": "2022-06-30",
+      "last_decision_date": "2026-06-30",
+      "fallback_score_distribution": {
+        "mean": 0.23399359834236036,
+        "median": 0.1912438929960255,
+        "p10": 0.07463082649100333,
+        "p25": 0.10614744446798004,
+        "p75": 0.3619405836624866,
+        "p90": 0.4677415482971412
+      },
+      "fallback_action_distribution": {
+        "Overweight": 1,
+        "Skip": 1,
+        "Standard": 11,
+        "TacticalDelay": 6,
+        "Underweight": 30
+      },
+      "fallback_layer_calibration": {
+        "fundamental_raw_mean": 0.7736144809583494,
+        "fundamental_directional_mean": 0.22638551904165077,
+        "fundamental_weighted_contribution_mean": 0.2037469671374857,
+        "trend_raw_mean": 0.457457418707737,
+        "trend_timing_mean": 0.3024663120487465,
+        "trend_weighted_contribution_mean": 0.030246631204874672,
+        "sentiment_input_mean_when_unavailable": 0.5,
+        "sentiment_weighted_contribution_mean": 0.0,
+        "final_score_mean": 0.23399359834236036
+      },
+      "core_opportunity_intent": {
+        "xirr_percent": 17.543205262029716,
+        "terminal_wealth_usd": 68926.46469978883,
+        "maximum_drawdown_percent": 9.44250697036644,
+        "annualized_volatility_percent": 12.275531936379789,
+        "total_external_cash_usd": 49000.0,
+        "total_invested_usd": 40498.0932261635,
+        "cash_utilisation_percent": 82.64916984931328,
+        "terminal_cash_usd": 8501.906773836494,
+        "terminal_opportunity_cash_usd": 8501.906773836496
+      },
+      "current_api_effective": {
+        "xirr_percent": 16.185265610850795,
+        "terminal_wealth_usd": 67175.69271273653,
+        "maximum_drawdown_percent": 9.44250697036644,
+        "annualized_volatility_percent": 11.682329284363373,
+        "total_external_cash_usd": 49000.0,
+        "total_invested_usd": 35598.0932261635,
+        "cash_utilisation_percent": 72.64916984931327,
+        "terminal_cash_usd": 13401.9067738365,
+        "terminal_opportunity_cash_usd": 8501.906773836496
+      },
+      "fixed_dca": {
+        "xirr_percent": 19.614504637491137,
+        "terminal_wealth_usd": 71669.34823156467,
+        "maximum_drawdown_percent": 9.701842639334155,
+        "annualized_volatility_percent": 13.315850867470935,
+        "total_external_cash_usd": 49000.0,
+        "total_invested_usd": 49000.0,
+        "cash_utilisation_percent": 100.0,
+        "terminal_cash_usd": 0.0,
+        "terminal_opportunity_cash_usd": 0.0
+      },
+      "intent_vs_dca_terminal_difference_percent": -3.8271361460042064,
+      "current_api_vs_intent_terminal_difference_percent": -2.540057719016686,
+      "rolling_out_of_sample": [
+        {
+          "start": "2022-06-30",
+          "end": "2024-05-31",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 21.049420323085176,
+            "terminal_wealth_usd": 29008.277551786014,
+            "maximum_drawdown_percent": 9.44250697036644,
+            "annualized_volatility_percent": 14.109526654922696,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 21228.821296251703,
+            "cash_utilisation_percent": 88.45342206771542,
+            "terminal_cash_usd": 2771.178703748296,
+            "terminal_opportunity_cash_usd": 2771.1787037482954
+          },
+          "fixed_dca": {
+            "xirr_percent": 22.503635322201355,
+            "terminal_wealth_usd": 29365.797762659447,
+            "maximum_drawdown_percent": 9.701842639334155,
+            "annualized_volatility_percent": 14.806767628443678,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -1.2174714740017856
+        },
+        {
+          "start": "2023-06-30",
+          "end": "2025-05-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 11.783418770792975,
+            "terminal_wealth_usd": 26753.03235223594,
+            "maximum_drawdown_percent": 6.07123487352887,
+            "annualized_volatility_percent": 9.647017605344232,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 18985.22934764091,
+            "cash_utilisation_percent": 79.10512228183713,
+            "terminal_cash_usd": 5014.770652359084,
+            "terminal_opportunity_cash_usd": 5014.770652359083
+          },
+          "fixed_dca": {
+            "xirr_percent": 14.36370103681618,
+            "terminal_wealth_usd": 27368.829580251702,
+            "maximum_drawdown_percent": 7.5071367213736915,
+            "annualized_volatility_percent": 11.76734595197574,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -2.249994747528772
+        },
+        {
+          "start": "2024-06-28",
+          "end": "2026-05-29",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 17.526638857746534,
+            "terminal_wealth_usd": 28113.886236319733,
+            "maximum_drawdown_percent": 5.412405315775066,
+            "annualized_volatility_percent": 9.21388745148958,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 18546.198342464722,
+            "cash_utilisation_percent": 77.27582642693635,
+            "terminal_cash_usd": 5453.801657535273,
+            "terminal_opportunity_cash_usd": 5453.801657535273
+          },
+          "fixed_dca": {
+            "xirr_percent": 22.224376651003684,
+            "terminal_wealth_usd": 29252.378760909407,
+            "maximum_drawdown_percent": 7.062715546314728,
+            "annualized_volatility_percent": 11.754508421604747,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -3.8919656206252373
+        }
+      ]
+    },
+    {
+      "asset_id": "nasdaq_composite_proxy",
+      "display_name": "NASDAQ Composite index (QQQ proxy)",
+      "source_symbol": "NASDAQCOM",
+      "decision_observations": 189,
+      "first_decision_date": "2010-10-29",
+      "last_decision_date": "2026-06-30",
+      "fallback_score_distribution": {
+        "mean": 0.30904656800134217,
+        "median": 0.2799783477810343,
+        "p10": 0.07921468979779267,
+        "p25": 0.15526923267839504,
+        "p75": 0.42772826785982077,
+        "p90": 0.5907149231192418
+      },
+      "fallback_action_distribution": {
+        "Overweight": 18,
+        "Standard": 26,
+        "TacticalDelay": 46,
+        "Underweight": 99
+      },
+      "fallback_layer_calibration": {
+        "fundamental_raw_mean": 0.6903391516667815,
+        "fundamental_directional_mean": 0.3096608483332183,
+        "fundamental_weighted_contribution_mean": 0.2786947634998967,
+        "trend_raw_mean": 0.45989028458266706,
+        "trend_timing_mean": 0.30351804501445523,
+        "trend_weighted_contribution_mean": 0.030351804501445527,
+        "sentiment_input_mean_when_unavailable": 0.5,
+        "sentiment_weighted_contribution_mean": 0.0,
+        "final_score_mean": 0.3090465680013422
+      },
+      "core_opportunity_intent": {
+        "xirr_percent": 15.840118859981256,
+        "terminal_wealth_usd": 740761.375443364,
+        "maximum_drawdown_percent": 31.288054106105545,
+        "annualized_volatility_percent": 15.714896414420254,
+        "total_external_cash_usd": 189000.0,
+        "total_invested_usd": 157462.69598038282,
+        "cash_utilisation_percent": 83.31359575681631,
+        "terminal_cash_usd": 31537.30401961724,
+        "terminal_opportunity_cash_usd": 31537.304019617255
+      },
+      "current_api_effective": {
+        "xirr_percent": 14.401778199231218,
+        "terminal_wealth_usd": 649451.7727078156,
+        "maximum_drawdown_percent": 28.904365987879316,
+        "annualized_volatility_percent": 14.166749120643932,
+        "total_external_cash_usd": 189000.0,
+        "total_invested_usd": 125262.69598038276,
+        "cash_utilisation_percent": 66.27655871977925,
+        "terminal_cash_usd": 63737.30401961724,
+        "terminal_opportunity_cash_usd": 31537.304019617255
+      },
+      "fixed_dca": {
+        "xirr_percent": 16.883671673362166,
+        "terminal_wealth_usd": 815384.5874727162,
+        "maximum_drawdown_percent": 33.02585096371456,
+        "annualized_volatility_percent": 16.83499106313601,
+        "total_external_cash_usd": 189000.0,
+        "total_invested_usd": 189000.0,
+        "cash_utilisation_percent": 100.0,
+        "terminal_cash_usd": 0.0,
+        "terminal_opportunity_cash_usd": 0.0
+      },
+      "intent_vs_dca_terminal_difference_percent": -9.15190367537444,
+      "current_api_vs_intent_terminal_difference_percent": -12.32645299316495,
+      "rolling_out_of_sample": [
+        {
+          "start": "2010-10-29",
+          "end": "2012-09-28",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 11.852670210598049,
+            "terminal_wealth_usd": 26766.353057149903,
+            "maximum_drawdown_percent": 13.327933862559508,
+            "annualized_volatility_percent": 13.156419441404122,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 22782.79561305479,
+            "cash_utilisation_percent": 94.92831505439496,
+            "terminal_cash_usd": 1217.2043869452139,
+            "terminal_opportunity_cash_usd": 1217.2043869452148
+          },
+          "fixed_dca": {
+            "xirr_percent": 12.654503722339083,
+            "terminal_wealth_usd": 26957.02664385943,
+            "maximum_drawdown_percent": 14.561264444400438,
+            "annualized_volatility_percent": 14.355539352923664,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -0.7073242506623445
+        },
+        {
+          "start": "2011-10-31",
+          "end": "2013-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 22.373248360696262,
+            "terminal_wealth_usd": 29328.105242680318,
+            "maximum_drawdown_percent": 6.988791410670338,
+            "annualized_volatility_percent": 10.585783692887569,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 23125.619044057865,
+            "cash_utilisation_percent": 96.35674601690776,
+            "terminal_cash_usd": 874.3809559421364,
+            "terminal_opportunity_cash_usd": 874.380955942137
+          },
+          "fixed_dca": {
+            "xirr_percent": 22.780758739830798,
+            "terminal_wealth_usd": 29428.406937803255,
+            "maximum_drawdown_percent": 7.55194575343433,
+            "annualized_volatility_percent": 10.976159970087858,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -0.3408329079277794
+        },
+        {
+          "start": "2012-10-31",
+          "end": "2014-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 19.90669062021323,
+            "terminal_wealth_usd": 28720.32606917153,
+            "maximum_drawdown_percent": 3.86225071942881,
+            "annualized_volatility_percent": 8.302620282550134,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 20696.09033184224,
+            "cash_utilisation_percent": 86.23370971600933,
+            "terminal_cash_usd": 3303.9096681577644,
+            "terminal_opportunity_cash_usd": 3303.9096681577653
+          },
+          "fixed_dca": {
+            "xirr_percent": 21.344682521811777,
+            "terminal_wealth_usd": 29072.039457212642,
+            "maximum_drawdown_percent": 4.296502630639341,
+            "annualized_volatility_percent": 8.9085511057937,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -1.209799500164943
+        },
+        {
+          "start": "2013-10-31",
+          "end": "2015-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 1.5898256523438126,
+            "terminal_wealth_usd": 24366.775291430764,
+            "maximum_drawdown_percent": 7.830409027573586,
+            "annualized_volatility_percent": 8.407036167198678,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 19399.404451893366,
+            "cash_utilisation_percent": 80.83085188288902,
+            "terminal_cash_usd": 4600.595548106634,
+            "terminal_opportunity_cash_usd": 4600.595548106634
+          },
+          "fixed_dca": {
+            "xirr_percent": 2.21727367478185,
+            "terminal_wealth_usd": 24512.016678210177,
+            "maximum_drawdown_percent": 9.53615265103452,
+            "annualized_volatility_percent": 10.607331107266681,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -0.5925313640493868
+        },
+        {
+          "start": "2014-10-31",
+          "end": "2016-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 7.83124855420575,
+            "terminal_wealth_usd": 25827.944010218198,
+            "maximum_drawdown_percent": 8.796317742911443,
+            "annualized_volatility_percent": 11.38424692292171,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 21320.238988929672,
+            "cash_utilisation_percent": 88.8343291205403,
+            "terminal_cash_usd": 2679.761011070332,
+            "terminal_opportunity_cash_usd": 2679.761011070332
+          },
+          "fixed_dca": {
+            "xirr_percent": 8.728157730907881,
+            "terminal_wealth_usd": 26040.07521067686,
+            "maximum_drawdown_percent": 10.35671865439215,
+            "annualized_volatility_percent": 13.490481454024922,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -0.8146335935761195
+        },
+        {
+          "start": "2015-10-30",
+          "end": "2017-09-29",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 19.38036014953114,
+            "terminal_wealth_usd": 28580.878131468973,
+            "maximum_drawdown_percent": 7.493357871119906,
+            "annualized_volatility_percent": 8.91070191884825,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 20600.821196376044,
+            "cash_utilisation_percent": 85.83675498490018,
+            "terminal_cash_usd": 3399.1788036239554,
+            "terminal_opportunity_cash_usd": 3399.1788036239554
+          },
+          "fixed_dca": {
+            "xirr_percent": 21.149055983747044,
+            "terminal_wealth_usd": 29011.97713955719,
+            "maximum_drawdown_percent": 8.050656170659092,
+            "annualized_volatility_percent": 9.435343417867594,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -1.4859346056095735
+        },
+        {
+          "start": "2016-10-31",
+          "end": "2018-09-28",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 18.402428317111173,
+            "terminal_wealth_usd": 28328.09524371384,
+            "maximum_drawdown_percent": 3.5371371089693833,
+            "annualized_volatility_percent": 6.223078699171219,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 18150.82010339116,
+            "cash_utilisation_percent": 75.62841709746317,
+            "terminal_cash_usd": 5849.179896608841,
+            "terminal_opportunity_cash_usd": 5849.179896608841
+          },
+          "fixed_dca": {
+            "xirr_percent": 23.669887806701194,
+            "terminal_wealth_usd": 29609.75281059883,
+            "maximum_drawdown_percent": 4.476945475090739,
+            "annualized_volatility_percent": 7.892111596122514,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -4.328498029291961
+        },
+        {
+          "start": "2017-10-31",
+          "end": "2019-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 5.659229450326697,
+            "terminal_wealth_usd": 25313.99524484406,
+            "maximum_drawdown_percent": 12.94411348427627,
+            "annualized_volatility_percent": 12.074724259230967,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 19432.42901435252,
+            "cash_utilisation_percent": 80.96845422646884,
+            "terminal_cash_usd": 4567.5709856474805,
+            "terminal_opportunity_cash_usd": 4567.5709856474805
+          },
+          "fixed_dca": {
+            "xirr_percent": 7.457991801239238,
+            "terminal_wealth_usd": 25736.353472909803,
+            "maximum_drawdown_percent": 17.003199299873803,
+            "annualized_volatility_percent": 16.022304513192797,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -1.6410958472042991
+        },
+        {
+          "start": "2018-10-31",
+          "end": "2020-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 28.170527943997826,
+            "terminal_wealth_usd": 30775.37941946119,
+            "maximum_drawdown_percent": 13.469968998841228,
+            "annualized_volatility_percent": 17.34023333172597,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 19787.945911617713,
+            "cash_utilisation_percent": 82.44977463174047,
+            "terminal_cash_usd": 4212.054088382289,
+            "terminal_opportunity_cash_usd": 4212.054088382289
+          },
+          "fixed_dca": {
+            "xirr_percent": 33.03911968461143,
+            "terminal_wealth_usd": 32002.899162820264,
+            "maximum_drawdown_percent": 15.077693727805327,
+            "annualized_volatility_percent": 20.262986675120523,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -3.8356516924102912
+        },
+        {
+          "start": "2019-10-31",
+          "end": "2021-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 24.41852878481231,
+            "terminal_wealth_usd": 29834.193195672182,
+            "maximum_drawdown_percent": 11.576137857328678,
+            "annualized_volatility_percent": 15.166073727872432,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 18607.32391589312,
+            "cash_utilisation_percent": 77.53051631622134,
+            "terminal_cash_usd": 5392.676084106881,
+            "terminal_opportunity_cash_usd": 5392.676084106881
+          },
+          "fixed_dca": {
+            "xirr_percent": 31.20701210683726,
+            "terminal_wealth_usd": 31530.319664183764,
+            "maximum_drawdown_percent": 13.139760916544146,
+            "annualized_volatility_percent": 18.404589329892858,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -5.379350690307982
+        },
+        {
+          "start": "2020-10-30",
+          "end": "2022-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": -17.032884540237443,
+            "terminal_wealth_usd": 20180.210313713163,
+            "maximum_drawdown_percent": 24.893499593668203,
+            "annualized_volatility_percent": 15.676583998630047,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 18992.468334813908,
+            "cash_utilisation_percent": 79.13528472839128,
+            "terminal_cash_usd": 5007.531665186095,
+            "terminal_opportunity_cash_usd": 5007.531665186096
+          },
+          "fixed_dca": {
+            "xirr_percent": -21.591463833978047,
+            "terminal_wealth_usd": 19192.390841008975,
+            "maximum_drawdown_percent": 30.956730448294774,
+            "annualized_volatility_percent": 20.36436085235926,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": 5.146932869840715
+        },
+        {
+          "start": "2021-10-29",
+          "end": "2023-09-29",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 4.427071185609844,
+            "terminal_wealth_usd": 25022.654311802762,
+            "maximum_drawdown_percent": 22.81698315522581,
+            "annualized_volatility_percent": 16.770866580380954,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 20008.48876748124,
+            "cash_utilisation_percent": 83.36870319783851,
+            "terminal_cash_usd": 3991.511232518757,
+            "terminal_opportunity_cash_usd": 3991.511232518758
+          },
+          "fixed_dca": {
+            "xirr_percent": 4.657520190781861,
+            "terminal_wealth_usd": 25076.26161185227,
+            "maximum_drawdown_percent": 28.631012607152417,
+            "annualized_volatility_percent": 21.236148750034545,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -0.21377708080765334
+        },
+        {
+          "start": "2022-10-31",
+          "end": "2024-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 26.827328225602443,
+            "terminal_wealth_usd": 30441.667433989496,
+            "maximum_drawdown_percent": 8.586774773557023,
+            "annualized_volatility_percent": 13.37856372741032,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 19682.508548361748,
+            "cash_utilisation_percent": 82.01045228484062,
+            "terminal_cash_usd": 4317.491451638251,
+            "terminal_opportunity_cash_usd": 4317.491451638251
+          },
+          "fixed_dca": {
+            "xirr_percent": 30.81826306906975,
+            "terminal_wealth_usd": 31443.208460637747,
+            "maximum_drawdown_percent": 9.684900000183069,
+            "annualized_volatility_percent": 15.031156014837421,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -3.1852380074445352
+        },
+        {
+          "start": "2023-10-31",
+          "end": "2025-09-30",
+          "months": 24,
+          "core_opportunity_intent": {
+            "xirr_percent": 23.117925347272873,
+            "terminal_wealth_usd": 29512.67907396128,
+            "maximum_drawdown_percent": 8.951272754224398,
+            "annualized_volatility_percent": 10.75661077335419,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 18491.480993424342,
+            "cash_utilisation_percent": 77.04783747260142,
+            "terminal_cash_usd": 5508.519006575655,
+            "terminal_opportunity_cash_usd": 5508.519006575655
+          },
+          "fixed_dca": {
+            "xirr_percent": 29.19833532471271,
+            "terminal_wealth_usd": 31024.959309606158,
+            "maximum_drawdown_percent": 11.290135050982883,
+            "annualized_volatility_percent": 13.468401965482467,
+            "total_external_cash_usd": 24000.0,
+            "total_invested_usd": 24000.0,
+            "cash_utilisation_percent": 100.0,
+            "terminal_cash_usd": 0.0,
+            "terminal_opportunity_cash_usd": 0.0
+          },
+          "terminal_difference_percent": -4.874398772141609
+        }
+      ]
+    }
+  ],
+  "qwen_sensitivity": {
+    "scope": "Distribution sensitivity only. These frozen values are not historical Qwen reconstructions and must not be used for historical performance claims.",
+    "frozen_score_version": "qwen-sensitivity-v1-cycle-10",
+    "sample_count": 238,
+    "fallback_action_distribution": {
+      "Overweight": 19,
+      "Skip": 1,
+      "Standard": 37,
+      "TacticalDelay": 52,
+      "Underweight": 129
+    },
+    "normal_70_20_10_action_distribution": {
+      "Overweight": 14,
+      "Standard": 51,
+      "TacticalDelay": 52,
+      "Underweight": 121
+    },
+    "fallback_score_distribution": {
+      "mean": 0.2935944860127283,
+      "median": 0.26726437613342435,
+      "p10": 0.07753290859854742,
+      "p25": 0.14042351676618595,
+      "p75": 0.4223921113799448,
+      "p90": 0.5564798324852367
+    },
+    "normal_70_20_10_score_distribution": {
+      "mean": 0.31598867855982177,
+      "median": 0.29662914624168446,
+      "p10": 0.14183909390074312,
+      "p25": 0.19248555564044723,
+      "p75": 0.4101080026213692,
+      "p90": 0.530086730206778
+    },
+    "mean_normal_minus_fallback_score": 0.02239419254709346
+  }
+}

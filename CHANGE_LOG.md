@@ -5,6 +5,26 @@
 ### 2026-08-21 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 评分校准基线（Push 2：分布、风险与样本外报告）。
+- 涉及文件：
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `crates/strategy-evaluation/data/generated/calibration-v1.report.json`
+  - `STRATEGY_CALIBRATION_BASELINE_V1.md`
+  - `V1_1_PLAN.md`
+- 变更内容：
+  - 输出真实生产规则的原始/方向变换/加权层均值、最终分数分位数、动作分布、机会滚存现金、XIRR、期末净值、时间加权最大回撤、年化波动率、现金使用率和 24 个月滚动样本外窗口。
+  - 回撤与波动率使用剔除固定月度外部入金影响的时间加权净值，而非把充值误计为收益波动。
+  - 基线结果如实显示当前 Core/Opportunity 意图和当前 API 实效口径在两条指数代理上均落后于同现金流固定 DCA；报告同时标出 API 全局 `Skip`/`TacticalDelay` gate 仍会阻断领域层保留的核心金额这一实现差异。
+  - 冻结 Qwen 敏感性只比较 70/20/10 与 90/10/0 的同样本分数/动作变化，不构造历史 AI 收益结论。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo run -p strategy-evaluation --locked -- crates/strategy-evaluation/data/generated/calibration-v1.report.json` 通过。
+
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：V1.1 评分校准基线（Push 1：离线数据夹具与评估器）。
 - 涉及文件：
   - `Cargo.toml`、`Cargo.lock`

@@ -1,6 +1,6 @@
 # IndexLink V1.1 策略与执行升级计划 / Strategy and Execution Upgrade Plan
 
-> 状态 / Status：Phase 1 与 Phase 3 的本地 SQLite 闭环已完成：计划配置、双桶建议、周期调度、现金账本、订单金额上限、终态成交修正与当前周期补跑均已实现；评分校准、AI 职责升级和前端配置仍待完成。
+> 状态 / Status：Phase 1 与 Phase 3 的本地 SQLite 闭环已完成；Phase 2 已完成当前生产规则的固定数据基线和滚动样本外报告，尚未据此调参。评分候选、AI 职责升级和前端配置仍待完成。
 > 范围 / Scope：低频、可解释、可复盘的指数 ETF 定投；默认仅限模拟交易（paper trading）。
 > 非目标 / Non-goals：不承诺超额收益，不引入不可审计的高频策略，不以训练黑盒模型替代领域规则。
 
@@ -181,8 +181,9 @@ AI 可总结“为何核心桶照常、为何机会桶加码/减量、哪些输�
 
 ### Phase 2 — 校准工具与验证 / Calibration Tooling and Validation
 
-- 构建合成输入矩阵、固定历史数据夹具和分数分布报告。
-- 先测现有规则，再提出有限的候选函数；使用样本外结果选定默认值。
+- 已构建版本化 `calibration-v1` 原始快照、SHA-256 清单、离线评估器和机器可读报告；它调用生产因子/决策/双桶函数，固定历史因果线为 90/10/0，并将冻结 Qwen 样本限制为非收益敏感性检查。
+- 已报告分数/动作分布、层贡献、对称成本下的 XIRR、终值、最大回撤、波动率、现金使用率和 24 个月滚动样本外结果；详见 `STRATEGY_CALIBRATION_BASELINE_V1.md`。
+- 下一步才提出有限的候选函数；使用未见结果的样本外窗口选定默认值。
 - 不将实验结果表述为收益保证。
 
 ### Phase 3 — 调度、金额与 Paper Order 闭环 / Scheduler, Amount, and Paper Order

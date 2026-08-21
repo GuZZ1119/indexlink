@@ -144,7 +144,7 @@ struct AssetReport {
     last_decision_date: String,
     fallback_score_distribution: Distribution,
     fallback_action_distribution: BTreeMap<String, u32>,
-    fallback_layer_contributions: LayerContributions,
+    fallback_layer_calibration: LayerCalibration,
     core_opportunity_intent: PerformanceMetrics,
     current_api_effective: PerformanceMetrics,
     fixed_dca: PerformanceMetrics,
@@ -164,10 +164,15 @@ struct Distribution {
 }
 
 #[derive(Debug, Serialize)]
-struct LayerContributions {
-    fundamental_mean: f64,
-    trend_mean: f64,
-    sentiment_mean: f64,
+struct LayerCalibration {
+    fundamental_raw_mean: f64,
+    fundamental_directional_mean: f64,
+    fundamental_weighted_contribution_mean: f64,
+    trend_raw_mean: f64,
+    trend_timing_mean: f64,
+    trend_weighted_contribution_mean: f64,
+    sentiment_input_mean_when_unavailable: f64,
+    sentiment_weighted_contribution_mean: f64,
     final_score_mean: f64,
 }
 
@@ -181,6 +186,7 @@ struct PerformanceMetrics {
     total_invested_usd: f64,
     cash_utilisation_percent: f64,
     terminal_cash_usd: f64,
+    terminal_opportunity_cash_usd: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,7 +330,7 @@ fn asset_report(
             samples.iter().map(|row| row.fallback.final_score.value()),
         ),
         fallback_action_distribution: action_distribution(samples.iter().map(|row| &row.fallback)),
-        fallback_layer_contributions: layer_contributions(samples),
+        fallback_layer_calibration: layer_calibration(samples),
         intent_vs_dca_terminal_difference_percent: relative_difference(
             intent.terminal_wealth_usd,
             dca.terminal_wealth_usd,
@@ -389,7 +395,7 @@ fn simulate(
         state.buy(row.date, spend, row.close);
         state.mark_to_market(row.date, row.close);
     }
-    Ok(state.metrics())
+    Ok(state.metrics(opportunity_cash.to_f64().unwrap_or_default()))
 }
 
 struct PortfolioState {
@@ -452,7 +458,7 @@ impl PortfolioState {
         self.pending_external_flow = 0.0;
     }
 
-    fn metrics(mut self) -> PerformanceMetrics {
+    fn metrics(mut self, terminal_opportunity_cash_usd: f64) -> PerformanceMetrics {
         let terminal = self.last_value;
         if let Some(last_flow) = self.flows.last_mut() {
             last_flow.1 += terminal;
@@ -471,6 +477,7 @@ impl PortfolioState {
                 self.invested / self.external_cash * 100.0
             },
             terminal_cash_usd: self.cash,
+            terminal_opportunity_cash_usd,
         }
     }
 }
@@ -551,31 +558,62 @@ fn action_distribution<'a>(
         })
 }
 
-fn layer_contributions(samples: &[DecisionMonth]) -> LayerContributions {
+fn layer_calibration(samples: &[DecisionMonth]) -> LayerCalibration {
     let values = samples.iter().map(|row| {
         let signal = &row.fallback;
         (
+            row.fundamental.score.value(),
+            signal.fundamental_score.value(),
             signal.weights.fundamental_weight.value() * signal.fundamental_score.value(),
+            row.trend.score.value(),
+            signal.trend_score.value(),
             signal.weights.trend_weight.value() * signal.trend_score.value(),
+            signal.sentiment_score.map_or(0.5, |value| value.value()),
             signal.weights.sentiment_weight.value()
                 * signal.sentiment_score.map_or(0.5, |value| value.value()),
             signal.final_score.value(),
         )
     });
+    let mut fundamental_raw = Vec::new();
+    let mut fundamental_directional = Vec::new();
     let mut fundamentals = Vec::new();
+    let mut trend_raw = Vec::new();
+    let mut trend_timing = Vec::new();
     let mut trends = Vec::new();
+    let mut sentiment_input = Vec::new();
     let mut sentiments = Vec::new();
     let mut finals = Vec::new();
-    for (fundamental, trend, sentiment, final_score) in values {
+    for (
+        raw_fundamental,
+        directional_fundamental,
+        fundamental,
+        raw_trend,
+        timing_trend,
+        trend,
+        sentiment_value,
+        sentiment,
+        final_score,
+    ) in values
+    {
+        fundamental_raw.push(raw_fundamental);
+        fundamental_directional.push(directional_fundamental);
         fundamentals.push(fundamental);
+        trend_raw.push(raw_trend);
+        trend_timing.push(timing_trend);
         trends.push(trend);
+        sentiment_input.push(sentiment_value);
         sentiments.push(sentiment);
         finals.push(final_score);
     }
-    LayerContributions {
-        fundamental_mean: mean(fundamentals),
-        trend_mean: mean(trends),
-        sentiment_mean: mean(sentiments),
+    LayerCalibration {
+        fundamental_raw_mean: mean(fundamental_raw),
+        fundamental_directional_mean: mean(fundamental_directional),
+        fundamental_weighted_contribution_mean: mean(fundamentals),
+        trend_raw_mean: mean(trend_raw),
+        trend_timing_mean: mean(trend_timing),
+        trend_weighted_contribution_mean: mean(trends),
+        sentiment_input_mean_when_unavailable: mean(sentiment_input),
+        sentiment_weighted_contribution_mean: mean(sentiments),
         final_score_mean: mean(finals),
     }
 }
