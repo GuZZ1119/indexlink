@@ -66,11 +66,11 @@ taxes, borrow, or leverage are assumed.
 - **Fixed DCA / 固定定投**: spends the full period budget every scored month.
 - **Core/Opportunity intent / 核心+机会意图**: 70% core plus 30% opportunity;
   the opportunity side uses the current multiplier and carry-forward policy.
-- **Current API-effective / 当前 API 实效口径**: additionally reflects the known
-  API order gate: global `Skip`/`TacticalDelay` stops the combined order. It is
-  reported separately because this still blocks a core amount that the domain
-  split itself preserves. This is a documented implementation gap, not a
-  favourable assumption.
+- **Current API-effective / 当前 API 实效口径**: reflects the corrected API order
+  gate: `Skip`/`TacticalDelay` reduce the opportunity bucket to zero, while a
+  due validated order still carries the preserved core bucket. It is reported
+  separately to prevent future API regressions from silently diverging from the
+  domain split.
 
 ## 4. Historical causal line / 历史因果线
 
@@ -116,21 +116,23 @@ the final score.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | S&P 500 proxy | Fixed DCA | 19.61% | $71,669 | 9.70% | 13.32% | 100.00% | $0 |
 | S&P 500 proxy | Core/Opportunity intent | 17.54% | $68,926 | 9.44% | 12.28% | 82.65% | $8,502 |
-| S&P 500 proxy | Current API-effective | 16.19% | $67,176 | 9.44% | 11.68% | 72.65% | $13,402 |
+| S&P 500 proxy | Current API-effective | 17.54% | $68,926 | 9.44% | 12.28% | 82.65% | $8,502 |
 | NASDAQ proxy | Fixed DCA | 16.88% | $815,385 | 33.03% | 16.83% | 100.00% | $0 |
 | NASDAQ proxy | Core/Opportunity intent | 15.84% | $740,761 | 31.29% | 15.71% | 83.31% | $31,537 |
-| NASDAQ proxy | Current API-effective | 14.40% | $649,452 | 28.90% | 14.17% | 66.28% | $63,737 |
+| NASDAQ proxy | Current API-effective | 15.84% | $740,761 | 31.29% | 15.71% | 83.31% | $31,537 |
 
 Core/Opportunity intent terminal wealth is **-3.83%** versus DCA for the S&P
 500 proxy and **-9.15%** for the NASDAQ proxy. Lower drawdown and volatility
 occur here alongside substantially lower cash utilisation; they cannot be
-claimed as an unqualified improvement. The current API gate worsens terminal
-wealth further by blocking the domain-preserved core amount during global delay
-actions.
+claimed as an unqualified improvement. The corrected API implementation now
+matches the domain split for this boundary; current API-effective results equal
+Core/Opportunity intent in this fixture. The separate line remains as a
+regression check.
 
 核心+机会意图相对固定定投的期末净值：S&P 500 代理 **-3.83%**，NASDAQ 代理
 **-9.15%**。回撤、波动较低同时伴随明显较低的现金使用率，不能包装为无条件改善。
-当前 API 的全局 gate 在延迟动作时还会挡住领域层保留的核心金额，导致期末净值进一步下降。
+已修正的 API 实现在此边界与领域层拆分一致；本夹具中当前 API 实效结果与核心/机会
+意图相同。保留单独行用于防止未来回归。
 
 ### Rolling out-of-sample windows / 滚动样本外窗口
 
@@ -190,6 +192,6 @@ cargo run -p strategy-evaluation --locked -- \
 4. The next change must be a separately versioned candidate rule, selected
    before looking at its hold-out results. It must preserve the same costs,
    cash accounting, and out-of-sample protocol.
-5. Before presenting core as non-vetoable in production, the API-level combined
-   order gate must be split so `TacticalDelay` applies to the opportunity bucket
-   rather than silently blocking the core amount.
+5. The API-level order gate now submits the preserved core amount for
+   `Skip`/`TacticalDelay`; route tests protect this boundary. Future changes must
+   retain this split rather than reintroducing a global veto.

@@ -831,9 +831,9 @@ async fn decision_preview_waiting_does_not_submit_order() {
     assert!(broker.accepted_orders().is_empty());
 }
 
-/// Verify tactical-delay decisions do not submit paper orders even when due.
+/// Verify a tactical delay submits the preserved core bucket when the plan is due.
 #[tokio::test]
-async fn decision_preview_tactical_delay_does_not_submit_order() {
+async fn decision_preview_tactical_delay_submits_preserved_core_bucket() {
     let repository = Arc::new(FakeRepository::default());
     let broker = Arc::new(MockBroker::paper_only());
     let created = repository.create(create_input()).await.unwrap();
@@ -855,6 +855,121 @@ async fn decision_preview_tactical_delay_does_not_submit_order() {
     let body = response_json(response).await;
     assert_eq!(body["execution"]["status"], json!("due"));
     assert_eq!(body["decision"]["action"], json!("tactical_delay"));
+    assert_eq!(
+        body["execution"]["bucket_split"]["core_contribution"],
+        json!("800.00")
+    );
+    assert_eq!(
+        body["execution"]["bucket_split"]["opportunity_contribution"],
+        json!("0")
+    );
+    assert_eq!(body["paper_order_ack"]["status"], json!("accepted"));
+    assert_eq!(broker.accepted_orders().len(), 1);
+}
+
+/// Verify a skip also preserves and submits the due core bucket.
+#[tokio::test]
+async fn decision_preview_skip_submits_preserved_core_bucket() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let created = repository.create(create_input()).await.unwrap();
+    let app = app_without_sentiment_provider(
+        repository,
+        Arc::clone(&broker),
+        Arc::new(FakeDecisionRecordRepository::default()),
+    );
+    let mut payload = preview_payload(15, "neutral");
+    payload["fundamental"] = json!({
+        "score": 1.0,
+        "cape_percentile": 1.0,
+        "erp_percentile": 0.0
+    });
+    payload["trend"] = json!({
+        "score": 0.0,
+        "ma_distance_percentile": 0.0,
+        "rsi_percentile": 0.0,
+        "vix_percentile": 0.0,
+        "regime": "neutral"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["decision"]["action"], json!("skip"));
+    assert_eq!(
+        body["execution"]["bucket_split"]["recommended_contribution"],
+        json!("800.00")
+    );
+    assert_eq!(body["paper_order_ack"]["status"], json!("accepted"));
+    assert_eq!(broker.accepted_orders().len(), 1);
+}
+
+/// Verify an all-opportunity plan never sends an empty order after a skip.
+#[tokio::test]
+async fn decision_preview_skip_does_not_submit_zero_recommendation() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let mut input = create_input();
+    input.execution_configuration = PlanExecutionConfiguration::new_with_cash_policy(
+        TwoBucketAllocationConfig::new(
+            BucketAllocationRatio::new(Decimal::ZERO).unwrap(),
+            BucketAllocationRatio::new(Decimal::ONE).unwrap(),
+        )
+        .unwrap(),
+        PlanRiskMode::Autopilot,
+        OpportunityCashPolicy::ExpireEachPeriod,
+    )
+    .unwrap();
+    let created = repository.create(input).await.unwrap();
+    let app = app_without_sentiment_provider(
+        repository,
+        Arc::clone(&broker),
+        Arc::new(FakeDecisionRecordRepository::default()),
+    );
+    let mut payload = preview_payload(15, "neutral");
+    payload["fundamental"] = json!({
+        "score": 1.0,
+        "cape_percentile": 1.0,
+        "erp_percentile": 0.0
+    });
+    payload["trend"] = json!({
+        "score": 0.0,
+        "ma_distance_percentile": 0.0,
+        "rsi_percentile": 0.0,
+        "vix_percentile": 0.0,
+        "regime": "neutral"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["decision"]["action"], json!("skip"));
+    assert_eq!(
+        body["execution"]["bucket_split"]["recommended_contribution"],
+        json!("0")
+    );
     assert!(body.get("paper_order_ack").is_none());
     assert!(broker.accepted_orders().is_empty());
 }

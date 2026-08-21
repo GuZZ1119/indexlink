@@ -56,7 +56,7 @@ struct DecisionPreviewRequest {
     fundamental: FundamentalSignalRequest,
     /// Trend signal snapshot.
     trend: TrendSignalRequest,
-    /// Optional paper order to submit when the decision is executable and due.
+    /// Optional paper order to submit when the execution date is due and the request is valid.
     paper_order: Option<PaperOrderRequest>,
     /// Trusted source disclosure attached only by server-side automatic orchestration.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -489,7 +489,7 @@ async fn preview_decision_input(
                 trigger,
                 DecisionTrigger::AutomaticPreview | DecisionTrigger::AutomaticScheduler
             ) && execution.status == ExecutionPreviewStatus::Due
-                && !matches!(decision.action, Action::Skip | Action::TacticalDelay) =>
+                && has_positive_recommended_contribution(&execution) =>
         {
             let quantity = recommended_quantity(state, &execution, &order).await?;
             Some(order.into_domain(&execution.symbol, quantity)?)
@@ -501,7 +501,7 @@ async fn preview_decision_input(
         None => None,
     };
     let decision_response = DecisionResponse::from_signal(&decision);
-    let should_submit = should_submit_paper_order(&execution, &decision, paper_order.as_ref());
+    let should_submit = should_submit_paper_order(&execution, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
     let persisted = state
         .decision_records()
@@ -843,14 +843,26 @@ fn percentile(value: f64) -> Result<Percentile, ApiError> {
 }
 
 /// Return whether the validated order is safe and eligible to submit.
+///
+/// The domain split already reduces the opportunity bucket to zero for `Skip`
+/// and `TacticalDelay`; a due paper order must still carry the preserved core
+/// bucket rather than treating either action as a global veto.
 fn should_submit_paper_order(
     execution: &InvestmentPlanExecutionPreview,
-    decision: &DecisionSignal,
     paper_order: Option<&BrokerOrderRequest>,
 ) -> bool {
     paper_order.is_some()
         && execution.status == ExecutionPreviewStatus::Due
-        && !matches!(decision.action, Action::Skip | Action::TacticalDelay)
+        && has_positive_recommended_contribution(execution)
+}
+
+/// Return whether the domain preview contains a positive safe order amount.
+fn has_positive_recommended_contribution(execution: &InvestmentPlanExecutionPreview) -> bool {
+    execution
+        .bucket_split
+        .map(|split| split.recommended_contribution())
+        .or(execution.planned_contribution)
+        .is_some_and(|amount| amount > Decimal::ZERO)
 }
 
 /// Submit one already-validated paper order through the configured broker.

@@ -5,6 +5,26 @@
 ### 2026-08-21 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 核心桶订单门控修正。
+- 涉及文件：
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/tests/decision_preview.rs`
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `crates/strategy-evaluation/data/generated/calibration-v1.report.json`
+  - `STRATEGY_CALIBRATION_BASELINE_V1.md`
+  - `V1_1_PLAN.md`
+- 变更内容：
+  - 到期且已校验的 `Skip`/`TacticalDelay` paper order 不再被 API 全局 veto；领域层已计算并保留的核心桶仍进入订单，机会桶仍为零。
+  - 自动来源订单同样按核心桶后的建议金额换算数量；零建议金额不会构造或提交空订单；手动预览保持既有显式确认和数量校验契约。
+  - 新增 `Skip` 与 `TacticalDelay` 的路由回归测试；离线基线的当前 API 实效线同步为修复后的生产口径。
+- 验证：
+  - `cargo test -p indexlink-api --test decision_preview --locked` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：V1.1 评分校准基线（Push 3：预登记候选与样本外对照）。
 - 涉及文件：
   - `crates/strategy-evaluation/src/lib.rs`

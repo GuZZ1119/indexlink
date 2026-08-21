@@ -55,14 +55,14 @@
         "terminal_opportunity_cash_usd": 8501.906773836496
       },
       "current_api_effective": {
-        "xirr_percent": 16.185265610850795,
-        "terminal_wealth_usd": 67175.69271273653,
+        "xirr_percent": 17.543205262029716,
+        "terminal_wealth_usd": 68926.46469978883,
         "maximum_drawdown_percent": 9.44250697036644,
-        "annualized_volatility_percent": 11.682329284363373,
+        "annualized_volatility_percent": 12.275531936379789,
         "total_external_cash_usd": 49000.0,
-        "total_invested_usd": 35598.0932261635,
-        "cash_utilisation_percent": 72.64916984931327,
-        "terminal_cash_usd": 13401.9067738365,
+        "total_invested_usd": 40498.0932261635,
+        "cash_utilisation_percent": 82.64916984931328,
+        "terminal_cash_usd": 8501.906773836494,
         "terminal_opportunity_cash_usd": 8501.906773836496
       },
       "fixed_dca": {
@@ -77,7 +77,7 @@
         "terminal_opportunity_cash_usd": 0.0
       },
       "intent_vs_dca_terminal_difference_percent": -3.8271361460042064,
-      "current_api_vs_intent_terminal_difference_percent": -2.540057719016686,
+      "current_api_vs_intent_terminal_difference_percent": 0.0,
       "rolling_out_of_sample": [
         {
           "start": "2022-06-30",
@@ -248,14 +248,14 @@
         "terminal_opportunity_cash_usd": 31537.304019617255
       },
       "current_api_effective": {
-        "xirr_percent": 14.401778199231218,
-        "terminal_wealth_usd": 649451.7727078156,
-        "maximum_drawdown_percent": 28.904365987879316,
-        "annualized_volatility_percent": 14.166749120643932,
+        "xirr_percent": 15.840118859981256,
+        "terminal_wealth_usd": 740761.375443364,
+        "maximum_drawdown_percent": 31.288054106105545,
+        "annualized_volatility_percent": 15.714896414420254,
         "total_external_cash_usd": 189000.0,
-        "total_invested_usd": 125262.69598038276,
-        "cash_utilisation_percent": 66.27655871977925,
-        "terminal_cash_usd": 63737.30401961724,
+        "total_invested_usd": 157462.69598038282,
+        "cash_utilisation_percent": 83.31359575681631,
+        "terminal_cash_usd": 31537.30401961724,
         "terminal_opportunity_cash_usd": 31537.304019617255
       },
       "fixed_dca": {
@@ -270,7 +270,7 @@
         "terminal_opportunity_cash_usd": 0.0
       },
       "intent_vs_dca_terminal_difference_percent": -9.15190367537444,
-      "current_api_vs_intent_terminal_difference_percent": -12.32645299316495,
+      "current_api_vs_intent_terminal_difference_percent": 0.0,
       "rolling_out_of_sample": [
         {
           "start": "2010-10-29",

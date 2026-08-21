@@ -406,16 +406,9 @@ fn simulate(
         let spend = match mode {
             ExecutionMode::FixedDca => budget,
             ExecutionMode::CoreOpportunityIntent => intended.recommended_contribution(),
-            ExecutionMode::CurrentApiEffective => {
-                if matches!(
-                    action,
-                    core_domain::Action::Skip | core_domain::Action::TacticalDelay
-                ) {
-                    Decimal::ZERO
-                } else {
-                    intended.recommended_contribution()
-                }
-            }
+            // The API submits the preserved core bucket even when the
+            // opportunity bucket is reduced to zero by Skip/TacticalDelay.
+            ExecutionMode::CurrentApiEffective => intended.recommended_contribution(),
             ExecutionMode::CandidateBoundedContinuous => intended.recommended_contribution(),
         };
         if !matches!(mode, ExecutionMode::FixedDca) {
