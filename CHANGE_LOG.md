@@ -5,6 +5,33 @@
 ### 2026-08-21 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：V1.1 策略研究口径修正与连续趋势上限候选。
+- 涉及文件：
+  - `tools/generate_calibration_fixture.py`
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `crates/strategy-evaluation/src/main.rs`
+  - `crates/strategy-evaluation/data/generated/calibration-v2.json`
+  - `crates/strategy-evaluation/data/generated/calibration-v2.manifest.json`
+  - `crates/strategy-evaluation/data/generated/calibration-v2.report.json`
+  - `STRATEGY_CALIBRATION_RESEARCH_V2.md`
+  - `V1_1_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 保留不可变的 `calibration-v1`，新建 `calibration-v2`：每月末可得收盘后计算决策，成交只使用严格晚于决策日的第一个日度价格；不允许以同一收盘价同时决策和成交。
+  - 新增研究专用 C2：核心桶固定为周期预算的 70%，趋势只以 `[0.25, 1.00]` 的连续风险上限约束机会桶倍率，且不产生整笔 `TacticalDelay` veto；生产默认策略、权重、API 与下单行为均未改动。
+  - 更正 XIRR 的期末估值日期，使期末净值现金流计入最后一次真实估值/成交日，而非错误回填至最后一次入金日。
+  - V2 的实际结果显示 C2 主要以现金留存降低回撤和波动，未在匹配固定 DCA 下形成稳定收益优势，故明确保留为负对照，不升级默认策略。
+- 验证：
+  - `python3 tools/generate_calibration_fixture.py` 通过。
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-evaluation --locked` 通过。
+  - `cargo test -p core-domain --locked` 通过。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p strategy-evaluation --all-targets --all-features --locked -- -D warnings` 通过。
+
+### 2026-08-21 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：V1.1 核心桶订单门控修正。
 - 涉及文件：
   - `crates/api/src/routes/decision_preview.rs`

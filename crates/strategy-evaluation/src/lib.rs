@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use ai_client::Sentiment;
 use chrono::NaiveDate;
+use core_domain::{Multiplier, Percentile};
 use decision_engine::{
     evaluate_decision, DecisionConfig, DecisionInput, DecisionSentiment, DecisionSignal,
 };
@@ -33,6 +34,8 @@ const OPPORTUNITY_RATIO: i64 = 3;
 const BUY_COST_BPS: f64 = 5.0;
 const OOS_WINDOW_MONTHS: usize = 24;
 const OOS_STEP_MONTHS: usize = 12;
+const TREND_CAP_FLOOR: f64 = 0.25;
+const TREND_CAP_RISK_START: f64 = 0.50;
 
 /// Errors returned while reading or evaluating the committed calibration fixture.
 #[derive(Debug, Error)]
@@ -54,7 +57,7 @@ pub enum EvaluationError {
     Plan(#[from] investment_plans::PlanValidationError),
 }
 
-/// A complete machine-readable result for calibration-v1.
+/// A complete machine-readable result for calibration-v2.
 #[derive(Debug, Serialize)]
 pub struct CalibrationReport {
     dataset_version: String,
@@ -68,10 +71,10 @@ pub fn report_json(report: &CalibrationReport) -> Result<String, EvaluationError
     serde_json::to_string_pretty(report).map_err(EvaluationError::from)
 }
 
-/// Evaluate the committed calibration-v1 fixture using the unmodified production defaults.
+/// Evaluate the committed calibration-v2 fixture using unmodified production defaults.
 pub fn evaluate_fixture() -> Result<CalibrationReport, EvaluationError> {
     let dataset: FixtureDataset =
-        serde_json::from_str(include_str!("../data/generated/calibration-v1.json"))?;
+        serde_json::from_str(include_str!("../data/generated/calibration-v2.json"))?;
     let configuration = execution_configuration()?;
     let mut evaluated_assets = Vec::new();
     let mut fallback_samples = Vec::new();
@@ -85,12 +88,12 @@ pub fn evaluate_fixture() -> Result<CalibrationReport, EvaluationError> {
     Ok(CalibrationReport {
         dataset_version: dataset.dataset_version,
         assumptions: Assumptions {
-            contribution_schedule: "monthly, last available observation for each asset".to_owned(),
+            contribution_schedule: "monthly decision after the final available observation; execution at the first strictly later daily observation".to_owned(),
             period_budget_usd: PERIOD_BUDGET as f64,
             core_ratio: CORE_RATIO as f64 / 10.0,
             opportunity_ratio: OPPORTUNITY_RATIO as f64 / 10.0,
             buy_cost_bps: BUY_COST_BPS,
-            cost_model: "Each strategy buys at close × (1 + buy_cost_bps / 10,000); cash, including unallocated opportunity cash, remains in terminal wealth and earns no interest.".to_owned(),
+            cost_model: "Each strategy buys at the first strictly later daily close × (1 + buy_cost_bps / 10,000); cash, including unallocated opportunity cash, remains in terminal wealth and earns no interest.".to_owned(),
             historical_ai_policy: "Historical causal results use DecisionSentiment::Unavailable and the current 90/10/0 fallback.".to_owned(),
         },
         assets: evaluated_assets,
@@ -114,8 +117,9 @@ struct FixtureAsset {
 
 #[derive(Debug, Clone, Deserialize)]
 struct FixtureObservation {
-    as_of: String,
-    close: f64,
+    decision_as_of: String,
+    execution_as_of: String,
+    execution_close: f64,
     cape: f64,
     erp_proxy: f64,
     ma200_distance: f64,
@@ -239,8 +243,9 @@ struct FrozenQwenSensitivity {
 
 #[derive(Clone)]
 struct DecisionMonth {
-    date: NaiveDate,
-    close: f64,
+    decision_date: NaiveDate,
+    execution_date: NaiveDate,
+    execution_close: f64,
     fundamental: FundamentalSignal,
     trend: TrendSignal,
     fallback: DecisionSignal,
@@ -293,9 +298,11 @@ fn evaluate_asset(asset: &FixtureAsset) -> Result<Vec<DecisionMonth>, Evaluation
             &DecisionConfig::default(),
         );
         output.push(DecisionMonth {
-            date: NaiveDate::parse_from_str(&current.as_of, "%Y-%m-%d")
+            decision_date: NaiveDate::parse_from_str(&current.decision_as_of, "%Y-%m-%d")
                 .map_err(|_| EvaluationError::InvalidDate)?,
-            close: current.close,
+            execution_date: NaiveDate::parse_from_str(&current.execution_as_of, "%Y-%m-%d")
+                .map_err(|_| EvaluationError::InvalidDate)?,
+            execution_close: current.execution_close,
             fundamental,
             trend,
             fallback,
@@ -325,8 +332,8 @@ fn asset_report(
             let intent = simulate(window, configuration, ExecutionMode::CoreOpportunityIntent)?;
             let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
             Ok(RollingWindow {
-                start: window[0].date.to_string(),
-                end: window[window.len() - 1].date.to_string(),
+                start: window[0].decision_date.to_string(),
+                end: window[window.len() - 1].decision_date.to_string(),
                 months: window.len(),
                 terminal_difference_percent: relative_difference(
                     intent.terminal_wealth_usd,
@@ -337,15 +344,18 @@ fn asset_report(
             })
         })
         .collect::<Result<Vec<_>, EvaluationError>>()?;
-    let experimental_candidates = vec![bounded_continuous_candidate(samples, configuration, &dca)?];
+    let experimental_candidates = vec![
+        bounded_continuous_candidate(samples, configuration, &dca)?,
+        trend_continuous_cap_candidate(samples, configuration, &dca)?,
+    ];
 
     Ok(AssetReport {
         asset_id: asset.id.clone(),
         display_name: asset.display_name.clone(),
         source_symbol: asset.source_symbol.clone(),
         decision_observations: samples.len(),
-        first_decision_date: first.date.to_string(),
-        last_decision_date: last.date.to_string(),
+        first_decision_date: first.decision_date.to_string(),
+        last_decision_date: last.decision_date.to_string(),
         fallback_score_distribution: distribution(
             samples.iter().map(|row| row.fallback.final_score.value()),
         ),
@@ -373,6 +383,7 @@ enum ExecutionMode {
     CoreOpportunityIntent,
     CurrentApiEffective,
     CandidateBoundedContinuous,
+    CandidateTrendContinuousCap,
 }
 
 fn simulate(
@@ -385,12 +396,17 @@ fn simulate(
     let mut opportunity_cash = Decimal::ZERO;
     let mut state = PortfolioState::default();
     for row in samples {
-        state.deposit(row.date, PERIOD_BUDGET as f64);
+        state.deposit(row.decision_date, PERIOD_BUDGET as f64);
         let (action, multiplier) = match mode {
             ExecutionMode::CandidateBoundedContinuous => {
                 let multiplier = core_domain::Multiplier::new_clamped(
                     0.75 + 0.5 * row.fallback.final_score.value(),
                 );
+                (multiplier.to_action(), multiplier)
+            }
+            ExecutionMode::CandidateTrendContinuousCap => {
+                let multiplier =
+                    trend_continuous_cap_multiplier(row.fallback.fundamental_score, &row.trend);
                 (multiplier.to_action(), multiplier)
             }
             _ => (row.fallback.action, row.fallback.multiplier),
@@ -410,6 +426,7 @@ fn simulate(
             // opportunity bucket is reduced to zero by Skip/TacticalDelay.
             ExecutionMode::CurrentApiEffective => intended.recommended_contribution(),
             ExecutionMode::CandidateBoundedContinuous => intended.recommended_contribution(),
+            ExecutionMode::CandidateTrendContinuousCap => intended.recommended_contribution(),
         };
         if !matches!(mode, ExecutionMode::FixedDca) {
             opportunity_cash = (opportunity_cash + intended.opportunity_budget()
@@ -417,8 +434,8 @@ fn simulate(
             .max(Decimal::ZERO);
         }
         let spend = spend.to_f64().ok_or(EvaluationError::InsufficientHistory)?;
-        state.buy(row.date, spend, row.close);
-        state.mark_to_market(row.date, row.close);
+        state.buy(row.execution_date, spend, row.execution_close);
+        state.mark_to_market(row.execution_date, row.execution_close);
     }
     Ok(state.metrics(opportunity_cash.to_f64().unwrap_or_default()))
 }
@@ -444,8 +461,8 @@ fn bounded_continuous_candidate(
             )?;
             let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
             Ok(CandidateRollingWindow {
-                start: window[0].date.to_string(),
-                end: window[window.len() - 1].date.to_string(),
+                start: window[0].decision_date.to_string(),
+                end: window[window.len() - 1].decision_date.to_string(),
                 months: window.len(),
                 terminal_difference_vs_dca_percent: relative_difference(
                     candidate.terminal_wealth_usd,
@@ -467,6 +484,75 @@ fn bounded_continuous_candidate(
     })
 }
 
+fn trend_continuous_cap_candidate(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+    fixed_dca: &PerformanceMetrics,
+) -> Result<CandidateReport, EvaluationError> {
+    let performance = simulate(
+        samples,
+        configuration,
+        ExecutionMode::CandidateTrendContinuousCap,
+    )?;
+    let rolling_out_of_sample = (0..samples.len())
+        .step_by(OOS_STEP_MONTHS)
+        .filter_map(|start| samples.get(start..start + OOS_WINDOW_MONTHS))
+        .map(|window| {
+            let candidate = simulate(
+                window,
+                configuration,
+                ExecutionMode::CandidateTrendContinuousCap,
+            )?;
+            let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
+            Ok(CandidateRollingWindow {
+                start: window[0].decision_date.to_string(),
+                end: window[window.len() - 1].decision_date.to_string(),
+                months: window.len(),
+                terminal_difference_vs_dca_percent: relative_difference(
+                    candidate.terminal_wealth_usd,
+                    dca.terminal_wealth_usd,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, EvaluationError>>()?;
+    Ok(CandidateReport {
+        id: "trend_continuous_opportunity_cap_v1".to_owned(),
+        status: "experimental; not a production default".to_owned(),
+        rule: "Keep the 70% core bucket fixed. Derive the opportunity multiplier from the directional fundamental score, then multiply it by a continuous trend-risk cap in [0.25, 1.00]. The cap starts above a 0.50 raw tail-risk percentile and uses max(MA200-distance, RSI, VIX) risk. Trend regime never emits TacticalDelay in this evaluation-only candidate.".to_owned(),
+        terminal_difference_vs_dca_percent: relative_difference(
+            performance.terminal_wealth_usd,
+            fixed_dca.terminal_wealth_usd,
+        ),
+        performance,
+        rolling_out_of_sample,
+    })
+}
+
+fn trend_continuous_cap_multiplier(
+    fundamental_score: Percentile,
+    trend: &TrendSignal,
+) -> Multiplier {
+    let fundamental_multiplier = multiplier_from_score(fundamental_score);
+    let raw_tail_risk = trend
+        .ma_distance_percentile
+        .value()
+        .max(trend.rsi_percentile.value())
+        .max(trend.vix_percentile.value());
+    let normalised_tail_risk =
+        ((raw_tail_risk - TREND_CAP_RISK_START) / (1.0 - TREND_CAP_RISK_START)).clamp(0.0, 1.0);
+    let trend_cap = 1.0 - (1.0 - TREND_CAP_FLOOR) * normalised_tail_risk;
+    Multiplier::new_clamped(fundamental_multiplier.value() * trend_cap)
+}
+
+fn multiplier_from_score(score: Percentile) -> Multiplier {
+    let raw = if score.value() <= 0.5 {
+        score.value() * 2.0
+    } else {
+        1.0 + (score.value() - 0.5)
+    };
+    Multiplier::new_clamped(raw)
+}
+
 struct PortfolioState {
     cash: f64,
     units: f64,
@@ -478,6 +564,7 @@ struct PortfolioState {
     time_weighted_nav: f64,
     nav_values: Vec<f64>,
     period_returns: Vec<f64>,
+    last_mark_date: Option<NaiveDate>,
 }
 
 impl Default for PortfolioState {
@@ -493,6 +580,7 @@ impl Default for PortfolioState {
             time_weighted_nav: 1.0,
             nav_values: Vec::new(),
             period_returns: Vec::new(),
+            last_mark_date: None,
         }
     }
 }
@@ -512,7 +600,7 @@ impl PortfolioState {
         self.units += amount / (close * (1.0 + BUY_COST_BPS / 10_000.0));
     }
 
-    fn mark_to_market(&mut self, _date: NaiveDate, close: f64) {
+    fn mark_to_market(&mut self, date: NaiveDate, close: f64) {
         let value = self.cash + self.units * close;
         let denominator = self.last_value + self.pending_external_flow;
         if denominator > 0.0 {
@@ -525,12 +613,13 @@ impl PortfolioState {
         }
         self.last_value = value;
         self.pending_external_flow = 0.0;
+        self.last_mark_date = Some(date);
     }
 
     fn metrics(mut self, terminal_opportunity_cash_usd: f64) -> PerformanceMetrics {
         let terminal = self.last_value;
-        if let Some(last_flow) = self.flows.last_mut() {
-            last_flow.1 += terminal;
+        if let Some(last_mark_date) = self.last_mark_date {
+            self.flows.push((last_mark_date, terminal));
         }
         PerformanceMetrics {
             xirr_percent: xirr(&self.flows).map(|value| value * 100.0),
@@ -752,6 +841,7 @@ fn xirr(flows: &[(NaiveDate, f64)]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_domain::Action;
 
     /// Verify the committed fixture produces a deterministic non-empty offline report.
     #[test]
@@ -759,19 +849,78 @@ mod tests {
         let first = report_json(&evaluate_fixture().unwrap()).unwrap();
         let second = report_json(&evaluate_fixture().unwrap()).unwrap();
         assert_eq!(first, second);
-        assert!(first.contains("calibration-v1"));
+        assert!(first.contains("calibration-v2"));
         assert!(first.contains("sp500_index_proxy"));
         assert!(first.contains("nasdaq_composite_proxy"));
     }
 
-    /// Verify every score is built from earlier observations only.
+    /// Verify every decision uses prior history and a strictly later execution price.
     #[test]
-    fn decisions_require_sixty_prior_observations() {
+    fn decisions_require_sixty_prior_observations_and_next_day_execution() {
         let dataset: FixtureDataset =
-            serde_json::from_str(include_str!("../data/generated/calibration-v1.json")).unwrap();
+            serde_json::from_str(include_str!("../data/generated/calibration-v2.json")).unwrap();
         for asset in dataset.assets {
             let samples = evaluate_asset(&asset).unwrap();
-            assert_eq!(samples.len(), asset.observations.len() - 60);
+            assert!(samples.len() <= asset.observations.len() - 60);
+            assert!(samples
+                .iter()
+                .all(|sample| sample.execution_date > sample.decision_date));
+        }
+    }
+
+    /// Verify the research trend cap is continuous and bounded without a delay action.
+    #[test]
+    fn continuous_trend_cap_bounds_only_the_opportunity_multiplier() {
+        let neutral = quant_engine::TrendSignal {
+            score: Percentile::new(0.5).unwrap(),
+            ma_distance_percentile: Percentile::new(0.5).unwrap(),
+            rsi_percentile: Percentile::new(0.5).unwrap(),
+            vix_percentile: Percentile::new(0.5).unwrap(),
+            regime: quant_engine::TrendRegime::Neutral,
+        };
+        let severe = quant_engine::TrendSignal {
+            score: Percentile::new(0.0).unwrap(),
+            ma_distance_percentile: Percentile::new(1.0).unwrap(),
+            rsi_percentile: Percentile::new(1.0).unwrap(),
+            vix_percentile: Percentile::new(1.0).unwrap(),
+            regime: quant_engine::TrendRegime::FallingKnife,
+        };
+        let fundamental = Percentile::new(0.5).unwrap();
+
+        assert_eq!(
+            trend_continuous_cap_multiplier(fundamental, &neutral).value(),
+            1.0
+        );
+        assert_eq!(
+            trend_continuous_cap_multiplier(fundamental, &severe).value(),
+            TREND_CAP_FLOOR
+        );
+    }
+
+    /// Verify a trend cap never removes the fixed core contribution.
+    #[test]
+    fn trend_candidate_preserves_core_for_every_scored_observation() {
+        let configuration = execution_configuration().unwrap();
+        let dataset: FixtureDataset =
+            serde_json::from_str(include_str!("../data/generated/calibration-v2.json")).unwrap();
+        for asset in dataset.assets {
+            for sample in evaluate_asset(&asset).unwrap() {
+                let multiplier = trend_continuous_cap_multiplier(
+                    sample.fallback.fundamental_score,
+                    &sample.trend,
+                );
+                let split = TwoBucketContributionSplit::from_decision_with_carry(
+                    Decimal::new(PERIOD_BUDGET, 0),
+                    Decimal::new(MAX_SINGLE_EXECUTION, 0),
+                    configuration,
+                    multiplier.to_action(),
+                    multiplier,
+                    Decimal::ZERO,
+                )
+                .unwrap();
+                assert_eq!(split.core_contribution(), Decimal::new(700, 0));
+                assert_ne!(multiplier.to_action(), Action::TacticalDelay);
+            }
         }
     }
 
