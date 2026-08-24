@@ -3,243 +3,182 @@
 </p>
 
 <p align="center">
-  English | <a href="./readme.md">中文文档</a>
+  <a href="./readme.md">中文文档</a> | English
 </p>
 
 <p align="center">
-  <a href="https://github.com/jamesra26/indexlink/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version"></a>
-  <a href="https://github.com/jamesra26/indexlink/releases"><img src="https://img.shields.io/github/v/release/jamesra26/indexlink?display_name=tag" alt="Latest Release"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <a href="https://github.com/jamesra26/indexlink"><img src="https://img.shields.io/badge/status-demo%20MVP-blue" alt="Status"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+  <a href="./CHANGE_LOG.md"><img src="https://img.shields.io/badge/status-demo%20MVP-blue" alt="Demo MVP"></a>
+  <a href="./STRATEGY_STUDIO_MIGRATION_PLAN.md"><img src="https://img.shields.io/badge/strategy-studio%20migration-5b7cfa" alt="Strategy Studio migration"></a>
 </p>
 
-<p align="center">
-  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-edition%202021-orange.svg" alt="Rust"></a>
-  <a href="https://doc.rust-lang.org/cargo/"><img src="https://img.shields.io/badge/Cargo-workspace-lightgrey.svg" alt="Cargo Workspace"></a>
-  <a href="https://github.com/jamesra26/indexlink"><img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform"></a>
-  <a href="https://github.com/jamesra26/indexlink/tree/main/crates"><img src="https://img.shields.io/badge/crates-core--domain%20%7C%20quant--engine-blue" alt="Crates"></a>
-</p>
+# IndexLink
 
-<p align="center">
-  <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg" alt="Conventional Commits"></a>
-  <a href="./CHANGE_LOG.md"><img src="https://img.shields.io/badge/changelog-CHANGE__LOG.md-green" alt="Changelog"></a>
-  <a href="./AGENTS.md"><img src="https://img.shields.io/badge/contributing-AGENTS.md-blue" alt="Contributing"></a>
-</p>
+IndexLink is a **transparent, auditable, extensible quantitative DCA strategy studio and paper-trading execution platform** for long-term investors. It helps students and working professionals with limited budgets preserve a traceable answer to “why was this suggested, was it executed, and what actually happened?” rather than presenting opaque judgement as investment advice.
 
-<p align="center">
-  <a href="https://github.com/jamesra26/indexlink/stargazers"><img src="https://img.shields.io/github/stars/jamesra26/indexlink?style=social" alt="GitHub Stars"></a>
-  <a href="https://github.com/jamesra26/indexlink/commits/main"><img src="https://img.shields.io/github/last-commit/jamesra26/indexlink" alt="Last Commit"></a>
-  <a href="https://github.com/jamesra26/indexlink/graphs/commit-activity"><img src="https://img.shields.io/github/commit-activity/m/jamesra26/indexlink" alt="Commit Activity"></a>
-</p>
+The project is currently a demo MVP. It runs locally with SQLite or on Alibaba Cloud ECS, creates investment plans, retrieves market inputs, produces bounded Qwen explanations, stores decision evidence, reads a paper account, and submits a paper order to MockBroker or a local Futu/Moomoo OpenD **paper account** only after an explicit operator request.
 
-<p align="center">
-  <a href="https://github.com/jamesra26/indexlink/issues"><img src="https://img.shields.io/github/issues/jamesra26/indexlink" alt="Open Issues"></a>
-  <a href="https://github.com/jamesra26/indexlink/pulls"><img src="https://img.shields.io/github/issues-pr/jamesra26/indexlink" alt="Open PRs"></a>
-  <a href="https://github.com/jamesra26/indexlink/graphs/contributors"><img src="https://img.shields.io/github/contributors/jamesra26/indexlink" alt="Contributors"></a>
-</p>
+> **No outperformance promise.** IndexLink does not predict markets, determine intrinsic value, or guarantee returns. Fixed DCA remains the required fair benchmark; every policy must be validated under matched cash flows, costs, data, and execution timing.
 
-<p align="center">
-  <a href="https://github.com/jamesra26/indexlink/issues">Issue Tracker</a> •
-  <a href="./LICENSE">License</a> •
-  <a href="./CHANGE_LOG.md">Changelog</a>
-</p>
+## Product Goal
 
-IndexLink is an intelligent dollar-cost averaging (DCA) execution system designed for long-term index investors. Powered by a dual engine of **historical percentile anchors + AI semantic sensing**, it fine-tunes each scheduled investment day: invest more at relative lows, invest less at relative highs, and delay when overheated.
+The target is not one formula but a reproducible strategy lifecycle:
 
-Many students and working professionals invest from limited budgets and struggle to follow a plan through busy, volatile, or emotional market conditions: it is easy to chase rallies, pause during drawdowns, and later lose the evidence for why an adjustment was made. IndexLink combines fixed DCA discipline, reproducible market-position signals, and bounded AI news explanations so users can audit, adjust, and retain the rationale for a plan **without claiming to predict the market**.
+```text
+Create Strategy → Validate → Backtest → Review → Save Version → Activate
+→ Schedule → Evaluate → Paper Execute → Monitor → Audit
+```
 
-> **Core premise:** We cannot determine whether the market is "undervalued," but we can use data to detect its **position** within a historical distribution. IndexLink measures position only—it does not claim to know fair value. That is the essential difference between **adaptive DCA** and **market-timing speculation**.
+| Goal | Meaning |
+| :--- | :--- |
+| **Transparent** | Users can inspect the policy version, evidence, recommended amount, warnings, and order acknowledgement. |
+| **Auditable** | Each decision retains input snapshots, policy reference, Qwen rationale, order data, and related fill observations. |
+| **Reproducible** | The same policy version and complete context must produce the same recommendation; history and live use the same deterministic runtime. |
+| **Extensible** | Built-in policies, fixed DCA, and later restricted DSL policies share one execution and audit boundary. |
+| **Safe** | Paper trading only; the scheduler creates audit records but never submits orders; AI has no trading authority. |
 
----
+See the [Strategy Studio Migration Plan](./STRATEGY_STUDIO_MIGRATION_PLAN.md) for the complete target design, compatibility rules, and PR sequence.
 
-## Core Philosophy
+## Current Implementation and Policy Research
 
-Traditional DCA becomes rigid in extreme market conditions. IndexLink exists to address:
+The current demo still includes the historical 70/20/10 decision path: fundamental/historical-position, trend, and bounded Qwen sentiment produce a recommendation and evidence. This is the candidate semantics of `CoreOpportunityV1`; it is **not** a proven claim of superior returns.
 
-- **Mechanical full-size buys at historical highs:** When P/E sits at the 90th percentile historically and sentiment is overheated, automatically trigger "delay" or "reduce size."
-- **Fixed amounts at historical lows:** When price / ERP percentiles fall in a historical low band, automatically suggest or execute a modest increase within DCA discipline.
-- **The "good news is priced in" trap:** Combine earnings-season expectation gaps with macro news to flag "false prosperity."
+The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The migration will wrap the legacy model as a versioned built-in policy and add `FixedDcaPolicy` as a new-plan default candidate and fair benchmark. That migration is not implemented yet.
 
----
+| Capability | Current state | Boundary |
+| :--- | :--- | :--- |
+| Plans, schedule rules, and local SQLite | Implemented | Single-user local data; existing plans retain their current behaviour. |
+| 70/20 market inputs and Qwen evidence | Implemented | Source failure is explicit degradation or a rejected automatic decision, never fabricated input. |
+| Decision evidence and history | Implemented | Stores inputs, result, Qwen rationale/news/warnings, and optional order acknowledgement. |
+| Minimum scheduler | Implemented | Creates idempotent evidence on due dates; **never auto-submits an order**. |
+| Two-bucket budget, opportunity cash, and period constraints | Base loop implemented | Constrained by plan budget, available cash, period caps, and paper-only boundaries. |
+| Mock/OpenD paper trading | Implemented | Local-loopback OpenD paper accounts only; no live trading. |
+| Fixed DCA policy / policy registry / DSL Studio | Planned | See the migration plan; do not describe these as implemented. |
 
-## Decision Model: The 70/20/10 Rule
+## Architecture and Safety Boundaries
 
-The system rejects "blind AI fantasy." Every instruction follows this weighted logic:
-
-| Dimension                             | Weight  | Core Indicators                                             | Role of AI                                                                                |
-| :------------------------------------ | :------ | :---------------------------------------------------------- | :---------------------------------------------------------------------------------------- |
-| **Historical Position (Fundamental)** | **70%** | Shiller P/E, ERP, historical percentiles                    | **Hard constraint:** compute where the current price sits in its historical distribution. |
-| **Recent Trend (Technical)**          | **20%** | Distance from 200-day MA, RSI, volatility (VIX)             | **Rhythm control:** detect "catching a falling knife" or "chasing the top."               |
-| **Semantic Sensing (Sentiment)**      | **10%** | Earnings expectation gaps, macro news, user-defined sources | **Soft nudge:** use Qwen to infer directional bias behind news and rating changes.        |
-
----
-
-## Key Features
-
-- 🤖 **Qwen Decision Engine:** Reads key financial news and earnings guidance for the week; identifies expectation gaps.
-- 🦀 **Rust backend and local ledger:** Rust (Axum + Tokio) with SQLite, migrations, health checks, and a fixed-monthly decision-audit scheduler; it can run locally or in Docker Compose on Alibaba Cloud ECS.
-- 📊 **Dynamic action space:**
-  - **Overweight (+20~50%):** Modest increase within DCA discipline when in a historical low band and not in an extreme sharp decline.
-  - **Standard (100%):** Steady execution when in a neutral historical band (roughly 30%~70th percentile).
-  - **Tactical Delay:** Suggest delaying 3–5 days due to major news (e.g. NFP, FOMC) or technical overheating.
-  - **Underweight (-50%) / Skip:** Reduce size or sit out when in a historical high band or under systemic risk.
-- 🔌 **Paper-trading interface:** Mock mode and local loopback Futu/Moomoo OpenD paper accounts; live trading is not implemented.
-- 📜 **Transparent audit log:** Each automatic or manual Decision Preview writes an AI Decision Record; an order is optional and requires an explicit operator request.
-
-> **Current demo status (2026-07):** the local SQLite demo now has a fixed-monthly UTC scheduler that writes one idempotent automatic decision record per due plan/day. It fetches server-side 70/20 market inputs and bounded Qwen evidence, but **never submits an order automatically**. Paper orders require an explicit operator request and are limited to MockBroker or local loopback Futu/Moomoo OpenD paper accounts. The next planned scheduling model is a configurable 1–31 day review interval plus per-plan monthly budget controls; it is not implemented yet.
-
----
-
-## Technical Architecture
-
-### Design Principles
-
-1. **Determinism first, AI constrained:** 70% + 20% are pure, reproducible computations; the 10% AI layer only nudges within bounded limits. If AI is unavailable, degrade to 90/10/0 and keep running.
-2. **Position language in the data model:** Core output is historical percentile, not value judgment.
-3. **Financial reliability triad:** **Idempotency** (no duplicate orders on the same DCA day), **audit** (every decision replayable), **circuit breaker** (default to Skip on anomalies, never reckless investing).
-4. **Decision vs. execution separation:** Decision computation and order placement are two stages; user confirmation can sit in between.
-
-### Layered Overview
+IndexLink uses **Hexagonal Architecture + Modular Monolith**. Domain policies remain pure functions; network, database, Qwen, market data, and brokers remain outside the adapter boundary.
 
 ```mermaid
 graph TD
-    WEB[Web Dashboard / API Client]
+    WEB[Web Dashboard]
+    SCH[Scheduler]
+    API[API / Application Service]
+    POLICY[Policy Runtime\nDeterministic, no IO]
+    LEGACY[CoreOpportunityV1\nlegacy adapter]
+    DCA[Fixed DCA / DSL\nplanned]
+    EVIDENCE[Market Data + Qwen Evidence]
+    RECORDS[(SQLite\nplans, records, ledger)]
+    BROKER[Paper Broker\nMock / OpenD]
+    ECS[Alibaba Cloud ECS\nDocker Compose]
+    QWEN[DashScope / Qwen]
 
-    subgraph Ingestion[Data Ingestion]
-        MD[Market Data<br/>Price/PE/VIX]
-        NEWS[News/Earnings Sources]
-    end
-
-    subgraph Core[Rust Core Axum + Tokio]
-        SCH[Scheduler<br/>DCA Day Trigger]
-        QUANT[Quant Engine<br/>Percentile/MA/ERP]
-        AICLI[AI Client<br/>Qwen Adapter]
-        DEC[Decision Engine<br/>70/20/10 Weighting]
-        EXEC[Paper-order Gate<br/>Explicit operator request]
-    end
-
-    subgraph Adapters[External Adapters]
-        BROKER[Broker Adapter<br/>Mock / Real]
-    end
-
-    subgraph Storage[Persistence]
-        DB[(State/Audit/Cache)]
-    end
-
-    subgraph Cloud[Alibaba Cloud Runtime]
-        ECS[Alibaba Cloud ECS<br/>Docker Compose + SQLite Volume]
-        QWEN[Model Studio / DashScope<br/>Qwen API]
-    end
-
-    WEB --> ECS
+    WEB --> API
+    SCH --> API
+    API --> POLICY
+    POLICY --> LEGACY
+    POLICY -. planned .-> DCA
+    EVIDENCE --> API
+    API --> RECORDS
+    API --> BROKER
+    ECS -. hosts .-> API
     ECS -. hosts .-> SCH
-    ECS -. hosts .-> QUANT
-    ECS -. hosts .-> AICLI
-    ECS -. hosts .-> DEC
-    ECS -. hosts .-> EXEC
-    MD --> QUANT
-    NEWS --> AICLI
-    SCH --> DEC
-    QUANT --> DEC
-    AICLI --> DEC
-    AICLI -- OpenAI-compatible HTTPS --> QWEN
-    DEC --> EXEC
-    EXEC --> BROKER
-    DEC --> DB
-    EXEC --> DB
-    QUANT --> DB
+    QWEN --> EVIDENCE
 ```
 
-### Module Responsibilities
+Key constraints:
 
-| Module                     | Weight    | Responsibility                                                                                                                                |
-| :------------------------- | :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Scheduler**              | —         | Trigger DCA-day decisions via Tokio + persistent task table; idempotency key; survives process restarts.                                      |
-| **Quant Engine**           | 70% + 20% | Convert all indicators to percentiles within their own historical distributions; pure functions, no IO, shared by live trading and backtests. |
-| **AI Client**              | 10%       | Wrap Qwen; output bounded sentiment offset `sentiment ∈ [-1, +1]`; return 0 on timeout/parse failure (degraded mode).                         |
-| **Decision Engine**        | —         | Combine 70/20/10 into a composite score, map to DCA multiplier, emit `Decision` with input snapshot.                                          |
-| **Paper-order gate**       | —         | Decision → optional operator-supplied paper order; without it, only audit evidence is created. Scheduler never submits orders.                |
-| **Broker Adapter**         | —         | One trait with paper-only implementations: `MockBroker` and local loopback Futu/Moomoo OpenD.                                                  |
+- **No I/O in policy runtime:** a policy receives resolved context only. It cannot query a database, call the network, read secrets, or place an order.
+- **AI is bounded:** Qwen produces explanations, warnings, and policy candidates. It cannot bypass validation, budget, operator confirmation, or paper-only restrictions.
+- **Order safety:** only an explicit, due, validated paper-order request can be submitted. There is no live trading, automated cancellation, or scheduler auto-ordering.
+- **Audit first:** retain inputs rather than conclusions only. Future records will append policy ID, version, snapshot, and hash while old records remain readable.
 
-### Decision Pipeline
-
-```text
-Composite score S = 0.70 * f_value(percentile)     // historical position, dominant
-                  + 0.20 * f_trend(MA/RSI/VIX)     // rhythm
-                  + 0.10 * sentiment               // bounded AI nudge
-
-Multiplier = clamp( map(S), 0.0, x )               // upper bound x is user-configurable; lower bound Skip
-```
-
-- When **low but sharply falling**, `f_trend` applies a negative correction—"don't catch a falling knife"; increases stay conservative.
-- `clamp` is a hard safety bound: regardless of AI output, the multiplier always stays within `[0, 1.5]`.
-- Actions (Overweight / Standard / Delay / Underweight / Skip) are labels for multiplier bands.
-
-### Project Structure (Cargo Workspace)
+## Current Workspace
 
 ```text
 indexlink/
 ├─ crates/
-│  ├─ core-domain/      # Types: Decision, Action, Percentile (no IO)
-│  ├─ quant-engine/     # 70%+20% pure computation (no IO)
-│  ├─ ai-client/        # Qwen adapter + degradation logic
-│  ├─ decision-engine/  # 70/20/10 synthesis + mapping
-│  ├─ investment-plans/ # Fixed-monthly plans and execution preview
-│  ├─ decision-records/ # Auditable decision-record port
-│  ├─ market-data/      # Automatic 70/20 input provider
-│  ├─ broker/           # Broker trait + Mock/OpenD paper impl
-│  ├─ storage/          # DB access (audit/state/cache)
-│  └─ api/              # Axum HTTP layer
-└─ apps/
-   ├─ server/           # Binary entrypoint and minimum scheduler
-   └─ web/              # Vite + React demo UI
+│  ├─ core-domain/          # Amount, Action, Percentile and other invariant types
+│  ├─ quant-engine/         # Current percentile, fundamental, and trend pure functions
+│  ├─ decision-engine/      # Current 70/20/10 legacy decision implementation
+│  ├─ investment-plans/     # Plans, schedules, two-bucket budget, execution preview
+│  ├─ decision-records/     # Auditable decision-record port
+│  ├─ market-data/          # Market-input providers
+│  ├─ ai-client/            # DashScope/Qwen adapter and degradation
+│  ├─ broker/               # Mock/OpenD paper-only adapters
+│  ├─ storage/              # SQLite and persistence adapters
+│  ├─ strategy-evaluation/  # Offline, versioned policy research
+│  └─ api/                  # Axum HTTP and application orchestration
+├─ apps/
+│  ├─ server/               # Composition root and scheduler
+│  └─ web/                  # Vite + React dashboard
+├─ STRATEGY_STUDIO_MIGRATION_PLAN.md
+└─ deployment/aliyun/       # ECS Docker Compose deployment scripts
 ```
 
-> `quant-engine` and `decision-engine` stay pure and IO-free. The current historical chart is deliberately a simplified MA200 price-rule replay, not a complete historical 70/20/10 reconstruction.
+> The migration will add `strategy-policy` for the policy contract and a restricted Strategy DSL. Arbitrary user scripts will never enter the runtime.
 
-### Persistence & Audit
+## Run Locally
 
-| Table          | Purpose                                                             |
-| :------------- | :------------------------------------------------------------------ |
-| `investment_plans` | DCA instruments, fixed monthly execution day, base amount and cap |
-| `decision_records` | Each decision + **input snapshot**, Qwen evidence, request/ack and readable summary |
-| `scheduled_decision_runs` | One UTC-day claim per plan for the audit scheduler |
-| `paper_orders` / `paper_fills` / `portfolio_snapshots` | Local paper ledger reconstructed from observed OpenD order changes |
+1. Install stable Rust, `rustfmt`, `clippy`, and pnpm.
+2. Create local configuration and start the server:
 
-> Audit principle: **store inputs, not just conclusions**—persist percentiles, trend signals, sentiment, and weights at decision time so you can answer "why did we add 30% that day?"
+   ```bash
+   cp .env.example .env
+   cargo run -p indexlink-server
+   ```
 
-### Reliability & Safety
+3. Check health:
 
-- **Idempotency:** `(plan_id, UTC date)` prevents duplicate automatic audit records after scheduler ticks or restarts.
-- **Safe market-data failure:** Missing 70/20 data prevents automatic audit creation; no synthetic decision is written.
-- **Degradation chain:** AI down → explicit 90/10/0 decision mode; market feed down → no automatic decision; no retrying order is manufactured.
-- **Amount safety:** Hard-coded multiplier and single-execution caps; AI cannot override either.
-- **Paper-only execution:** The scheduler never submits an order. A paper order requires an explicit operator request, a due plan, and an executable action.
+   ```bash
+   curl http://localhost:8080/health
+   curl http://localhost:8080/ready
+   ```
 
-### Phased Rollout
+4. Start the web app:
 
-1. **Completed demo MVP:** local SQLite, automatic 70/20 data, bounded Qwen evidence, 70/20/10 decisions, audit records, a fixed-monthly scheduler, paper-order confirmation, and a local OpenD paper-account view.
-2. **Next:** configurable 1–31 day review intervals, per-plan monthly budgets, missed-run policies, and delayed re-evaluation.
-3. **Not in scope:** automatic or live orders, cloud sync, multi-user access, tax/FX/dividend treatment, and a complete historical 70/20/10 replay.
+   ```bash
+   pnpm --dir apps/web install --frozen-lockfile
+   pnpm --dir apps/web dev
+   ```
 
----
+The local `.env` is Git-ignored. `DASHSCOPE_API_KEY` is optional Qwen evidence configuration; `OPEND_PROVIDER`, `OPEND_HOST`, `OPEND_PORT`, and `OPEND_ACCOUNT_ID` are only for a local-loopback OpenD paper account. None may be committed or logged.
+
+### Docker / Alibaba Cloud ECS
+
+The project can run on Alibaba Cloud ECS with Docker Compose. SQLite is persisted in a local Docker volume:
+
+```bash
+docker compose -f deployment/docker-compose.yml up --build -d
+docker compose -f deployment/docker-compose.yml ps
+curl http://127.0.0.1:8080/ready
+```
+
+See [deployment/aliyun/README.md](./deployment/aliyun/README.md) for deployment instructions.
+
+## Roadmap
+
+1. **Policy contract and legacy wrapper:** add the generic `InvestmentPolicy` contract, wrap legacy logic as `CoreOpportunityV1`, and lock its behaviour with regression tests.
+2. **Fixed DCA and unified resolver:** introduce `FixedDcaPolicy`, allowing fixed DCA and the legacy policy to run through one preview, scheduler, audit, and paper-only flow.
+3. **Policy versions and restricted DSL:** save, validate, backtest, version, and activate allow-listed rule policies.
+4. **Unified evaluation and Studio:** use the same runtime for historical and live execution; show comparable XIRR, terminal wealth, drawdown, volatility, Sortino, and cash utilisation.
+5. **Qwen Copilot:** generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
+
+See [STRATEGY_STUDIO_MIGRATION_PLAN.md](./STRATEGY_STUDIO_MIGRATION_PLAN.md) for details.
 
 ## Disclaimer
 
-> **This project is for learning and technical research only. It does not constitute investment advice.**
+> This project is for learning, technical research, and paper-trading demonstrations only. It is not investment advice.
 
-- **Not investment advice:** All decisions, multipliers, and signals from IndexLink are quantitative outputs based on historical data. They are not buy/sell recommendations and do not predict market direction.
-- **No guarantee of returns:** Index investing carries risk of loss. Historical percentiles and backtest results **do not predict** future performance. You bear full responsibility for any investment decisions made using this system.
-- **Adaptive ≠ market timing:** This system measures price **position** within a historical distribution only. It does **not** claim to judge whether the market is "undervalued" or "overvalued," and cannot guarantee "buying the bottom."
-- **Use at your own risk:** Before connecting a real broker API, fully understand the code and risks, and test thoroughly. The authors are not liable for any direct or indirect losses from use of this software.
-- **Compliance:** Automated trading may be restricted by laws and broker terms in your jurisdiction. Confirm compliance before use.
+- Every policy can lose money; historical results do not predict future returns.
+- A policy without demonstrated, reproducible advantage must not be marketed as “improving returns” or “beating the market.”
+- Users are responsible for understanding policy logic, data sources, delays, costs, taxes, regulatory obligations, and trading risk.
+- No live-trading function is provided, and AI never receives order authority.
 
----
+## Copyright and Contributors
 
-## Copyright and contributors
+Copyright © 2026 IndexLink Contributors. Released under the [MIT License](./LICENSE).
 
-Copyright © 2026 IndexLink Contributors. The project is released under the [MIT License](./LICENSE); the original copyright notice in the license text remains unchanged.
-
-- Jame — original author and repository maintainer.
-- Xuanzhou Gu — backend, SQLite persistence, OpenD paper trading, decision records, and demo-loop contributions.
+- Jame — original project author and repository maintainer.
+- Xuanzhou Gu — backend, SQLite persistence, OpenD paper trading, decision evidence, strategy research, and demo-loop contributions.
 - Yucong Peng — project contributor.

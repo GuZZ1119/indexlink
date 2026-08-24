@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 2026-08-24 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：产品定位与策略工作台迁移文档。
+- 涉及文件：
+  - `STRATEGY_STUDIO_MIGRATION_PLAN.md`
+  - `readme.md`
+  - `readme.en.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 将公开定位由“单一 70/20/10 自适应定投模型”调整为“透明、可审计、可扩展的量化定投策略工作台与 paper-trading 执行平台”，明确不承诺跑赢固定 DCA 或市场。
+  - 新增双语策略工作台迁移计划，预登记通用策略契约、`CoreOpportunityV1` 兼容包装、`FixedDcaPolicy`、策略版本、受限 DSL、统一评估、API/Web Studio 与 Qwen Copilot 的渐进式小 PR 顺序。
+  - 明确现有 70/20/10 与 C1–C4 仅为可复现实验资产；旧计划、旧 API、旧审计记录、scheduler 幂等、paper-only 边界与 OpenD adapter 必须保持兼容。
+  - 重写中英文 README，区分当前已实现能力与目标架构，增加策略生命周期、迁移路线、固定 DCA 基准、AI 权限边界和 Alibaba Cloud ECS 运行说明。
+- 验证：
+  - `git diff --check` 通过。
+  - 文档链接、双语章节与 Mermaid 架构图已人工复核。
+
 ### 2026-08-21 CST
 
 - 执行模型：GPT-5 Codex。
