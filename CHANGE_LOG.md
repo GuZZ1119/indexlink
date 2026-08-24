@@ -5,6 +5,31 @@
 ### 2026-08-24 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：策略契约与 `CoreOpportunityV1` 兼容包装。
+- 涉及文件：
+  - `Cargo.toml`
+  - `Cargo.lock`
+  - `crates/strategy-policy/Cargo.toml`
+  - `crates/strategy-policy/src/lib.rs`
+  - `crates/builtin-policies/Cargo.toml`
+  - `crates/builtin-policies/src/lib.rs`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增无 IO 的 `strategy-policy` crate，提供带校验的 `PolicyId`、`PolicyVersion`、`PolicyRef`、泛型 `DecisionContext`、`InvestmentRecommendation` 与 `InvestmentPolicy` 契约。
+  - 新增无 IO 的 `builtin-policies` crate；`CoreOpportunityV1` 原样调用既有 `evaluate_decision`，将旧动作、倍率与周期预算映射为通用推荐，不修改 70/20/10 公式、降级模式或 `TacticalDelay` 语义。
+  - 通过回归测试锁定完整 `DecisionSignal` 与通用推荐的动作、倍率、周期预算；本次不修改计划、SQLite、HTTP、scheduler、broker 或 paper order 行为。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-policy --locked` 通过（2 个测试）。
+  - `cargo test -p builtin-policies --locked` 通过（2 个测试）。
+  - `cargo test -p core-domain --locked` 通过（13 个测试）。
+  - `cargo check --workspace --locked` 通过。
+  - `cargo clippy -p strategy-policy -p builtin-policies --all-targets --all-features --locked -- -D warnings` 通过。
+  - `git diff --check` 通过。
+
+### 2026-08-24 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：产品定位与策略工作台迁移文档。
 - 涉及文件：
   - `STRATEGY_STUDIO_MIGRATION_PLAN.md`

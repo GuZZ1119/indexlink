@@ -1,7 +1,7 @@
 # IndexLink 策略工作台迁移计划 / Strategy Studio Migration Plan
 
-> 状态：已预登记，尚未开始实现。
-> Status: pre-registered; implementation has not started.
+> 状态：PR 1 已完成；其余阶段已预登记，尚未实现。
+> Status: PR 1 is complete; the remaining stages are pre-registered and not implemented.
 
 ## 1. 新定位 / New Positioning
 
@@ -97,7 +97,7 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 6. 小步实施计划 / Small-PR Delivery Plan
 
-### PR 1 — 策略契约与 Legacy 包装 / Policy Contract and Legacy Wrapper
+### PR 1 — 策略契约与 Legacy 包装 / Policy Contract and Legacy Wrapper（已完成 / Complete）
 
 - 新增 `strategy-policy` 的标识、版本、上下文、推荐与 trait。
 - 新增 `CoreOpportunityV1` 适配器，调用现有函数并做逐项输出回归测试。

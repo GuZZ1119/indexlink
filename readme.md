@@ -53,6 +53,7 @@ IndexLink 是一个面向长期投资者的**透明、可审计、可扩展的�
 | 最小 scheduler | 已完成 | 到期时幂等生成存证；**从不自动下单**。 |
 | 双桶预算、机会现金与周期约束 | 已完成基础闭环 | 受计划预算、可用现金、周期上限和 paper-only 边界约束。 |
 | Mock/OpenD paper trading | 已完成 | 仅 loopback OpenD 模拟账户；不支持实盘。 |
+| 策略契约与 `CoreOpportunityV1` 包装 | 已完成 | 无 IO 的通用契约已建立；旧 70/20/10 行为保持不变，尚未接入计划选择。 |
 | 固定 DCA policy / 策略版本库 / DSL Studio | 计划中 | 见迁移计划；不得表述为已经完成。 |
 
 ## 架构与安全边界
@@ -158,8 +159,8 @@ curl http://127.0.0.1:8080/ready
 
 ## 路线图
 
-1. **策略契约与兼容包装**：增加通用 `InvestmentPolicy` 契约，用 `CoreOpportunityV1` 包装旧逻辑并锁定回归。
-2. **固定 DCA 与统一解析入口**：引入 `FixedDcaPolicy`，让固定 DCA 与旧策略通过同一预览、scheduler、审计和 paper-only 流程运行。
+1. **策略契约与兼容包装**：已增加通用 `InvestmentPolicy` 契约，用 `CoreOpportunityV1` 包装旧逻辑并锁定回归。
+2. **固定 DCA 与统一解析入口**：下一步引入 `FixedDcaPolicy`，让固定 DCA 与旧策略通过同一预览、scheduler、审计和 paper-only 流程运行。
 3. **策略版本和受限 DSL**：保存、验证、回测、版本化和激活白名单规则策略。
 4. **统一评估与 Studio**：历史与实时复用同一运行时；呈现可比的 XIRR、终值、回撤、波动、Sortino 和现金使用率。
 5. **Qwen Copilot**：生成候选草案及解释，始终经确定性校验、回测和人工审阅。

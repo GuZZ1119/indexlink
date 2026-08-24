@@ -12,6 +12,8 @@ members = [
     "crates/decision-records",
     "crates/market-data",
     "crates/strategy-evaluation",
+    "crates/strategy-policy",
+    "crates/builtin-policies",
     "apps/server",
 ]
 
@@ -30,6 +32,8 @@ investment-plans = { path = "crates/investment-plans" }
 indexlink-storage = { path = "crates/storage" }
 indexlink-api = { path = "crates/api" }
 quant-engine = { path = "crates/quant-engine" }
+strategy-policy = { path = "crates/strategy-policy" }
+builtin-policies = { path = "crates/builtin-policies" }
 async-trait = "0.1"
 axum = "0.7"
 dotenvy = "0.15"

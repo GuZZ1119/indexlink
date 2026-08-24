@@ -179,6 +179,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "builtin-policies"
+version = "0.1.0"
+dependencies = [
+ "ai-client",
+ "core-domain",
+ "decision-engine",
+ "quant-engine",
+ "rust_decimal",
+ "strategy-policy",
+ "time",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2008,6 +2021,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "strategy-policy"
+version = "0.1.0"
+dependencies = [
+ "core-domain",
+ "rust_decimal",
+ "thiserror",
+ "time",
 ]
 
 [[package]]

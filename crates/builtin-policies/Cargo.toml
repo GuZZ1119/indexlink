@@ -1,0 +1,15 @@
+[package]
+name = "builtin-policies"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-client.workspace = true
+decision-engine.workspace = true
+strategy-policy.workspace = true
+
+[dev-dependencies]
+core-domain.workspace = true
+quant-engine.workspace = true
+rust_decimal.workspace = true
+time.workspace = true
