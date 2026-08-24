@@ -43,7 +43,7 @@ See the [Strategy Studio Migration Plan](./STRATEGY_STUDIO_MIGRATION_PLAN.md) fo
 
 The current demo still includes the historical 70/20/10 decision path: fundamental/historical-position, trend, and bounded Qwen sentiment produce a recommendation and evidence. This is the candidate semantics of `CoreOpportunityV1`; it is **not** a proven claim of superior returns.
 
-The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The migration will wrap the legacy model as a versioned built-in policy and add `FixedDcaPolicy` as a new-plan default candidate and fair benchmark. That migration is not implemented yet.
+The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The legacy model is now retained as a versioned built-in policy, and `FixedDcaPolicy` is the new-plan default and fair benchmark; the restricted DSL and Strategy Studio remain unimplemented.
 
 | Capability | Current state | Boundary |
 | :--- | :--- | :--- |
@@ -53,8 +53,8 @@ The repository keeps C1–C4, calibration fixtures, and reports as reproducible 
 | Minimum scheduler | Implemented | Creates idempotent evidence on due dates; **never auto-submits an order**. |
 | Two-bucket budget, opportunity cash, and period constraints | Base loop implemented | Constrained by plan budget, available cash, period caps, and paper-only boundaries. |
 | Mock/OpenD paper trading | Implemented | Local-loopback OpenD paper accounts only; no live trading. |
-| Policy contract and `CoreOpportunityV1` wrapper | Implemented | The I/O-free generic contract exists; legacy 70/20/10 behaviour is unchanged and is not yet selected per plan. |
-| Fixed DCA policy / policy registry / DSL Studio | Planned | See the migration plan; do not describe these as implemented. |
+| Built-in policies and unified execution entry | Implemented | New plans default to `fixed_dca@1`; existing SQLite plans migrate to `core_opportunity_v1@1`; preview, scheduler, audit, and paper-only orders use the same resolver. |
+| Policy registry / DSL Studio | Planned | Only supported built-in policies can be selected today; see the migration plan. |
 
 ## Architecture and Safety Boundaries
 
@@ -67,7 +67,7 @@ graph TD
     API[API / Application Service]
     POLICY[Policy Runtime\nDeterministic, no IO]
     LEGACY[CoreOpportunityV1\nlegacy adapter]
-    DCA[Fixed DCA / DSL\nplanned]
+    DCA[Fixed DCA\nimplemented]
     EVIDENCE[Market Data + Qwen Evidence]
     RECORDS[(SQLite\nplans, records, ledger)]
     BROKER[Paper Broker\nMock / OpenD]
@@ -160,8 +160,8 @@ See [deployment/aliyun/README.md](./deployment/aliyun/README.md) for deployment 
 ## Roadmap
 
 1. **Policy contract and legacy wrapper:** completed: the generic `InvestmentPolicy` contract wraps legacy logic as `CoreOpportunityV1` and locks its behaviour with regression tests.
-2. **Fixed DCA and unified resolver:** next, introduce `FixedDcaPolicy`, allowing fixed DCA and the legacy policy to run through one preview, scheduler, audit, and paper-only flow.
-3. **Policy versions and restricted DSL:** save, validate, backtest, version, and activate allow-listed rule policies.
+2. **Fixed DCA and unified resolver:** completed; fixed DCA and the legacy policy run through one preview, scheduler, audit, and paper-only flow.
+3. **Policy versions and restricted DSL:** next, save, validate, backtest, version, and activate allow-listed rule policies.
 4. **Unified evaluation and Studio:** use the same runtime for historical and live execution; show comparable XIRR, terminal wealth, drawdown, volatility, Sortino, and cash utilisation.
 5. **Qwen Copilot:** generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
 

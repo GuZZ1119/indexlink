@@ -6,5 +6,6 @@ edition.workspace = true
 [dependencies]
 core-domain.workspace = true
 rust_decimal.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 time.workspace = true

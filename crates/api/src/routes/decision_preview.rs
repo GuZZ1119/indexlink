@@ -12,12 +12,13 @@ use axum::{
     Json, Router,
 };
 use broker::{BrokerOrderAck, BrokerOrderRequest, BrokerOrderSide, BrokerOrderStatus};
+use builtin_policies::{
+    BuiltinPolicyDecision, BuiltinPolicyError, BuiltinPolicyEvidence, BuiltinPolicyEvidenceKind,
+    CoreOpportunityEvidence,
+};
 use chrono::{Datelike, NaiveDate, Utc};
 use core_domain::{Action, Percentile};
-use decision_engine::{
-    evaluate_decision, DecisionConfig, DecisionInput, DecisionSentiment, DecisionSignal,
-    DecisionWeightMode,
-};
+use decision_engine::{DecisionInput, DecisionSentiment, DecisionWeightMode};
 use decision_records::{CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus};
 use indexlink_storage::OpportunityCashSettlementInput;
 use investment_plans::{
@@ -32,6 +33,7 @@ use quant_engine::{
 use rust_decimal::{prelude::ToPrimitive, Decimal, RoundingStrategy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use time::{Date, Month};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -52,10 +54,10 @@ struct DecisionPreviewRequest {
     /// The persisted plan configuration is authoritative and this value is not
     /// used to override it.
     bucket_allocation: Option<TwoBucketAllocationRequest>,
-    /// Fundamental signal snapshot.
-    fundamental: FundamentalSignalRequest,
-    /// Trend signal snapshot.
-    trend: TrendSignalRequest,
+    /// Fundamental signal snapshot; only legacy Core/Opportunity V1 requires it.
+    fundamental: Option<FundamentalSignalRequest>,
+    /// Trend signal snapshot; only legacy Core/Opportunity V1 requires it.
+    trend: Option<TrendSignalRequest>,
     /// Optional paper order to submit when the execution date is due and the request is valid.
     paper_order: Option<PaperOrderRequest>,
     /// Trusted source disclosure attached only by server-side automatic orchestration.
@@ -209,21 +211,38 @@ pub struct ScheduledDecisionRunSummary {
 /// API-facing decision response.
 #[derive(Debug, Serialize)]
 struct DecisionResponse {
+    /// 策略版本引用。
+    policy: PolicyResponse,
+    /// 本次策略是否读取了市场或 AI 信号。
+    market_signals_used: bool,
     /// Final investability score.
-    final_score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_score: Option<f64>,
     /// Contribution multiplier.
     multiplier: f64,
     /// Final action label.
     action: ActionResponse,
     /// Weight mode used by the decision engine.
-    weight_mode: DecisionWeightModeResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    weight_mode: Option<DecisionWeightModeResponse>,
     /// Fundamental contribution score after direction normalization.
-    fundamental_score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fundamental_score: Option<f64>,
     /// Trend timing contribution score after safety normalization.
-    trend_score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trend_score: Option<f64>,
     /// Sentiment contribution score when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentiment_score: Option<f64>,
+}
+
+/// API 中的不可变策略版本标识。
+#[derive(Debug, Serialize)]
+struct PolicyResponse {
+    /// 稳定策略 ID。
+    id: String,
+    /// 不可变版本号。
+    version: u32,
 }
 
 /// API action values.
@@ -351,7 +370,7 @@ async fn preview_automatic_for_plan_with_claim(
         i16::try_from(scheduled_for.day()).map_err(|_| ApiError::ServiceUnavailable)?;
     let input = automatic_decision_input(
         state,
-        &plan.symbol,
+        &plan,
         day_of_month,
         AutomaticDecisionPreviewRequest {
             bucket_allocation: None,
@@ -393,18 +412,37 @@ async fn preview_automatic_for_plan(
     options: AutomaticDecisionPreviewRequest,
 ) -> Result<DecisionPreviewResponse, ApiError> {
     let plan = state.plans().get(plan_id).await?;
-    let input = automatic_decision_input(state, &plan.symbol, day_of_month, options).await?;
+    let input = automatic_decision_input(state, &plan, day_of_month, options).await?;
     preview_decision_input(state, plan_id, input, trigger, Utc::now().date_naive()).await
 }
 
 /// Resolve automatic market snapshots into the same validated request shape used by the engine.
 async fn automatic_decision_input(
     state: &ApiState,
-    symbol: &str,
+    plan: &InvestmentPlan,
     day_of_month: i16,
     options: AutomaticDecisionPreviewRequest,
 ) -> Result<DecisionPreviewRequest, ApiError> {
-    let input = state.market_signal_input(symbol).await?;
+    if state
+        .policy_resolver()
+        .evidence_kind(&plan.policy)
+        .map_err(map_policy_error)?
+        == BuiltinPolicyEvidenceKind::FixedDca
+    {
+        return Ok(DecisionPreviewRequest {
+            day_of_month,
+            bucket_allocation: options.bucket_allocation,
+            fundamental: None,
+            trend: None,
+            paper_order: options.paper_order,
+            input_source: Some(json!({
+                "kind": "fixed_dca",
+                "description": "fixed_dca does not read market or AI signals",
+            })),
+        });
+    }
+
+    let input = state.market_signal_input(&plan.symbol).await?;
     let fundamental = evaluate_fundamental(
         &FundamentalSnapshot {
             cape_history: input.cape_history.clone(),
@@ -431,8 +469,8 @@ async fn automatic_decision_input(
     Ok(DecisionPreviewRequest {
         day_of_month,
         bucket_allocation: options.bucket_allocation,
-        fundamental: FundamentalSignalRequest::from(fundamental),
-        trend: TrendSignalRequest::from(trend),
+        fundamental: Some(FundamentalSignalRequest::from(fundamental)),
+        trend: Some(TrendSignalRequest::from(trend)),
         paper_order: options.paper_order,
         input_source: Some(automatic_source_snapshot(&input)),
     })
@@ -451,8 +489,7 @@ async fn preview_decision_input(
         i16::try_from(execution_date.weekday().num_days_from_monday() + 1)
             .map_err(|_| ApiError::ServiceUnavailable)?,
     )?;
-    let fundamental = input.fundamental.clone_signal()?;
-    let trend = input.trend.clone_signal()?;
+    let plan = state.plans().get(id).await?;
     let legacy_bucket_config = input
         .bucket_allocation
         .map(TwoBucketAllocationRequest::into_domain)
@@ -460,26 +497,31 @@ async fn preview_decision_input(
     if legacy_bucket_config.is_some() {
         tracing::warn!(plan_id = %id, "legacy decision-preview bucket allocation ignored; persisted plan configuration is authoritative");
     }
-    let market_sentiment = market_sentiment_for_decision(state).await;
-    let market_sentiment_response = market_sentiment.as_ref().map(MarketSentimentResponse::from);
-    let decision_input = DecisionInput {
-        fundamental,
-        trend,
-        sentiment: market_sentiment
-            .as_ref()
-            .map_or(DecisionSentiment::Unavailable, |report| {
-                DecisionSentiment::Available(report.analysis.sentiment())
-            }),
+    let evidence_kind = state
+        .policy_resolver()
+        .evidence_kind(&plan.policy)
+        .map_err(map_policy_error)?;
+    let market_sentiment = if evidence_kind == BuiltinPolicyEvidenceKind::CoreOpportunity {
+        market_sentiment_for_decision(state).await
+    } else {
+        None
     };
-    let decision = evaluate_decision(&decision_input, &DecisionConfig::default());
+    let market_sentiment_response = market_sentiment.as_ref().map(MarketSentimentResponse::from);
+    let decision = resolve_policy_decision(
+        state,
+        &plan,
+        execution_date,
+        &input,
+        market_sentiment.as_ref(),
+    )?;
     let carried_opportunity_cash = state.opportunity_cash_balance(id).await?;
     let execution = state
         .plans()
         .preview_execution_with_decision_and_cash(
             id,
             execution_input,
-            decision.action,
-            decision.multiplier,
+            decision.recommendation().action(),
+            decision.recommendation().multiplier(),
             carried_opportunity_cash,
         )
         .await?;
@@ -500,7 +542,7 @@ async fn preview_decision_input(
         }
         None => None,
     };
-    let decision_response = DecisionResponse::from_signal(&decision);
+    let decision_response = DecisionResponse::from_policy_decision(&decision);
     let should_submit = should_submit_paper_order(&execution, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
     let persisted = state
@@ -509,6 +551,7 @@ async fn preview_decision_input(
             plan_id: id,
             input: &input,
             execution: &execution,
+            policy: &plan.policy,
             decision: &decision,
             market_sentiment: market_sentiment.as_ref(),
             trigger,
@@ -618,6 +661,63 @@ async fn preview_decision_input(
         paper_order_ack,
         summary,
     })
+}
+
+/// 通过计划绑定的策略解析一次统一推荐；策略本身不进行 IO。
+fn resolve_policy_decision(
+    state: &ApiState,
+    plan: &InvestmentPlan,
+    execution_date: NaiveDate,
+    input: &DecisionPreviewRequest,
+    market_sentiment: Option<&MarketSentimentReport>,
+) -> Result<BuiltinPolicyDecision, ApiError> {
+    let date = Date::from_calendar_date(
+        execution_date.year(),
+        Month::try_from(execution_date.month() as u8).map_err(|_| ApiError::BadRequest)?,
+        execution_date.day() as u8,
+    )
+    .map_err(|_| ApiError::BadRequest)?;
+    let evidence = match state
+        .policy_resolver()
+        .evidence_kind(&plan.policy)
+        .map_err(map_policy_error)?
+    {
+        BuiltinPolicyEvidenceKind::FixedDca => BuiltinPolicyEvidence::FixedDca,
+        BuiltinPolicyEvidenceKind::CoreOpportunity => {
+            let fundamental = input
+                .fundamental
+                .as_ref()
+                .ok_or(ApiError::BadRequest)?
+                .clone_signal()?;
+            let trend = input
+                .trend
+                .as_ref()
+                .ok_or(ApiError::BadRequest)?
+                .clone_signal()?;
+            BuiltinPolicyEvidence::CoreOpportunity(CoreOpportunityEvidence::new(DecisionInput {
+                fundamental,
+                trend,
+                sentiment: market_sentiment.map_or(DecisionSentiment::Unavailable, |report| {
+                    DecisionSentiment::Available(report.analysis.sentiment())
+                }),
+            }))
+        }
+    };
+
+    state
+        .policy_resolver()
+        .evaluate(&plan.policy, date, plan.base_contribution, evidence)
+        .map_err(map_policy_error)
+}
+
+/// 将策略 resolver 的安全领域错误映射为不暴露实现细节的 HTTP 错误。
+fn map_policy_error(error: BuiltinPolicyError) -> ApiError {
+    tracing::warn!(%error, "plan policy could not be resolved");
+    match error {
+        BuiltinPolicyError::UnsupportedPolicy(_)
+        | BuiltinPolicyError::EvidenceDoesNotMatchPolicy => ApiError::BadRequest,
+        BuiltinPolicyError::InvalidContext(_) => ApiError::BadRequest,
+    }
 }
 
 /// Return a stable weekly or monthly UTC period key for the atomic budget ledger.
@@ -804,15 +904,35 @@ impl From<BrokerOrderSideRequest> for BrokerOrderSide {
 }
 
 impl DecisionResponse {
-    fn from_signal(signal: &DecisionSignal) -> Self {
-        Self {
-            final_score: signal.final_score.value(),
-            multiplier: signal.multiplier.value(),
-            action: signal.action.into(),
-            weight_mode: signal.weight_mode.into(),
-            fundamental_score: signal.fundamental_score.value(),
-            trend_score: signal.trend_score.value(),
-            sentiment_score: signal.sentiment_score.map(Percentile::value),
+    fn from_policy_decision(decision: &BuiltinPolicyDecision) -> Self {
+        let recommendation = decision.recommendation();
+        let policy = PolicyResponse {
+            id: recommendation.policy().id().as_str().to_owned(),
+            version: recommendation.policy().version().value(),
+        };
+        match decision {
+            BuiltinPolicyDecision::CoreOpportunity { signal, .. } => Self {
+                policy,
+                market_signals_used: true,
+                final_score: Some(signal.final_score.value()),
+                multiplier: signal.multiplier.value(),
+                action: signal.action.into(),
+                weight_mode: Some(signal.weight_mode.into()),
+                fundamental_score: Some(signal.fundamental_score.value()),
+                trend_score: Some(signal.trend_score.value()),
+                sentiment_score: signal.sentiment_score.map(Percentile::value),
+            },
+            BuiltinPolicyDecision::FixedDca { .. } => Self {
+                policy,
+                market_signals_used: false,
+                final_score: None,
+                multiplier: recommendation.multiplier().value(),
+                action: recommendation.action().into(),
+                weight_mode: None,
+                fundamental_score: None,
+                trend_score: None,
+                sentiment_score: None,
+            },
         }
     }
 }
@@ -899,7 +1019,8 @@ struct DecisionRecordContext<'a> {
     plan_id: Uuid,
     input: &'a DecisionPreviewRequest,
     execution: &'a InvestmentPlanExecutionPreview,
-    decision: &'a DecisionSignal,
+    policy: &'a strategy_policy::PolicyRef,
+    decision: &'a BuiltinPolicyDecision,
     market_sentiment: Option<&'a MarketSentimentReport>,
     trigger: DecisionTrigger,
     paper_order: Option<&'a BrokerOrderRequest>,
@@ -920,17 +1041,23 @@ fn record_input(context: DecisionRecordContext<'_>) -> Result<CreateDecisionReco
             .map(|value| value.to_string()),
         execution_snapshot: json!({
             "trigger": trigger_label(context.trigger),
+            "policy": {
+                "id": context.policy.id().as_str(),
+                "version": context.policy.version().value(),
+            },
             "execution": snapshot(context.execution)?,
         }),
-        fundamental_snapshot: signal_snapshot(
+        fundamental_snapshot: policy_signal_snapshot(
             "fundamental",
-            &context.input.fundamental,
+            context.input.fundamental.as_ref(),
             context.input.input_source.as_ref(),
+            context.policy,
         )?,
-        trend_snapshot: signal_snapshot(
+        trend_snapshot: policy_signal_snapshot(
             "trend",
-            &context.input.trend,
+            context.input.trend.as_ref(),
             context.input.input_source.as_ref(),
+            context.policy,
         )?,
         sentiment_snapshot: context.market_sentiment.map(market_sentiment_snapshot),
         decision_snapshot: decision_snapshot(context.decision),
@@ -938,6 +1065,24 @@ fn record_input(context: DecisionRecordContext<'_>) -> Result<CreateDecisionReco
         broker_order_ack: context.paper_order_ack.map(snapshot).transpose()?,
         summary: context.summary,
     })
+}
+
+/// 保存实际使用的信号，或明确记录固定策略为何没有读取该信号层。
+fn policy_signal_snapshot(
+    layer: &'static str,
+    signal: Option<&impl Serialize>,
+    automatic_source: Option<&Value>,
+    policy: &strategy_policy::PolicyRef,
+) -> Result<Value, ApiError> {
+    match signal {
+        Some(signal) => signal_snapshot(layer, signal, automatic_source),
+        None => Ok(json!({
+            "layer": layer,
+            "used": false,
+            "policy": policy.to_string(),
+            "reason": "the selected fixed_dca policy does not read market signals",
+        })),
+    }
 }
 
 /// Build a source-labelled 70% or 20% audit snapshot without retaining credentials.
@@ -1009,8 +1154,27 @@ fn snapshot(value: &impl Serialize) -> Result<Value, ApiError> {
 }
 
 /// Build the decision-output snapshot, including the effective weights.
-fn decision_snapshot(decision: &DecisionSignal) -> Value {
+fn decision_snapshot(decision: &BuiltinPolicyDecision) -> Value {
+    let recommendation = decision.recommendation();
+    let base = json!({
+        "policy": {
+            "id": recommendation.policy().id().as_str(),
+            "version": recommendation.policy().version().value(),
+        },
+        "multiplier": recommendation.multiplier().value(),
+        "action": action_label(recommendation.action()),
+    });
+    let Some(decision) = decision.legacy_signal() else {
+        return json!({
+            "policy": base["policy"].clone(),
+            "multiplier": recommendation.multiplier().value(),
+            "action": action_label(recommendation.action()),
+            "market_signals_used": false,
+        });
+    };
     json!({
+        "policy": base["policy"].clone(),
+        "market_signals_used": true,
         "final_score": decision.final_score.value(),
         "multiplier": decision.multiplier.value(),
         "action": action_label(decision.action),
@@ -1047,7 +1211,7 @@ fn weight_mode_label(mode: DecisionWeightMode) -> &'static str {
 
 fn summarize_decision(
     execution: &InvestmentPlanExecutionPreview,
-    decision: &DecisionSignal,
+    decision: &BuiltinPolicyDecision,
     ack: Option<&BrokerOrderAck>,
 ) -> String {
     let execution_status = match execution.status {
@@ -1058,12 +1222,6 @@ fn summarize_decision(
     let contribution = execution
         .planned_contribution
         .map_or_else(|| "none".to_owned(), |value| value.to_string());
-    let fundamental = score_interpretation(decision.fundamental_score.value());
-    let trend = score_interpretation(decision.trend_score.value());
-    let sentiment = decision.sentiment_score.map_or_else(
-        || "unavailable".to_owned(),
-        |value| format!("{:.2}", value.value()),
-    );
     let bucket_split = execution.bucket_split.map_or_else(
         || "none".to_owned(),
         |split| {
@@ -1092,6 +1250,27 @@ fn summarize_decision(
         None => "no paper order submitted",
     };
 
+    let recommendation = decision.recommendation();
+    let Some(decision) = decision.legacy_signal() else {
+        return format!(
+            "Decision preview for {}: execution={}; planned_contribution={} {}; policy={}; fixed periodic contribution uses no fundamental, trend, or AI sentiment inputs; multiplier={:.2}; action={}; bucket_split={}; {}.",
+            execution.symbol,
+            execution_status,
+            contribution,
+            execution.currency,
+            recommendation.policy(),
+            recommendation.multiplier().value(),
+            action_label(recommendation.action()),
+            bucket_split,
+            order,
+        );
+    };
+    let fundamental = score_interpretation(decision.fundamental_score.value());
+    let trend = score_interpretation(decision.trend_score.value());
+    let sentiment = decision.sentiment_score.map_or_else(
+        || "unavailable".to_owned(),
+        |value| format!("{:.2}", value.value()),
+    );
     format!(
         "Decision preview for {}: execution={}; planned_contribution={} {}; fundamental_investability={:.2} ({}); trend_timing={:.2} ({}, regime={:?}); market_sentiment={}; weight_mode={}; final_score={:.2}; multiplier={:.2}; action={}; bucket_split={}; {}.",
         execution.symbol,
@@ -1142,6 +1321,7 @@ mod scheduler_tests {
             schedule_kind: kind,
             schedule_day: days[0],
             schedule_days: days,
+            policy: investment_plans::legacy_core_opportunity_v1_policy(),
             execution_configuration: PlanExecutionConfiguration::new(
                 TwoBucketAllocationConfig::new(
                     BucketAllocationRatio::new(Decimal::ONE).unwrap(),

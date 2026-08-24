@@ -8,6 +8,7 @@
 
 use core_domain::{Action, Multiplier};
 use rust_decimal::Decimal;
+use serde::Serialize;
 use time::Date;
 
 const MAX_POLICY_ID_LEN: usize = 64;
@@ -16,7 +17,8 @@ const MAX_POLICY_ID_LEN: usize = 64;
 ///
 /// 标识仅允许小写 ASCII 字母、数字与下划线，且必须以字母开头。例如
 /// `core_opportunity_v1` 或 `fixed_dca`。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
 pub struct PolicyId(String);
 
 impl PolicyId {
@@ -61,7 +63,8 @@ impl std::fmt::Display for PolicyId {
 }
 
 /// 不可变策略版本。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
 pub struct PolicyVersion(u32);
 
 impl PolicyVersion {
@@ -96,7 +99,7 @@ impl std::fmt::Display for PolicyVersion {
 }
 
 /// 策略标识与不可变版本组成的引用。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct PolicyRef {
     id: PolicyId,
     version: PolicyVersion,

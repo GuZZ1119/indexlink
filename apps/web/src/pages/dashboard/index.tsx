@@ -884,11 +884,15 @@ function DecisionExplanation({
       <div className="grid gap-2 rounded-lg bg-muted/30 p-3 sm:grid-cols-3">
         <ExplanationItem
           label={t('dashboard.decisionExplanation.fundamental')}
-          value={t('dashboard.decisionExplanation.scoreBand', { score: decision.fundamental_score.toFixed(2), band: scoreBand(t, decision.fundamental_score) })}
+          value={typeof decision.fundamental_score === 'number'
+            ? t('dashboard.decisionExplanation.scoreBand', { score: decision.fundamental_score.toFixed(2), band: scoreBand(t, decision.fundamental_score) })
+            : '固定定投：未使用市场信号'}
         />
         <ExplanationItem
           label={t('dashboard.decisionExplanation.trend')}
-          value={t('dashboard.decisionExplanation.scoreBand', { score: decision.trend_score.toFixed(2), band: scoreBand(t, decision.trend_score) })}
+          value={typeof decision.trend_score === 'number'
+            ? t('dashboard.decisionExplanation.scoreBand', { score: decision.trend_score.toFixed(2), band: scoreBand(t, decision.trend_score) })
+            : '固定定投：未使用市场信号'}
         />
         <ExplanationItem
           label={t('dashboard.decisionExplanation.ai')}
@@ -1070,8 +1074,13 @@ function RiskNotices({ decision }: { decision: OverviewDecision }) {
 }
 
 /** Convert a bounded engine score into the dashboard's 0–100 presentation. */
-function toScore(value: number): number {
-  return Math.round(value * 100)
+function toScore(value: number | null | undefined): number | null {
+  return typeof value === 'number' ? Math.round(value * 100) : null
+}
+
+/** Render a nullable policy-layer score without implying that a fixed policy scored zero. */
+function formatOptionalScore(value: number | null | undefined): string {
+  return typeof value === 'number' ? value.toFixed(2) : '—'
 }
 
 /** Format a persisted UTC timestamp for a local overview label. */
@@ -1141,15 +1150,15 @@ function DecisionResultCard({
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Metric label={t('live.decision.execution')} value={result.execution.status} />
-          <Metric label={t('live.decision.finalScore')} value={result.decision.final_score.toFixed(2)} />
+          <Metric label={t('live.decision.finalScore')} value={formatOptionalScore(result.decision.final_score)} />
           <Metric label={t('live.decision.multiplier')} value={formatMultiplier(result.decision.multiplier)} />
-          <Metric label={t('live.decision.weightMode')} value={result.decision.weight_mode} />
+          <Metric label={t('live.decision.weightMode')} value={result.decision.weight_mode ?? 'fixed_dca'} />
           <Metric
             label={t('live.decision.plannedContribution')}
             value={planned ? formatCurrency(Number(planned), result.execution.currency) : '—'}
           />
-          <Metric label={t('live.decision.fundamentalScore')} value={result.decision.fundamental_score.toFixed(2)} />
-          <Metric label={t('live.decision.trendScore')} value={result.decision.trend_score.toFixed(2)} />
+          <Metric label={t('live.decision.fundamentalScore')} value={formatOptionalScore(result.decision.fundamental_score)} />
+          <Metric label={t('live.decision.trendScore')} value={formatOptionalScore(result.decision.trend_score)} />
           <Metric
             label={t('live.decision.qwenSentiment')}
             value={

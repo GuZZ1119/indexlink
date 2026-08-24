@@ -21,11 +21,41 @@ use core_domain::{Action, Multiplier};
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde::Serialize;
+use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 const MAX_NAME_LEN: usize = 100;
 const MAX_SYMBOL_LEN: usize = 32;
+
+/// 新计划默认使用的固定定投策略标识。
+pub const FIXED_DCA_POLICY_ID: &str = "fixed_dca";
+/// 新计划默认使用的固定定投策略版本。
+pub const FIXED_DCA_POLICY_VERSION: u32 = 1;
+/// 旧计划兼容使用的 70/20/10 策略标识。
+pub const CORE_OPPORTUNITY_V1_POLICY_ID: &str = "core_opportunity_v1";
+/// 旧计划兼容使用的 70/20/10 策略版本。
+pub const CORE_OPPORTUNITY_V1_POLICY_VERSION: u32 = 1;
+
+/// 返回新建计划默认绑定的固定定投策略版本。
+#[must_use]
+pub fn default_fixed_dca_policy() -> PolicyRef {
+    PolicyRef::new(
+        PolicyId::new(FIXED_DCA_POLICY_ID).expect("fixed DCA policy id is valid"),
+        PolicyVersion::new(FIXED_DCA_POLICY_VERSION).expect("fixed DCA policy version is valid"),
+    )
+}
+
+/// 返回迁移前已有计划应绑定的 Legacy 70/20/10 策略版本。
+#[must_use]
+pub fn legacy_core_opportunity_v1_policy() -> PolicyRef {
+    PolicyRef::new(
+        PolicyId::new(CORE_OPPORTUNITY_V1_POLICY_ID)
+            .expect("legacy CoreOpportunityV1 policy id is valid"),
+        PolicyVersion::new(CORE_OPPORTUNITY_V1_POLICY_VERSION)
+            .expect("legacy CoreOpportunityV1 policy version is valid"),
+    )
+}
 
 /// 投资计划双桶类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -553,6 +583,8 @@ pub struct InvestmentPlan {
     ///
     /// `schedule_day` 保留为第一项，以兼容旧客户端和旧数据。
     pub schedule_days: Vec<i16>,
+    /// 已激活、不可变的策略版本引用。
+    pub policy: PolicyRef,
     /// 已校验的核心/机会桶与风险模式配置。
     pub execution_configuration: PlanExecutionConfiguration,
     /// 单次执行金额硬上限，不是 planner 输出。
@@ -584,6 +616,8 @@ pub struct CreateInvestmentPlan {
     pub schedule_day: i16,
     /// 所有固定执行日；至少包含一个有效日期。
     pub schedule_days: Vec<i16>,
+    /// 可选的初始策略版本；省略时绑定 [`default_fixed_dca_policy`]。
+    pub policy: Option<PolicyRef>,
     /// 已校验的核心/机会桶与风险模式配置。
     pub execution_configuration: PlanExecutionConfiguration,
     /// 单次执行金额硬上限。
@@ -612,6 +646,7 @@ impl CreateInvestmentPlan {
             symbol,
             currency,
             schedule_days,
+            policy: Some(self.policy.clone().unwrap_or_else(default_fixed_dca_policy)),
             ..self
         })
     }
@@ -635,6 +670,8 @@ pub struct UpdateInvestmentPlan {
     pub schedule_day: Option<i16>,
     /// 可选的新固定执行日集合；第一项将写入兼容字段 `schedule_day`。
     pub schedule_days: Option<Vec<i16>>,
+    /// 可选的新已激活策略版本。
+    pub policy: Option<PolicyRef>,
     /// 可选的新核心/机会桶配置。
     pub bucket_allocation: Option<TwoBucketAllocationConfig>,
     /// 可选的新机会桶执行授权方式。
@@ -676,6 +713,7 @@ impl UpdateInvestmentPlan {
             && self.base_contribution.is_none()
             && self.schedule_day.is_none()
             && self.schedule_days.is_none()
+            && self.policy.is_none()
             && self.bucket_allocation.is_none()
             && self.risk_mode.is_none()
             && self.opportunity_cash_policy.is_none()
@@ -1253,6 +1291,7 @@ mod tests {
             schedule_kind: ScheduleKind::Monthly,
             schedule_day: 15,
             schedule_days: vec![15],
+            policy: None,
             execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: money("1500.00"),
         }
@@ -1287,6 +1326,7 @@ mod tests {
             schedule_kind: input.schedule_kind,
             schedule_day: input.schedule_day,
             schedule_days: input.schedule_days,
+            policy: input.policy.unwrap_or_else(default_fixed_dca_policy),
             execution_configuration: input.execution_configuration,
             max_single_execution: input.max_single_execution,
             is_active: true,
@@ -1387,6 +1427,9 @@ mod tests {
             }
             if let Some(day) = input.schedule_day {
                 plan.schedule_day = day;
+            }
+            if let Some(policy) = input.policy {
+                plan.policy = policy;
             }
             plan.execution_configuration = execution_configuration;
             if let Some(max) = input.max_single_execution {

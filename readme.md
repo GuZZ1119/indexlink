@@ -43,7 +43,7 @@ IndexLink 是一个面向长期投资者的**透明、可审计、可扩展的�
 
 当前生产演示仍包含历史的 70/20/10 决策路径：基本面/历史位置、趋势和受限 Qwen 情绪用于生成建议及证据。这是现有的 `CoreOpportunityV1` 候选语义，**不是经证明能提高收益的默认承诺**。
 
-仓库保留 C1–C4、校准夹具和报告，以记录真实的研究结果与失败候选：在匹配固定 DCA 的历史样本中，部分候选主要改变现金使用率、回撤或波动，并未稳定形成收益优势。后续会把旧模型包装成版本化内置策略，同时增加 `FixedDcaPolicy` 作为新计划的默认候选和对照基准；这一迁移尚未实现。
+仓库保留 C1–C4、校准夹具和报告，以记录真实的研究结果与失败候选：在匹配固定 DCA 的历史样本中，部分候选主要改变现金使用率、回撤或波动，并未稳定形成收益优势。旧模型现已作为版本化内置策略保留，`FixedDcaPolicy` 已成为新计划默认值和公平对照基准；受限 DSL 与策略 Studio 仍未实现。
 
 | 能力 | 当前状态 | 边界 |
 | :--- | :--- | :--- |
@@ -53,8 +53,8 @@ IndexLink 是一个面向长期投资者的**透明、可审计、可扩展的�
 | 最小 scheduler | 已完成 | 到期时幂等生成存证；**从不自动下单**。 |
 | 双桶预算、机会现金与周期约束 | 已完成基础闭环 | 受计划预算、可用现金、周期上限和 paper-only 边界约束。 |
 | Mock/OpenD paper trading | 已完成 | 仅 loopback OpenD 模拟账户；不支持实盘。 |
-| 策略契约与 `CoreOpportunityV1` 包装 | 已完成 | 无 IO 的通用契约已建立；旧 70/20/10 行为保持不变，尚未接入计划选择。 |
-| 固定 DCA policy / 策略版本库 / DSL Studio | 计划中 | 见迁移计划；不得表述为已经完成。 |
+| 内置策略与统一执行入口 | 已完成 | 新计划默认 `fixed_dca@1`；既有 SQLite 计划迁移为 `core_opportunity_v1@1`；预览、scheduler、审计和 paper-only 订单均经同一 resolver。 |
+| 策略版本库 / DSL Studio | 计划中 | 当前仅允许受支持的内置策略；见迁移计划。 |
 
 ## 架构与安全边界
 
@@ -67,7 +67,7 @@ graph TD
     API[API / Application Service]
     POLICY[Policy Runtime\nDeterministic, no IO]
     LEGACY[CoreOpportunityV1\nlegacy adapter]
-    DCA[Fixed DCA / DSL\nplanned]
+    DCA[Fixed DCA\nimplemented]
     EVIDENCE[Market Data + Qwen Evidence]
     RECORDS[(SQLite\nplans, records, ledger)]
     BROKER[Paper Broker\nMock / OpenD]
@@ -160,8 +160,8 @@ curl http://127.0.0.1:8080/ready
 ## 路线图
 
 1. **策略契约与兼容包装**：已增加通用 `InvestmentPolicy` 契约，用 `CoreOpportunityV1` 包装旧逻辑并锁定回归。
-2. **固定 DCA 与统一解析入口**：下一步引入 `FixedDcaPolicy`，让固定 DCA 与旧策略通过同一预览、scheduler、审计和 paper-only 流程运行。
-3. **策略版本和受限 DSL**：保存、验证、回测、版本化和激活白名单规则策略。
+2. **固定 DCA 与统一解析入口**：已完成；固定 DCA 与旧策略通过同一预览、scheduler、审计和 paper-only 流程运行。
+3. **策略版本和受限 DSL**：下一步保存、验证、回测、版本化和激活白名单规则策略。
 4. **统一评估与 Studio**：历史与实时复用同一运行时；呈现可比的 XIRR、终值、回撤、波动、Sortino 和现金使用率。
 5. **Qwen Copilot**：生成候选草案及解释，始终经确定性校验、回测和人工审阅。
 

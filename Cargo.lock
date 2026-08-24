@@ -188,6 +188,7 @@ dependencies = [
  "quant-engine",
  "rust_decimal",
  "strategy-policy",
+ "thiserror",
  "time",
 ]
 
@@ -892,6 +893,7 @@ dependencies = [
  "async-trait",
  "axum",
  "broker",
+ "builtin-policies",
  "chrono",
  "core-domain",
  "decision-engine",
@@ -905,6 +907,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "strategy-policy",
  "thiserror",
  "time",
  "tokio",
@@ -946,6 +949,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "strategy-policy",
  "thiserror",
  "time",
  "tokio",
@@ -972,6 +976,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "strategy-policy",
  "thiserror",
  "time",
  "tokio",
@@ -2029,6 +2034,7 @@ version = "0.1.0"
 dependencies = [
  "core-domain",
  "rust_decimal",
+ "serde",
  "thiserror",
  "time",
 ]

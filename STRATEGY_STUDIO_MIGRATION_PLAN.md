@@ -103,11 +103,15 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - 新增 `CoreOpportunityV1` 适配器，调用现有函数并做逐项输出回归测试。
 - 不改数据库、HTTP、scheduler、OpenD 或默认行为。
 
-### PR 2 — 固定 DCA 与统一解析入口 / Fixed DCA and Unified Resolver
+### PR 2 — 固定 DCA 与统一解析入口 / Fixed DCA and Unified Resolver（已完成 / Complete）
 
 - 增加 `FixedDcaPolicy` 与内置策略 registry。
 - 为计划增加最小的内置策略绑定，并通过 SQLite migration 将旧计划回填到 Legacy。
 - 将手动预览和 scheduler 的应用入口改为 resolver；验证固定 DCA 与 Legacy 都能走同一 paper-only 闭环。
+
+实施说明：SQLite migration 将已存在计划绑定为 `core_opportunity_v1@1`，新计划默认
+绑定 `fixed_dca@1`。固定 DCA 不读取市场、Qwen 或调用方伪造的 70/20 信号；其审计快照
+会明确记录信号未使用。当前 resolver 仅接受两个内置策略，未知引用在 HTTP 边界安全拒绝。
 
 ### PR 3 — 策略版本领域与审计升级 / Strategy Version Domain and Audit Upgrade
 
@@ -149,6 +153,6 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 8. 当前结论 / Current Decision
 
-在上述基础设施建立前，不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 1：策略契约与 `CoreOpportunityV1` 兼容包装**。
+策略契约、Legacy 包装、Fixed DCA 与统一 resolver 已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 3：策略版本领域与审计升级**。
 
-Until this foundation exists, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 1: the policy contract and a backward-compatible `CoreOpportunityV1` wrapper**.
+With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 3: strategy-version domain and audit upgrades**.

@@ -16,6 +16,7 @@ use investment_plans::{
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
+use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
 use uuid::Uuid;
 
 use crate::{ApiError, ApiState};
@@ -39,6 +40,8 @@ struct CreateInvestmentPlanRequest {
     /// 同一周期内的所有固定执行日；缺省时兼容为仅 `schedule_day`。
     #[serde(default)]
     schedule_days: Vec<i16>,
+    /// 可选的内置策略版本；省略时新计划默认绑定 `fixed_dca@1`。
+    policy: Option<PolicyReferenceRequest>,
     /// 可选核心/机会桶比例；未提供时兼容旧计划，默认全部核心桶。
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// 可选风险模式；未提供时兼容旧计划，默认固定模式。
@@ -68,6 +71,8 @@ struct UpdateInvestmentPlanRequest {
     schedule_day: Option<i16>,
     /// 可选的新固定执行日集合。
     schedule_days: Option<Vec<i16>>,
+    /// 可选的新内置策略版本。
+    policy: Option<PolicyReferenceRequest>,
     /// 可选的新核心/机会桶比例。
     bucket_allocation: Option<TwoBucketAllocationRequest>,
     /// 可选的新机会桶风险模式。
@@ -106,6 +111,25 @@ struct TwoBucketAllocationRequest {
     /// 机会桶比例，JSON 中必须是字符串。
     #[serde(with = "rust_decimal::serde::str")]
     opportunity_ratio: Decimal,
+}
+
+/// 策略版本引用的 HTTP 表示。
+#[derive(Debug, Deserialize)]
+struct PolicyReferenceRequest {
+    /// 稳定策略标识，例如 `fixed_dca`。
+    id: String,
+    /// 不可变策略版本，必须大于零。
+    version: u32,
+}
+
+impl PolicyReferenceRequest {
+    /// 转换为已校验的领域策略引用。
+    fn into_domain(self) -> Result<PolicyRef, ApiError> {
+        Ok(PolicyRef::new(
+            PolicyId::new(self.id).map_err(|_| ApiError::BadRequest)?,
+            PolicyVersion::new(self.version).map_err(|_| ApiError::BadRequest)?,
+        ))
+    }
 }
 
 /// API 边界支持的 schedule kind。
@@ -185,6 +209,7 @@ impl CreateInvestmentPlanRequest {
             schedule_kind,
             schedule_day,
             schedule_days,
+            policy,
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
@@ -212,6 +237,9 @@ impl CreateInvestmentPlanRequest {
             } else {
                 schedule_days
             },
+            policy: policy
+                .map(PolicyReferenceRequest::into_domain)
+                .transpose()?,
             max_single_execution,
             execution_configuration,
         })
@@ -226,6 +254,7 @@ impl UpdateInvestmentPlanRequest {
             base_contribution,
             schedule_day,
             schedule_days,
+            policy,
             bucket_allocation,
             risk_mode,
             opportunity_cash_policy,
@@ -245,6 +274,9 @@ impl UpdateInvestmentPlanRequest {
             base_contribution,
             schedule_day,
             schedule_days,
+            policy: policy
+                .map(PolicyReferenceRequest::into_domain)
+                .transpose()?,
             bucket_allocation,
             risk_mode: risk_mode.map(Into::into),
             opportunity_cash_policy: opportunity_cash_policy.map(Into::into),
@@ -335,9 +367,15 @@ async fn create_plan(
     input: Result<Json<CreateInvestmentPlanRequest>, JsonRejection>,
 ) -> Result<(StatusCode, Json<InvestmentPlan>), ApiError> {
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
+    let input = input.into_domain()?;
+    if let Some(policy) = &input.policy {
+        if !state.policy_resolver().supports(policy) {
+            return Err(ApiError::BadRequest);
+        }
+    }
     Ok((
         StatusCode::CREATED,
-        Json(state.plans().create(input.into_domain()?).await?),
+        Json(state.plans().create(input).await?),
     ))
 }
 
@@ -363,7 +401,13 @@ async fn update_plan(
 ) -> Result<Json<InvestmentPlan>, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
-    Ok(Json(state.plans().update(id, input.into_domain()?).await?))
+    let input = input.into_domain()?;
+    if let Some(policy) = &input.policy {
+        if !state.policy_resolver().supports(policy) {
+            return Err(ApiError::BadRequest);
+        }
+    }
+    Ok(Json(state.plans().update(id, input).await?))
 }
 
 /// 删除一个定投标的及其本地关联记录。

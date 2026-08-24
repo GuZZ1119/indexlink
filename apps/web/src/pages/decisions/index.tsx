@@ -178,12 +178,17 @@ function AuditOverview({ record }: { record: DecisionRecord }) {
       <AuditFact label="计划投入" value={record.planned_contribution ? `${record.planned_contribution} ${record.currency}` : '本次不在执行日'} />
       <AuditFact label="触发方式" value={trigger ?? '历史记录'} />
       <AuditFact label="综合决策" value={`${decision.action} · ${(decision.multiplier * 100).toFixed(0)}%`} />
-      <AuditFact label="70% 基本面" value={decision.fundamental_score.toFixed(2)} />
-      <AuditFact label="20% 趋势" value={decision.trend_score.toFixed(2)} />
+      <AuditFact label="70% 基本面" value={formatScore(decision.fundamental_score)} />
+      <AuditFact label="20% 趋势" value={formatScore(decision.trend_score)} />
       <AuditFact label="10% AI 情绪" value={typeof decision.sentiment_score === 'number' ? decision.sentiment_score.toFixed(2) : '不可用，已降级'} />
-      <AuditFact label="权重模式" value={decision.weight_mode} />
+      <AuditFact label="权重模式" value={decision.weight_mode ?? 'fixed_dca'} />
     </section>
   )
+}
+
+/** Show an omitted fixed-DCA score as unused rather than as a synthetic zero. */
+function formatScore(value: number | null | undefined): string {
+  return typeof value === 'number' ? value.toFixed(2) : '未使用'
 }
 
 /** Render one readable source and score layer from a structured audit snapshot. */

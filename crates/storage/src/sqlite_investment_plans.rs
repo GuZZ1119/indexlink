@@ -8,6 +8,7 @@ use investment_plans::{
 };
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
@@ -30,21 +31,21 @@ const INSERT_PLAN_SQL: &str = "INSERT INTO investment_plans \
      max_single_execution, is_active) \
     VALUES (?1, ?2, ?3, ?4, ?5, 'monthly', ?6, ?7, 1)";
 const INSERT_EXECUTION_CONFIGURATION_SQL: &str = "INSERT INTO plan_execution_configurations \
-    (plan_id, schedule_kind, schedule_day, schedule_days_json, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy, opportunity_cash_cap, period_execution_limit) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+    (plan_id, schedule_kind, schedule_day, schedule_days_json, core_ratio_units, opportunity_ratio_units, risk_mode, opportunity_cash_policy, opportunity_cash_cap, period_execution_limit, policy_id, policy_version) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 const LIST_PLANS_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
-    c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, c.opportunity_cash_cap, c.period_execution_limit, \
+    c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, c.opportunity_cash_cap, c.period_execution_limit, c.policy_id, c.policy_version, \
     p.max_single_execution, p.is_active, p.created_at, p.updated_at \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     ORDER BY p.created_at ASC, p.id ASC";
 const GET_PLAN_SQL: &str = "SELECT p.id, p.name, p.symbol, p.base_contribution, p.currency, \
-    c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, c.opportunity_cash_cap, c.period_execution_limit, \
+    c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, c.opportunity_cash_cap, c.period_execution_limit, c.policy_id, c.policy_version, \
     p.max_single_execution, p.is_active, p.created_at, p.updated_at \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     WHERE p.id = ?1";
 const SELECT_UPDATE_VALUES_SQL: &str = "SELECT p.base_contribution, p.max_single_execution, \
     p.schedule_day AS legacy_schedule_day, c.schedule_kind, c.schedule_day, c.schedule_days_json, c.core_ratio_units, \
-    c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, c.opportunity_cash_cap, c.period_execution_limit \
+    c.opportunity_ratio_units, c.risk_mode, c.opportunity_cash_policy, c.opportunity_cash_cap, c.period_execution_limit, c.policy_id, c.policy_version \
     FROM investment_plans p JOIN plan_execution_configurations c ON c.plan_id = p.id \
     WHERE p.id = ?1";
 const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
@@ -59,7 +60,7 @@ const UPDATE_PLAN_SQL: &str = "UPDATE investment_plans SET \
     ) \
     WHERE id = ?1";
 const UPDATE_EXECUTION_CONFIGURATION_SQL: &str = "UPDATE plan_execution_configurations SET \
-    schedule_day = ?2, schedule_days_json = ?3, core_ratio_units = ?4, opportunity_ratio_units = ?5, risk_mode = ?6, opportunity_cash_policy = ?7, opportunity_cash_cap = ?8, period_execution_limit = ?9 \
+    schedule_day = ?2, schedule_days_json = ?3, core_ratio_units = ?4, opportunity_ratio_units = ?5, risk_mode = ?6, opportunity_cash_policy = ?7, opportunity_cash_cap = ?8, period_execution_limit = ?9, policy_id = ?10, policy_version = ?11 \
     WHERE plan_id = ?1";
 const SET_ACTIVE_SQL: &str = "UPDATE investment_plans SET \
     is_active = ?2, \
@@ -99,6 +100,9 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
         let schedule_day = input.schedule_day;
         let schedule_days_json = encode_schedule_days(&input.schedule_days)?;
         let configuration = input.execution_configuration;
+        let policy = input
+            .policy
+            .unwrap_or_else(investment_plans::default_fixed_dca_policy);
         let (
             core_ratio_units,
             opportunity_ratio_units,
@@ -134,6 +138,8 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bind(opportunity_cash_policy_name(opportunity_cash_policy))
             .bind(opportunity_cash_cap)
             .bind(period_execution_limit)
+            .bind(policy.id().as_str())
+            .bind(i64::from(policy.version().value()))
             .execute(&mut *transaction)
             .await
             .map_err(map_sqlx_error)?;
@@ -238,6 +244,7 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             return Err(PlanRepositoryError::Unavailable);
         }
         let current_configuration = execution_configuration_from_row(&current)?;
+        let policy = input.policy.clone().unwrap_or(policy_from_row(&current)?);
         let bucket_allocation = input
             .bucket_allocation
             .unwrap_or(current_configuration.bucket_allocation());
@@ -306,6 +313,8 @@ impl InvestmentPlanRepository for SqliteInvestmentPlanRepository {
             .bind(opportunity_cash_policy_name(opportunity_cash_policy))
             .bind(opportunity_cash_cap)
             .bind(period_execution_limit)
+            .bind(policy.id().as_str())
+            .bind(i64::from(policy.version().value()))
             .execute(&mut *transaction)
             .await
             .map_err(map_sqlx_error)?;
@@ -395,6 +404,7 @@ fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> 
         schedule_kind,
         schedule_day,
         schedule_days,
+        policy: policy_from_row(&row)?,
         execution_configuration: execution_configuration_from_row(&row)?,
         max_single_execution: parse_amount(
             row.try_get("max_single_execution")
@@ -404,6 +414,23 @@ fn plan_from_row(row: SqliteRow) -> Result<InvestmentPlan, PlanRepositoryError> 
         created_at: parse_timestamp(row.try_get("created_at").map_err(map_sqlx_error)?)?,
         updated_at: parse_timestamp(row.try_get("updated_at").map_err(map_sqlx_error)?)?,
     })
+}
+
+/// 从 SQLite 行重建已校验、不可变的策略引用。
+fn policy_from_row(row: &SqliteRow) -> Result<PolicyRef, PlanRepositoryError> {
+    let id = PolicyId::new(
+        row.try_get::<String, _>("policy_id")
+            .map_err(map_sqlx_error)?,
+    )
+    .map_err(|_| PlanRepositoryError::Unavailable)?;
+    let version = u32::try_from(
+        row.try_get::<i64, _>("policy_version")
+            .map_err(map_sqlx_error)?,
+    )
+    .map_err(|_| PlanRepositoryError::Unavailable)?;
+    let version = PolicyVersion::new(version).map_err(|_| PlanRepositoryError::Unavailable)?;
+
+    Ok(PolicyRef::new(id, version))
 }
 
 /// 将数据库文本解析为受支持的计划周期。
@@ -650,6 +677,7 @@ mod tests {
             schedule_kind: ScheduleKind::Monthly,
             schedule_day: 15,
             schedule_days: vec![15],
+            policy: None,
             execution_configuration: PlanExecutionConfiguration::default(),
             max_single_execution: amount("1500.00"),
         }
@@ -682,8 +710,39 @@ mod tests {
 
         assert_eq!(created.base_contribution, amount("1000.00000000"));
         assert_eq!(created.max_single_execution, amount("1500.00000000"));
+        assert_eq!(
+            created.policy,
+            investment_plans::default_fixed_dca_policy(),
+            "new SQLite plans must bind the fixed DCA default explicitly"
+        );
         assert_eq!(repository.list().await.unwrap(), vec![created.clone()]);
         assert_eq!(repository.get(created.id).await.unwrap(), created);
+    }
+
+    /// 验证已绑定计划可原子切换到受支持的兼容策略引用。
+    #[tokio::test]
+    async fn updates_persisted_policy_binding() {
+        let repository = repository().await;
+        let created = repository.create(input()).await.unwrap();
+        let updated = repository
+            .update(
+                created.id,
+                UpdateInvestmentPlan {
+                    policy: Some(investment_plans::legacy_core_opportunity_v1_policy()),
+                    ..UpdateInvestmentPlan::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            updated.policy,
+            investment_plans::legacy_core_opportunity_v1_policy()
+        );
+        assert_eq!(
+            repository.get(created.id).await.unwrap().policy,
+            updated.policy
+        );
     }
 
     /// 验证金额型机会滚存上限与周期执行上限可完整持久化。
@@ -794,6 +853,7 @@ mod tests {
                     base_contribution: Some(amount("1200.00")),
                     schedule_day: Some(20),
                     schedule_days: None,
+                    policy: None,
                     bucket_allocation: None,
                     risk_mode: None,
                     opportunity_cash_policy: None,

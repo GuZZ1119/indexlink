@@ -94,6 +94,9 @@ impl InvestmentPlanRepository for FakeRepository {
         if let Some(schedule_day) = input.schedule_day {
             plan.schedule_day = schedule_day;
         }
+        if let Some(policy) = input.policy {
+            plan.policy = policy;
+        }
         if let Some(max_single_execution) = input.max_single_execution {
             plan.max_single_execution = max_single_execution;
         }
@@ -138,6 +141,9 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         schedule_kind: input.schedule_kind,
         schedule_day: input.schedule_day,
         schedule_days: input.schedule_days,
+        policy: input
+            .policy
+            .unwrap_or_else(investment_plans::default_fixed_dca_policy),
         execution_configuration: input.execution_configuration,
         max_single_execution: input.max_single_execution,
         is_active: true,
@@ -171,6 +177,7 @@ fn create_input() -> CreateInvestmentPlan {
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
         schedule_days: vec![15],
+        policy: None,
         execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),
@@ -218,6 +225,8 @@ async fn create_plan_returns_normalized_plan_json() {
     assert_eq!(body["symbol"], json!("VOO"));
     assert!(body["base_contribution"].is_string());
     assert_eq!(body["execution_configuration"]["risk_mode"], json!("fixed"));
+    assert_eq!(body["policy"]["id"], json!("fixed_dca"));
+    assert_eq!(body["policy"]["version"], json!(1));
 }
 
 /// Verify API accepts a persisted weekly plan with an explicit approval-mode bucket split.

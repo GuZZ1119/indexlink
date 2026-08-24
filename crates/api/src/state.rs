@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use broker::{
     BrokerClient, BrokerOrderAck, BrokerOrderRequest, MockBroker, PaperPortfolioSnapshot,
 };
+use builtin_policies::BuiltinPolicyResolver;
 use chrono::Datelike;
 use decision_records::{
     DecisionRecord, DecisionRecordListQuery, DecisionRecordRepository,
@@ -127,6 +128,7 @@ pub struct ApiState {
     scheduled_decisions: Option<SqliteScheduledDecisionRepository>,
     opportunity_cash: Option<SqliteOpportunityCashRepository>,
     period_execution: Option<SqlitePeriodExecutionRepository>,
+    policy_resolver: Arc<BuiltinPolicyResolver>,
     version: Arc<str>,
 }
 
@@ -171,6 +173,7 @@ impl ApiState {
             scheduled_decisions: Some(scheduled_decisions),
             opportunity_cash: Some(opportunity_cash),
             period_execution: Some(period_execution),
+            policy_resolver: Arc::new(BuiltinPolicyResolver::default()),
             version: version.into(),
         }
     }
@@ -240,6 +243,7 @@ impl ApiState {
             scheduled_decisions: None,
             opportunity_cash: None,
             period_execution: None,
+            policy_resolver: Arc::new(BuiltinPolicyResolver::default()),
             version: version.into(),
         }
     }
@@ -298,6 +302,12 @@ impl ApiState {
     /// 返回 investment plan 应用服务。
     pub(crate) fn plans(&self) -> &InvestmentPlanService {
         &self.plans
+    }
+
+    /// 返回统一执行入口使用的内置策略 resolver。
+    #[must_use]
+    pub(crate) fn policy_resolver(&self) -> &BuiltinPolicyResolver {
+        self.policy_resolver.as_ref()
     }
 
     /// 返回受配置保护的 broker port。

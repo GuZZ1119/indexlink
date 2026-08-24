@@ -39,6 +39,16 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         &self,
         input: CreateInvestmentPlan,
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
+        // Production uses SQLite, which persists immutable policy bindings.  This retained
+        // PostgreSQL adapter has no equivalent migration, so reject values it cannot store
+        // rather than silently returning a plan under the wrong policy.
+        if input
+            .policy
+            .as_ref()
+            .is_some_and(|policy| *policy != investment_plans::legacy_core_opportunity_v1_policy())
+        {
+            return Err(PlanRepositoryError::Unavailable);
+        }
         let CreateInvestmentPlan {
             name,
             symbol,
@@ -47,6 +57,7 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
             schedule_kind,
             schedule_day,
             schedule_days: _,
+            policy: _,
             execution_configuration,
             max_single_execution,
         } = input;
@@ -134,6 +145,9 @@ impl InvestmentPlanRepository for PostgresInvestmentPlanRepository {
         id: Uuid,
         input: UpdateInvestmentPlan,
     ) -> Result<InvestmentPlan, PlanRepositoryError> {
+        if input.policy.is_some() {
+            return Err(PlanRepositoryError::Unavailable);
+        }
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let current = sqlx::query(
             "SELECT p.base_contribution::text AS base_contribution, \
@@ -286,6 +300,9 @@ fn plan_from_row(row: PgRow) -> Result<InvestmentPlan, PlanRepositoryError> {
         schedule_kind,
         schedule_day,
         schedule_days: vec![schedule_day],
+        // PostgreSQL is a retained legacy adapter. Its schema has no policy binding
+        // migration because production uses SQLite; legacy rows retain V1 semantics.
+        policy: investment_plans::legacy_core_opportunity_v1_policy(),
         execution_configuration: execution_configuration_from_row(&row)?,
         max_single_execution: parse_decimal(
             row.try_get("max_single_execution")

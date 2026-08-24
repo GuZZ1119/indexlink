@@ -304,6 +304,9 @@ impl InvestmentPlanRepository for FakeRepository {
         if let Some(schedule_day) = input.schedule_day {
             plan.schedule_day = schedule_day;
         }
+        if let Some(policy) = input.policy {
+            plan.policy = policy;
+        }
         if let Some(max_single_execution) = input.max_single_execution {
             plan.max_single_execution = max_single_execution;
         }
@@ -336,6 +339,9 @@ fn plan_from(id: Uuid, input: CreateInvestmentPlan) -> InvestmentPlan {
         schedule_kind: input.schedule_kind,
         schedule_day: input.schedule_day,
         schedule_days: input.schedule_days,
+        policy: input
+            .policy
+            .unwrap_or_else(investment_plans::default_fixed_dca_policy),
         execution_configuration: input.execution_configuration,
         max_single_execution: input.max_single_execution,
         is_active: true,
@@ -439,6 +445,7 @@ fn create_input() -> CreateInvestmentPlan {
         schedule_kind: ScheduleKind::Monthly,
         schedule_day: 15,
         schedule_days: vec![15],
+        policy: Some(investment_plans::legacy_core_opportunity_v1_policy()),
         execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
             TwoBucketAllocationConfig::new(
                 BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),
@@ -480,6 +487,39 @@ fn preview_payload(day_of_month: i16, regime: &str) -> Value {
             "quantity": "1.00"
         }
     })
+}
+
+/// Verify a fixed-DCA plan reaches the shared preview/audit path without market or Qwen inputs.
+#[tokio::test]
+async fn fixed_dca_automatic_preview_does_not_require_market_signals() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let mut input = create_input();
+    input.policy = None;
+    let created = repository.create(input).await.unwrap();
+    let records = Arc::new(FakeDecisionRecordRepository::default());
+    let app = app_without_sentiment_provider(repository, broker, records);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/investment-plans/{}/automatic-decision-preview",
+                    created.id
+                ))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["decision"]["policy"]["id"], json!("fixed_dca"));
+    assert_eq!(body["decision"]["market_signals_used"], json!(false));
+    assert!(body["decision"].get("final_score").is_none());
 }
 
 /// Verify a due executable decision submits one MockBroker paper order.

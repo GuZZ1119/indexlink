@@ -5,6 +5,43 @@
 ### 2026-08-24 CST
 
 - 执行模型：GPT-5 Codex。
+- 变更类型：固定 DCA 策略、计划策略绑定与统一执行入口。
+- 涉及文件：
+  - `Cargo.toml`、`Cargo.lock`
+  - `crates/strategy-policy/**`
+  - `crates/builtin-policies/**`
+  - `crates/investment-plans/**`
+  - `crates/storage/src/sqlite_investment_plans.rs`
+  - `crates/storage/src/investment_plans.rs`
+  - `migrations/sqlite/20260824090000_add_plan_policy_bindings.sql`
+  - `crates/api/src/state.rs`
+  - `crates/api/src/routes/investment_plans.rs`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/tests/**`
+  - `apps/web/src/api/types.ts`
+  - `apps/web/src/pages/dashboard/index.tsx`
+  - `apps/web/src/pages/decisions/index.tsx`
+  - `readme.md`、`readme.en.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增 `FixedDcaPolicy` 与无 IO 的内置策略 resolver；固定策略始终给出 `Standard`/`1.0x` 推荐，不读取 CAPE、趋势、Qwen 或调用方伪造信号。
+  - 计划新增不可变 `policy_id + policy_version` 绑定：新建计划默认 `fixed_dca@1`，SQLite migration 将已存在计划回填为兼容的 `core_opportunity_v1@1`。
+  - 手动预览、自动预览、scheduler、审计快照和可选 paper-only 下单统一经 resolver；固定 DCA 审计明确记录未使用的市场层，未知策略在 HTTP 边界安全拒绝。
+  - 前端将固定 DCA 的空评分显示为“未使用”，避免将未读取的市场层误呈现为零分或触发空值渲染错误。
+  - PostgreSQL adapter 仅保留旧版本策略作为兼容 fallback；当前生产 SQLite 路径完整持久化策略绑定。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p strategy-policy --offline` 通过。
+  - `cargo test -p builtin-policies --offline` 通过。
+  - `cargo test -p investment-plans --offline` 通过。
+  - `cargo test -p indexlink-storage --offline` 通过。
+  - `cargo test -p indexlink-api --offline` 通过。
+  - `cargo test -p core-domain --offline` 通过。
+  - `cargo check --workspace --locked`、`cargo clippy -p strategy-policy -p builtin-policies -p investment-plans -p indexlink-storage -p indexlink-api --all-targets --all-features --locked -- -D warnings` 和 `git diff --check` 通过。
+
+### 2026-08-24 CST
+
+- 执行模型：GPT-5 Codex。
 - 变更类型：策略契约与 `CoreOpportunityV1` 兼容包装。
 - 涉及文件：
   - `Cargo.toml`

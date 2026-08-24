@@ -5,11 +5,12 @@ edition.workspace = true
 
 [dependencies]
 ai-client.workspace = true
+core-domain.workspace = true
 decision-engine.workspace = true
+rust_decimal.workspace = true
 strategy-policy.workspace = true
+thiserror.workspace = true
+time.workspace = true
 
 [dev-dependencies]
-core-domain.workspace = true
 quant-engine.workspace = true
-rust_decimal.workspace = true
-time.workspace = true

@@ -194,12 +194,16 @@ export interface ExecutionPreview {
 
 /** Final weighted decision returned by the server. */
 export interface DecisionResult {
-  final_score: number
+  /** Bound immutable policy that produced this decision, when present in new records. */
+  policy?: { id: string; version: number }
+  /** Fixed DCA deliberately does not consume market or Qwen signal layers. */
+  market_signals_used?: boolean
+  final_score?: number
   multiplier: number
   action: DecisionAction
-  weight_mode: 'normal' | 'sentiment_unavailable'
-  fundamental_score: number
-  trend_score: number
+  weight_mode?: 'normal' | 'sentiment_unavailable'
+  fundamental_score?: number
+  trend_score?: number
   /** Absent from legacy records and `null` when Qwen is temporarily unavailable. */
   sentiment_score?: number | null
 }
