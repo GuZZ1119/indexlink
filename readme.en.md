@@ -43,7 +43,7 @@ See the [Strategy Studio Migration Plan](./STRATEGY_STUDIO_MIGRATION_PLAN.md) fo
 
 The current demo still includes the historical 70/20/10 decision path: fundamental/historical-position, trend, and bounded Qwen sentiment produce a recommendation and evidence. This is the candidate semantics of `CoreOpportunityV1`; it is **not** a proven claim of superior returns.
 
-The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The legacy model is now retained as a versioned built-in policy, and `FixedDcaPolicy` is the new-plan default and fair benchmark. The restricted DSL now has a deterministic, I/O-free interpreter that the historical evaluator calls directly; strategy storage, HTTP APIs, and Studio remain future work.
+The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The legacy model is now retained as a versioned built-in policy, and `FixedDcaPolicy` is the new-plan default and fair benchmark. The restricted DSL now has a deterministic, I/O-free interpreter that the historical evaluator calls directly; SQLite now stores immutable DSL versions and exposes read-only HTTP discovery, while creation, activation, live execution, and Studio remain future work.
 
 | Capability | Current state | Boundary |
 | :--- | :--- | :--- |
@@ -54,7 +54,7 @@ The repository keeps C1–C4, calibration fixtures, and reports as reproducible 
 | Two-bucket budget, opportunity cash, and period constraints | Base loop implemented | Constrained by plan budget, available cash, period caps, and paper-only boundaries. |
 | Mock/OpenD paper trading | Implemented | Local-loopback OpenD paper accounts only; no live trading. |
 | Built-in policies and unified execution entry | Implemented | New plans default to `fixed_dca@1`; existing SQLite plans migrate to `core_opportunity_v1@1`; preview, scheduler, audit, and paper-only orders use the same resolver. |
-| Restricted DSL definition, validation, and deterministic runtime | Research foundation implemented | Only allow-listed indicators, bounded expressions, and opportunity actions are representable; first-match rules run without I/O on a complete snapshot, and historical evaluation reuses the same runtime; storage, HTTP, and Studio remain future work. |
+| Restricted DSL, deterministic runtime, and version discovery | Research foundation implemented | Only allow-listed indicators, bounded expressions, and opportunity actions are representable; SQLite persists canonical JSON and reconstructs it through domain constructors; `GET /strategies` only lists/reads versions and cannot create, activate, or order. |
 
 ## Architecture and Safety Boundaries
 
@@ -165,7 +165,7 @@ See [deployment/aliyun/README.md](./deployment/aliyun/README.md) for deployment 
 3. **Policy-version and audit upgrade:** complete; new records retain the policy version and generic recommendation snapshot while legacy records remain readable.
 4. **Restricted DSL/AST, validation, and deterministic runtime:** complete; it allows only allow-listed indicators, bounded expressions, and opportunity actions, rejecting arbitrary scripts, excessive condition trees, and fixed actions above budget. The first matching rule produces a generic recommendation from a complete snapshot.
 5. **Unified historical evaluation:** a first runtime-backed candidate is complete; `strategy-evaluation` calls the same DSL interpreter with decision-date RSI-14 and next-trading-day execution assumptions.
-6. **Strategy storage, APIs, and Studio:** next, add versioned DSL persistence, validation, backtesting, activation, Decision Preview, and read-only audit UI.
+6. **Strategy storage and read-only API:** complete; immutable SQLite version storage plus `GET /strategies` and `GET /strategies/:policy_id/:policy_version` revalidate stored JSON. Controlled creation/validation and Studio are next.
 7. **Qwen Copilot:** later generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
 
 See [STRATEGY_STUDIO_MIGRATION_PLAN.md](./STRATEGY_STUDIO_MIGRATION_PLAN.md) for details.

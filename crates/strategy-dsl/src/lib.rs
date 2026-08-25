@@ -14,6 +14,9 @@ use core_domain::{Action, Multiplier};
 use rust_decimal::Decimal;
 use strategy_policy::{DecisionContext, InvestmentRecommendation, PolicyRef};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 const MAX_NAME_LEN: usize = 120;
 const MAX_RULES: usize = 32;
 const MAX_EXPRESSION_DEPTH: usize = 8;
@@ -638,6 +641,457 @@ pub enum StrategyDslRuntimeError {
     #[error("strategy expression arithmetic overflowed")]
     ArithmeticOverflow,
     /// 调用时的周期预算无法满足已保存 DSL 的固定金额约束。
+    #[error(transparent)]
+    Validation(#[from] StrategyDslValidationError),
+}
+
+/// 版本化策略定义的可持久化、可传输 JSON 文档。
+///
+/// 此类型仅在 `serde` feature 启用时提供。反序列化后必须调用
+/// [`StrategySpecDocument::into_strategy_spec`]，由它重新构造并校验领域类型；不得将
+/// JSON 直接当作已验证的运行时策略使用。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrategySpecDocument {
+    /// 稳定自定义策略标识，例如 `dsl_rsi_opportunity_guard`。
+    pub policy_id: String,
+    /// 不可变策略版本，必须大于零。
+    pub policy_version: u32,
+    /// 用户可读策略名称。
+    pub name: String,
+    /// 固定顺序的条件和动作规则。
+    pub rules: Vec<StrategyRuleDocument>,
+}
+
+/// 一条可持久化的受限策略规则。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyRuleDocument {
+    /// 条件树。
+    pub condition: ConditionDocument,
+    /// 命中条件时执行的机会桶动作。
+    pub action: PolicyActionDocument,
+}
+
+/// 可持久化的白名单指标定义。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum IndicatorDocument {
+    /// 当期可得收盘价。
+    ClosePrice,
+    /// 简单移动平均线及其交易日窗口。
+    SimpleMovingAverage {
+        /// 交易日回看窗口。
+        lookback_days: u16,
+    },
+    /// 指数移动平均线及其交易日窗口。
+    ExponentialMovingAverage {
+        /// 交易日回看窗口。
+        lookback_days: u16,
+    },
+    /// RSI 及其交易日窗口。
+    RelativeStrengthIndex {
+        /// 交易日回看窗口。
+        lookback_days: u16,
+    },
+    /// 相对峰值回撤及其交易日窗口。
+    Drawdown {
+        /// 交易日回看窗口。
+        lookback_days: u16,
+    },
+    /// Cboe VIX 水平。
+    Vix,
+}
+
+/// 可持久化的白名单数值表达式。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ValueExpressionDocument {
+    /// 固定 Decimal 字符串常数。
+    Constant {
+        /// Decimal 字符串常数。
+        value: String,
+    },
+    /// 一个白名单市场指标。
+    Indicator {
+        /// 白名单指标。
+        indicator: IndicatorDocument,
+    },
+    /// 两个表达式之和。
+    Add {
+        /// 左表达式。
+        left: Box<ValueExpressionDocument>,
+        /// 右表达式。
+        right: Box<ValueExpressionDocument>,
+    },
+    /// 两个表达式之差。
+    Subtract {
+        /// 左表达式。
+        left: Box<ValueExpressionDocument>,
+        /// 右表达式。
+        right: Box<ValueExpressionDocument>,
+    },
+    /// 表达式乘以 Decimal 字符串常数。
+    Multiply {
+        /// 原表达式。
+        expression: Box<ValueExpressionDocument>,
+        /// 乘数。
+        factor: String,
+    },
+    /// 表达式除以非零 Decimal 字符串常数。
+    Divide {
+        /// 原表达式。
+        expression: Box<ValueExpressionDocument>,
+        /// 非零除数。
+        divisor: String,
+    },
+}
+
+/// 可持久化的条件树。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConditionDocument {
+    /// 表达式与固定阈值的比较。
+    Comparison {
+        /// 被比较的表达式。
+        expression: ValueExpressionDocument,
+        /// 支持的比较符。
+        operator: ComparisonOperatorDocument,
+        /// Decimal 字符串阈值。
+        threshold: String,
+    },
+    /// 所有子条件必须成立。
+    All {
+        /// 子条件。
+        conditions: Vec<ConditionDocument>,
+    },
+    /// 任一子条件成立即可。
+    Any {
+        /// 子条件。
+        conditions: Vec<ConditionDocument>,
+    },
+}
+
+/// JSON 文档允许使用的比较符。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComparisonOperatorDocument {
+    /// 大于。
+    GreaterThan,
+    /// 大于或等于。
+    GreaterThanOrEqual,
+    /// 小于。
+    LessThan,
+    /// 小于或等于。
+    LessThanOrEqual,
+}
+
+/// JSON 文档允许使用的机会桶动作。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PolicyActionDocument {
+    /// 为机会桶设置固定 Decimal 字符串金额。
+    SetOpportunityFixedAmount {
+        /// Decimal 字符串金额。
+        amount: String,
+    },
+    /// 为机会桶设置有界倍率。
+    SetOpportunityMultiplier {
+        /// `[0.0, 1.5]` 内的有限倍率。
+        multiplier: f64,
+    },
+    /// 跳过当期机会桶。
+    SkipOpportunity,
+}
+
+#[cfg(feature = "serde")]
+impl StrategySpecDocument {
+    /// 从已校验领域策略生成规范化的持久化文档。
+    #[must_use]
+    pub fn from_strategy_spec(spec: &StrategySpec) -> Self {
+        Self {
+            policy_id: spec.policy.id().as_str().to_owned(),
+            policy_version: spec.policy.version().value(),
+            name: spec.name.clone(),
+            rules: spec
+                .rules
+                .iter()
+                .map(StrategyRuleDocument::from_rule)
+                .collect(),
+        }
+    }
+
+    /// 将反序列化文档转换回完整校验的领域策略。
+    ///
+    /// # 错误
+    ///
+    /// 文档包含不合法 Decimal、倍率、窗口或策略结构时返回
+    /// [`StrategyDslDocumentError`]，不会产生部分有效策略。
+    pub fn into_strategy_spec(self) -> Result<StrategySpec, StrategyDslDocumentError> {
+        let policy = PolicyRef::new(
+            strategy_policy::PolicyId::new(self.policy_id)?,
+            strategy_policy::PolicyVersion::new(self.policy_version)?,
+        );
+        let rules = self
+            .rules
+            .into_iter()
+            .map(StrategyRuleDocument::into_rule)
+            .collect::<Result<Vec<_>, _>>()?;
+        StrategySpec::new(policy, self.name, rules).map_err(Into::into)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl StrategyRuleDocument {
+    fn from_rule(rule: &StrategyRule) -> Self {
+        Self {
+            condition: ConditionDocument::from_condition(&rule.condition),
+            action: PolicyActionDocument::from_action(&rule.action),
+        }
+    }
+
+    fn into_rule(self) -> Result<StrategyRule, StrategyDslDocumentError> {
+        Ok(StrategyRule::new(
+            self.condition.into_condition()?,
+            self.action.into_action()?,
+        ))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl IndicatorDocument {
+    fn from_indicator(indicator: IndicatorSpec) -> Self {
+        match indicator {
+            IndicatorSpec::ClosePrice => Self::ClosePrice,
+            IndicatorSpec::SimpleMovingAverage(window) => Self::SimpleMovingAverage {
+                lookback_days: window.days(),
+            },
+            IndicatorSpec::ExponentialMovingAverage(window) => Self::ExponentialMovingAverage {
+                lookback_days: window.days(),
+            },
+            IndicatorSpec::RelativeStrengthIndex(window) => Self::RelativeStrengthIndex {
+                lookback_days: window.days(),
+            },
+            IndicatorSpec::Drawdown(window) => Self::Drawdown {
+                lookback_days: window.days(),
+            },
+            IndicatorSpec::Vix => Self::Vix,
+        }
+    }
+
+    fn into_indicator(self) -> Result<IndicatorSpec, StrategyDslDocumentError> {
+        let window = |days| LookbackWindow::new(days).map_err(StrategyDslDocumentError::from);
+        match self {
+            Self::ClosePrice => Ok(IndicatorSpec::ClosePrice),
+            Self::SimpleMovingAverage { lookback_days } => {
+                Ok(IndicatorSpec::SimpleMovingAverage(window(lookback_days)?))
+            }
+            Self::ExponentialMovingAverage { lookback_days } => Ok(
+                IndicatorSpec::ExponentialMovingAverage(window(lookback_days)?),
+            ),
+            Self::RelativeStrengthIndex { lookback_days } => {
+                Ok(IndicatorSpec::RelativeStrengthIndex(window(lookback_days)?))
+            }
+            Self::Drawdown { lookback_days } => Ok(IndicatorSpec::Drawdown(window(lookback_days)?)),
+            Self::Vix => Ok(IndicatorSpec::Vix),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl ValueExpressionDocument {
+    fn from_expression(expression: &ValueExpression) -> Self {
+        match &expression.0 {
+            ExpressionKind::Constant(value) => Self::Constant {
+                value: value.to_string(),
+            },
+            ExpressionKind::Indicator(indicator) => Self::Indicator {
+                indicator: IndicatorDocument::from_indicator(*indicator),
+            },
+            ExpressionKind::Add(left, right) => Self::Add {
+                left: Box::new(Self::from_expression(left)),
+                right: Box::new(Self::from_expression(right)),
+            },
+            ExpressionKind::Subtract(left, right) => Self::Subtract {
+                left: Box::new(Self::from_expression(left)),
+                right: Box::new(Self::from_expression(right)),
+            },
+            ExpressionKind::Multiply(expression, factor) => Self::Multiply {
+                expression: Box::new(Self::from_expression(expression)),
+                factor: factor.to_string(),
+            },
+            ExpressionKind::Divide(expression, divisor) => Self::Divide {
+                expression: Box::new(Self::from_expression(expression)),
+                divisor: divisor.value().to_string(),
+            },
+        }
+    }
+
+    fn into_expression(self) -> Result<ValueExpression, StrategyDslDocumentError> {
+        match self {
+            Self::Constant { value } => Ok(ValueExpression::constant(parse_decimal(value)?)),
+            Self::Indicator { indicator } => {
+                Ok(ValueExpression::indicator(indicator.into_indicator()?))
+            }
+            Self::Add { left, right } => Ok(ValueExpression::sum(
+                left.into_expression()?,
+                right.into_expression()?,
+            )),
+            Self::Subtract { left, right } => Ok(ValueExpression::subtract(
+                left.into_expression()?,
+                right.into_expression()?,
+            )),
+            Self::Multiply { expression, factor } => Ok(ValueExpression::multiply(
+                expression.into_expression()?,
+                parse_decimal(factor)?,
+            )),
+            Self::Divide {
+                expression,
+                divisor,
+            } => Ok(ValueExpression::divide(
+                expression.into_expression()?,
+                NonZeroDecimal::new(parse_decimal(divisor)?)?,
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl ConditionDocument {
+    fn from_condition(condition: &Condition) -> Self {
+        match &condition.0 {
+            ConditionKind::Comparison {
+                expression,
+                operator,
+                threshold,
+            } => Self::Comparison {
+                expression: ValueExpressionDocument::from_expression(expression),
+                operator: ComparisonOperatorDocument::from_operator(*operator),
+                threshold: threshold.to_string(),
+            },
+            ConditionKind::All(conditions) => Self::All {
+                conditions: conditions.iter().map(Self::from_condition).collect(),
+            },
+            ConditionKind::Any(conditions) => Self::Any {
+                conditions: conditions.iter().map(Self::from_condition).collect(),
+            },
+        }
+    }
+
+    fn into_condition(self) -> Result<Condition, StrategyDslDocumentError> {
+        match self {
+            Self::Comparison {
+                expression,
+                operator,
+                threshold,
+            } => Ok(Condition::compare(
+                expression.into_expression()?,
+                operator.into_operator(),
+                parse_decimal(threshold)?,
+            )),
+            Self::All { conditions } => Ok(Condition::all(
+                conditions
+                    .into_iter()
+                    .map(Self::into_condition)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?),
+            Self::Any { conditions } => Ok(Condition::any(
+                conditions
+                    .into_iter()
+                    .map(Self::into_condition)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl ComparisonOperatorDocument {
+    fn from_operator(value: ComparisonOperator) -> Self {
+        match value {
+            ComparisonOperator::GreaterThan => Self::GreaterThan,
+            ComparisonOperator::GreaterThanOrEqual => Self::GreaterThanOrEqual,
+            ComparisonOperator::LessThan => Self::LessThan,
+            ComparisonOperator::LessThanOrEqual => Self::LessThanOrEqual,
+        }
+    }
+
+    fn into_operator(self) -> ComparisonOperator {
+        match self {
+            Self::GreaterThan => ComparisonOperator::GreaterThan,
+            Self::GreaterThanOrEqual => ComparisonOperator::GreaterThanOrEqual,
+            Self::LessThan => ComparisonOperator::LessThan,
+            Self::LessThanOrEqual => ComparisonOperator::LessThanOrEqual,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl PolicyActionDocument {
+    fn from_action(action: &PolicyAction) -> Self {
+        match &action.0 {
+            PolicyActionKind::SetOpportunityFixedAmount(amount) => {
+                Self::SetOpportunityFixedAmount {
+                    amount: amount.to_string(),
+                }
+            }
+            PolicyActionKind::SetOpportunityMultiplier(multiplier) => {
+                Self::SetOpportunityMultiplier {
+                    multiplier: multiplier.value(),
+                }
+            }
+            PolicyActionKind::SkipOpportunity => Self::SkipOpportunity,
+        }
+    }
+
+    fn into_action(self) -> Result<PolicyAction, StrategyDslDocumentError> {
+        match self {
+            Self::SetOpportunityFixedAmount { amount } => Ok(
+                PolicyAction::set_opportunity_fixed_amount(parse_decimal(amount)?)?,
+            ),
+            Self::SetOpportunityMultiplier { multiplier } => {
+                if !multiplier.is_finite()
+                    || !(Multiplier::MIN.value()..=Multiplier::MAX.value()).contains(&multiplier)
+                {
+                    return Err(StrategyDslDocumentError::InvalidMultiplier);
+                }
+                Ok(PolicyAction::set_opportunity_multiplier(
+                    Multiplier::new_clamped(multiplier),
+                ))
+            }
+            Self::SkipOpportunity => Ok(PolicyAction::skip_opportunity()),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+fn parse_decimal(value: String) -> Result<Decimal, StrategyDslDocumentError> {
+    value
+        .parse::<Decimal>()
+        .map_err(|_| StrategyDslDocumentError::InvalidDecimal)
+}
+
+/// 持久化 DSL 文档无法重新通过领域校验。
+#[cfg(feature = "serde")]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StrategyDslDocumentError {
+    /// 一个 Decimal 字符串不是合法有限十进制数。
+    #[error("strategy document contains an invalid decimal")]
+    InvalidDecimal,
+    /// 一个倍率不是 `[0.0, 1.5]` 内的有限数。
+    #[error("strategy document contains an invalid multiplier")]
+    InvalidMultiplier,
+    /// 策略标识或版本不满足策略领域不变量。
+    #[error(transparent)]
+    Policy(#[from] strategy_policy::PolicyValidationError),
+    /// DSL AST 未通过白名单或复杂度校验。
     #[error(transparent)]
     Validation(#[from] StrategyDslValidationError),
 }

@@ -8,6 +8,7 @@ mod paper_performance;
 mod paper_portfolio;
 mod ready;
 mod signals;
+mod strategies;
 
 use axum::{routing::get, Router};
 
@@ -25,4 +26,5 @@ pub(crate) fn router() -> Router<ApiState> {
         .merge(paper_portfolio::router())
         .merge(paper_performance::router())
         .merge(signals::router())
+        .merge(strategies::router())
 }

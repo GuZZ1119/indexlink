@@ -3,9 +3,13 @@ name = "strategy-dsl"
 version.workspace = true
 edition.workspace = true
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
 core-domain.workspace = true
 rust_decimal.workspace = true
+serde = { workspace = true, optional = true }
 strategy-policy.workspace = true
 thiserror.workspace = true
 time.workspace = true

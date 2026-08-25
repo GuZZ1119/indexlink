@@ -14,6 +14,7 @@ mod sqlite_opportunity_cash;
 mod sqlite_paper_performance;
 mod sqlite_period_execution;
 mod sqlite_scheduled_decisions;
+mod sqlite_strategy_specs;
 
 use std::{str::FromStr, time::Duration};
 
@@ -42,6 +43,10 @@ pub use sqlite_paper_performance::{
 pub use sqlite_period_execution::SqlitePeriodExecutionRepository;
 /// SQLite idempotency ledger for periodic automatic decision runs.
 pub use sqlite_scheduled_decisions::SqliteScheduledDecisionRepository;
+/// SQLite repository for immutable restricted DSL strategy versions.
+pub use sqlite_strategy_specs::{
+    SqliteStrategySpecRepository, StoredStrategySpec, StrategySpecRepositoryError,
+};
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

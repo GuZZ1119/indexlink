@@ -21,6 +21,7 @@ rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 strategy-policy.workspace = true
+strategy-dsl = { workspace = true, features = ["serde"] }
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true

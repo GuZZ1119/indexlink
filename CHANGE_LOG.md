@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 2026-08-25 CST — PR 7a
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：受限 DSL 版本存储与只读 HTTP API。
+- 涉及文件：
+  - `Cargo.lock`
+  - `crates/strategy-dsl/{Cargo.toml,src/lib.rs}`
+  - `crates/storage/{Cargo.toml,src/lib.rs,src/sqlite.rs,src/sqlite_strategy_specs.rs}`
+  - `migrations/sqlite/20260825100000_create_strategy_specs.sql`
+  - `crates/api/{Cargo.toml,src/state.rs,src/routes/mod.rs,src/routes/strategies.rs,tests/strategies.rs}`
+  - `API_MANAGEMENT.md`、`readme.md`、`readme.en.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 为 `strategy-dsl` 增加 opt-in `serde` 文档 DTO；JSON 反序列化后必须通过 `StrategySpecDocument::into_strategy_spec` 重走 `PolicyId`、`PolicyVersion`、窗口、表达式、动作和复杂度不变量，不能直接构造运行时策略。
+  - SQLite 新增不可变 `strategy_specs` 表，以 `(policy_id, policy_version)` 为主键保存规范化文档；读取时再次验证文档并核对行级元数据，损坏/不一致数据安全拒绝。
+  - 新增只读 `GET /strategies` 与 `GET /strategies/:policy_id/:policy_version`。本阶段没有策略创建、更新、删除、激活、计划绑定、实时执行、scheduler 接入或下单路径，因此已保存 DSL 版本仍是惰性的审阅对象。
+  - 同步双语 README、迁移计划和 API 清单，明确 PR 7a 完成且下一步为受控验证/回测与 Web Studio。
+- 验证：
+  - `cargo fmt --all -- --check` 通过。
+  - `cargo test -p core-domain --offline` 通过（13 个测试）。
+  - `cargo test -p strategy-dsl --features serde --offline` 通过（9 个测试）。
+  - `cargo test -p indexlink-storage --offline` 通过（45 个测试）。
+  - `cargo test -p indexlink-api --offline` 通过（含策略只读 API 集成测试）。
+  - `cargo check --workspace --locked`、针对 `strategy-dsl` / `indexlink-storage` / `indexlink-api` 的 Clippy 与 `git diff --check` 通过。
+
 ### 2026-08-25 CST — PR 5–6
 
 - 执行模型：GPT-5 Codex。

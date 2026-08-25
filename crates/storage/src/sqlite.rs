@@ -182,6 +182,7 @@ mod tests {
                 "plan_period_execution_reservations".to_owned(),
                 "portfolio_snapshots".to_owned(),
                 "scheduled_decision_runs".to_owned(),
+                "strategy_specs".to_owned(),
             ]
         );
     }

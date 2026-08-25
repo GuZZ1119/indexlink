@@ -127,6 +127,24 @@
 
 删除一个定投标的，成功返回 `204 No Content`。本机 SQLite 会通过外键级联删除该标的关联的 decision record、纸面订单、已观察成交、现金流与收益快照；该操作不可恢复，不会影响 OpenD 账户中的任何订单或持仓。
 
+### Restricted DSL Strategy Versions
+
+#### `GET /strategies`
+
+列出本机 SQLite 中已保存的不可变 DSL 策略版本，按创建时间倒序排列。每个响应包含 `policy`、`name`、经过领域校验的 `document` 与 UTC `created_at`。服务端读取 `document` 后会重新通过 DSL 构造器校验；损坏或不一致的本地数据不会返回给客户端，而是统一返回 `503 service_unavailable`。
+
+当前接口仅用于发现与审阅策略版本：**不提供**创建、更新、删除、激活、Decision Preview 接入、scheduler 接入或下单能力。
+
+#### `GET /strategies/:policy_id/:policy_version`
+
+读取一个精确不可变版本，例如：
+
+```text
+/strategies/dsl_rsi_opportunity_guard/1
+```
+
+非法策略标识/版本返回 `400 bad_request`，不存在的合法版本返回 `404 not_found`。内置 `fixed_dca` 与 `core_opportunity_v1` 不是 DSL 文档，因此本路由不会把它们伪装成可编辑策略。
+
 ### Execution Preview + 双桶
 
 #### `POST /investment-plans/:id/execution-preview`
@@ -479,9 +497,12 @@ OPEND_SMOKE_CONFIRM=submit-paper-order \
 12. `GET /paper-performance/actual`
 13. `GET /market-data/holdings?period=1y`
 14. `GET /paper-performance/historical-backtest`
+15. `GET /strategies`
+16. `GET /strategies/:policy_id/:policy_version`
 
 ## 当前 MVP 缺口优先级
 
 1. 使用真实 DashScope Key 完成一次本机 Qwen network smoke。
 2. 使用 Futu/Moomoo 虚拟账户完成一次真实 OpenD paper-order smoke。
 3. 将按月归档的 CAPE、ERP、MA200 distance、RSI、VIX 与 Qwen 情绪输入纳入本地决策快照，才能把当前价格规则回放提升为可完整复现的历史 70/20/10 回测；当前不会伪造这些历史输入。
+4. 为 DSL 增加受控创建/验证、回测、人工激活与 Strategy Studio；在这些能力完成前，已保存 DSL 版本保持只读且不会影响任何计划或订单。

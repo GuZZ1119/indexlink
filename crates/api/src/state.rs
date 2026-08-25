@@ -16,7 +16,8 @@ use indexlink_storage::{
     PaperPerformancePoint, PaperTradeMarker, SqliteDecisionRecordRepository,
     SqliteInvestmentPlanRepository, SqliteOpportunityCashRepository,
     SqlitePaperPerformanceRepository, SqlitePeriodExecutionRepository,
-    SqliteScheduledDecisionRepository, SqliteStorage,
+    SqliteScheduledDecisionRepository, SqliteStorage, SqliteStrategySpecRepository,
+    StoredStrategySpec,
 };
 use investment_plans::InvestmentPlanService;
 use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
@@ -128,6 +129,7 @@ pub struct ApiState {
     scheduled_decisions: Option<SqliteScheduledDecisionRepository>,
     opportunity_cash: Option<SqliteOpportunityCashRepository>,
     period_execution: Option<SqlitePeriodExecutionRepository>,
+    strategy_specs: Option<SqliteStrategySpecRepository>,
     policy_resolver: Arc<BuiltinPolicyResolver>,
     version: Arc<str>,
 }
@@ -162,6 +164,7 @@ impl ApiState {
         let scheduled_decisions = SqliteScheduledDecisionRepository::new(pool.clone());
         let opportunity_cash = SqliteOpportunityCashRepository::new(pool.clone());
         let period_execution = SqlitePeriodExecutionRepository::new(pool.clone());
+        let strategy_specs = SqliteStrategySpecRepository::new(pool.clone());
         Self {
             readiness: Arc::new(ReadinessBackend::SqliteStorage(storage)),
             plans,
@@ -173,6 +176,7 @@ impl ApiState {
             scheduled_decisions: Some(scheduled_decisions),
             opportunity_cash: Some(opportunity_cash),
             period_execution: Some(period_execution),
+            strategy_specs: Some(strategy_specs),
             policy_resolver: Arc::new(BuiltinPolicyResolver::default()),
             version: version.into(),
         }
@@ -243,6 +247,7 @@ impl ApiState {
             scheduled_decisions: None,
             opportunity_cash: None,
             period_execution: None,
+            strategy_specs: None,
             policy_resolver: Arc::new(BuiltinPolicyResolver::default()),
             version: version.into(),
         }
@@ -308,6 +313,39 @@ impl ApiState {
     #[must_use]
     pub(crate) fn policy_resolver(&self) -> &BuiltinPolicyResolver {
         self.policy_resolver.as_ref()
+    }
+
+    /// 读取已保存的受限 DSL 策略版本；该入口不提供创建、激活或执行能力。
+    pub(crate) async fn list_strategy_specs(&self) -> Result<Vec<StoredStrategySpec>, ApiError> {
+        self.strategy_specs
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?
+            .list()
+            .await
+            .map_err(|error| match error {
+                indexlink_storage::StrategySpecRepositoryError::NotFound => ApiError::NotFound,
+                indexlink_storage::StrategySpecRepositoryError::Unavailable => {
+                    ApiError::ServiceUnavailable
+                }
+            })
+    }
+
+    /// 读取一个已保存的不可变 DSL 策略版本。
+    pub(crate) async fn get_strategy_spec(
+        &self,
+        policy: &strategy_policy::PolicyRef,
+    ) -> Result<StoredStrategySpec, ApiError> {
+        self.strategy_specs
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?
+            .get(policy)
+            .await
+            .map_err(|error| match error {
+                indexlink_storage::StrategySpecRepositoryError::NotFound => ApiError::NotFound,
+                indexlink_storage::StrategySpecRepositoryError::Unavailable => {
+                    ApiError::ServiceUnavailable
+                }
+            })
     }
 
     /// 返回受配置保护的 broker port。

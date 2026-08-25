@@ -1,7 +1,7 @@
 # IndexLink 策略工作台迁移计划 / Strategy Studio Migration Plan
 
-> 状态：PR 1–6（DSL runtime 与首个统一历史评估候选）已完成；PR 7 及后续阶段已预登记，尚未实现。
-> Status: PRs 1–6 (DSL runtime and the first unified historical evaluation candidate) are complete; PR 7 and later stages are pre-registered and not implemented.
+> 状态：PR 1–6 与 PR 7 的“版本存储 + 只读 API”子阶段已完成；策略写入、激活和 Studio 仍未实现。
+> Status: PRs 1–6 and the PR 7 “version storage + read-only API” sub-stage are complete; strategy writes, activation, and Studio remain unimplemented.
 
 ## 1. 新定位 / New Positioning
 
@@ -138,9 +138,15 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - 候选在决策日只读取 RSI-14：低于 35 时机会桶为 `1.10x`，高于 65 时为 `0.85x`，否则为 `1.00x`；核心桶固定，成交仍在第一条严格更晚的观察价格。
 - 使用匹配的现金流、成本、成交时点、XIRR、期末净值、最大回撤、波动率、Sortino 与现金使用率比较策略和固定 DCA。该候选仅为研究，未变更生产默认策略。
 
-### PR 7 — 策略 API 与 Web Studio / Strategy API and Web Studio
+### PR 7a — 策略版本存储与只读 API / Strategy Version Storage and Read-only API（已完成 / Complete）
 
-- 提供策略 CRUD、验证、回测、版本、激活、Decision Preview 和审计查询 API。
+- SQLite 新增不可变 `strategy_specs` 表，以 `(policy_id, policy_version)` 作为主键保存规范化 DSL JSON；读取路径先反序列化 DTO，再调用领域构造器重建并校验策略，损坏或不一致的数据安全拒绝。
+- 新增只读 `GET /strategies` 与 `GET /strategies/:policy_id/:policy_version`；没有创建、更新、删除、激活、执行或下单 HTTP 入口。
+- 该阶段不改变现有计划绑定、内置 resolver、scheduler 或 paper-only 执行边界。
+
+### PR 7b — 策略验证与 Web Studio / Strategy Validation and Web Studio
+
+- 提供受控策略创建、验证、回测、版本、激活、Decision Preview 和审计查询 API。
 - Web 仅管理服务端数据；浏览器 UI 状态使用既有前端约定。先呈现内置策略和只读审计，再逐步开放 DSL 编辑器。
 
 ### PR 8 — Qwen Strategy Copilot / Qwen Strategy Copilot
@@ -158,6 +164,6 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 8. 当前结论 / Current Decision
 
-策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计、受限 DSL 定义/校验，以及首个 runtime-backed 历史候选已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 或 DSL RSI 候选升级为默认生产策略。下一项可执行工作应是 **PR 7：版本化 DSL 存储、验证与只读 API**。
+策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计、受限 DSL 定义/校验、首个 runtime-backed 历史候选，以及不可变版本存储/只读 API 已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 或 DSL RSI 候选升级为默认生产策略。下一项可执行工作应是 **PR 7b：受控策略验证、回测与 Web Studio**。
 
-With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 7: versioned DSL storage, validation, and read-only APIs**.
+With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 7b: controlled strategy validation, backtesting, and Web Studio**.
