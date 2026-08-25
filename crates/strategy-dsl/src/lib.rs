@@ -564,6 +564,160 @@ impl DslEvidence {
             .copied()
             .ok_or(StrategyDslRuntimeError::MissingIndicator)
     }
+
+    /// 按稳定指标顺序遍历用于本次运行的证据快照。
+    pub fn values(&self) -> impl Iterator<Item = (IndicatorSpec, Decimal)> + '_ {
+        self.values
+            .iter()
+            .map(|(indicator, value)| (*indicator, *value))
+    }
+
+    /// 从同一 `as_of` 的价格序列和 VIX 快照构造策略所需的技术证据。
+    ///
+    /// 输入价格必须按时间升序排列且仅包含决策日及以前的可得收盘价。线上适配器和
+    /// 离线回测都应调用此函数，避免 SMA、EMA、RSI 或回撤使用不同公式。
+    pub fn from_market_snapshot(
+        strategy: &StrategySpec,
+        closes: &[Decimal],
+        vix: Decimal,
+    ) -> Result<Self, StrategyDslRuntimeError> {
+        let mut values = Vec::new();
+        for indicator in strategy.required_indicators() {
+            let value = match indicator {
+                IndicatorSpec::ClosePrice => *closes
+                    .last()
+                    .ok_or(StrategyDslRuntimeError::MissingIndicator)?,
+                IndicatorSpec::SimpleMovingAverage(window) => {
+                    simple_moving_average(closes, window.days())?
+                }
+                IndicatorSpec::ExponentialMovingAverage(window) => {
+                    exponential_moving_average(closes, window.days())?
+                }
+                IndicatorSpec::RelativeStrengthIndex(window) => {
+                    relative_strength_index(closes, window.days())?
+                }
+                IndicatorSpec::Drawdown(window) => drawdown(closes, window.days())?,
+                IndicatorSpec::Vix => vix,
+            };
+            values.push((indicator, value));
+        }
+        Self::new(values)
+    }
+}
+
+fn trailing(closes: &[Decimal], count: u16) -> Result<&[Decimal], StrategyDslRuntimeError> {
+    let count = usize::from(count);
+    closes
+        .get(closes.len().saturating_sub(count)..)
+        .filter(|values| values.len() == count)
+        .ok_or(StrategyDslRuntimeError::MissingIndicator)
+}
+
+fn simple_moving_average(
+    closes: &[Decimal],
+    window: u16,
+) -> Result<Decimal, StrategyDslRuntimeError> {
+    let values = trailing(closes, window)?;
+    values
+        .iter()
+        .try_fold(Decimal::ZERO, |total, value| {
+            total
+                .checked_add(*value)
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)
+        })
+        .and_then(|total| {
+            total
+                .checked_div(Decimal::from(window))
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)
+        })
+}
+
+fn exponential_moving_average(
+    closes: &[Decimal],
+    window: u16,
+) -> Result<Decimal, StrategyDslRuntimeError> {
+    let values = trailing(closes, window)?;
+    let denominator = Decimal::from(u32::from(window) + 1);
+    let alpha = Decimal::from(2_u32)
+        .checked_div(denominator)
+        .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?;
+    let one_minus = Decimal::ONE
+        .checked_sub(alpha)
+        .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?;
+    values.iter().skip(1).try_fold(values[0], |ema, close| {
+        ema.checked_mul(one_minus)
+            .and_then(|value| {
+                close
+                    .checked_mul(alpha)
+                    .and_then(|weighted| value.checked_add(weighted))
+            })
+            .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)
+    })
+}
+
+fn relative_strength_index(
+    closes: &[Decimal],
+    window: u16,
+) -> Result<Decimal, StrategyDslRuntimeError> {
+    let values = trailing(closes, window.saturating_add(1))?;
+    let (gains, losses) = values
+        .windows(2)
+        .try_fold::<_, _, Result<_, StrategyDslRuntimeError>>(
+            (Decimal::ZERO, Decimal::ZERO),
+            |(gains, losses), pair| {
+                let change = pair[1]
+                    .checked_sub(pair[0])
+                    .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?;
+                if change >= Decimal::ZERO {
+                    Ok((
+                        gains
+                            .checked_add(change)
+                            .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?,
+                        losses,
+                    ))
+                } else {
+                    Ok((
+                        gains,
+                        losses
+                            .checked_add(-change)
+                            .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?,
+                    ))
+                }
+            },
+        )?;
+    if losses.is_zero() {
+        return Ok(Decimal::from(100_u32));
+    }
+    let relative_strength = gains
+        .checked_div(losses)
+        .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?;
+    Decimal::from(100_u32)
+        .checked_sub(
+            Decimal::from(100_u32)
+                .checked_div(
+                    Decimal::ONE
+                        .checked_add(relative_strength)
+                        .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?,
+                )
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)?,
+        )
+        .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)
+}
+
+fn drawdown(closes: &[Decimal], window: u16) -> Result<Decimal, StrategyDslRuntimeError> {
+    let values = trailing(closes, window)?;
+    let peak = values
+        .iter()
+        .copied()
+        .max()
+        .ok_or(StrategyDslRuntimeError::MissingIndicator)?;
+    let close = *values
+        .last()
+        .ok_or(StrategyDslRuntimeError::MissingIndicator)?;
+    close
+        .checked_div(peak)
+        .and_then(|ratio| ratio.checked_sub(Decimal::ONE))
+        .ok_or(StrategyDslRuntimeError::ArithmeticOverflow)
 }
 
 /// 解释器实际命中的、只影响机会桶的动作。
@@ -1386,5 +1540,104 @@ mod tests {
         assert_eq!(evaluation.recommendation().action(), Action::Standard);
         assert_eq!(evaluation.recommendation().multiplier().value(), 1.0);
         assert_eq!(evaluation.action(), &DslRuntimeAction::StandardOpportunity);
+    }
+
+    /// Verify every online technical indicator is calculated by the shared deterministic builder.
+    #[test]
+    fn builds_price_technical_evidence_for_the_runtime_and_backtests() {
+        let policy = PolicyRef::new(
+            PolicyId::new("dsl_technical_snapshot").unwrap(),
+            PolicyVersion::new(1).unwrap(),
+        );
+        let strategy = StrategySpec::new(
+            policy,
+            "technical snapshot",
+            vec![
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(IndicatorSpec::ClosePrice),
+                        ComparisonOperator::GreaterThan,
+                        Decimal::ZERO,
+                    ),
+                    PolicyAction::skip_opportunity(),
+                ),
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(IndicatorSpec::SimpleMovingAverage(
+                            LookbackWindow::new(2).unwrap(),
+                        )),
+                        ComparisonOperator::GreaterThan,
+                        Decimal::ZERO,
+                    ),
+                    PolicyAction::skip_opportunity(),
+                ),
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(IndicatorSpec::ExponentialMovingAverage(
+                            LookbackWindow::new(2).unwrap(),
+                        )),
+                        ComparisonOperator::GreaterThan,
+                        Decimal::ZERO,
+                    ),
+                    PolicyAction::skip_opportunity(),
+                ),
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(IndicatorSpec::RelativeStrengthIndex(
+                            LookbackWindow::new(2).unwrap(),
+                        )),
+                        ComparisonOperator::GreaterThan,
+                        Decimal::ZERO,
+                    ),
+                    PolicyAction::skip_opportunity(),
+                ),
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(IndicatorSpec::Drawdown(
+                            LookbackWindow::new(2).unwrap(),
+                        )),
+                        ComparisonOperator::LessThanOrEqual,
+                        Decimal::ZERO,
+                    ),
+                    PolicyAction::skip_opportunity(),
+                ),
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(IndicatorSpec::Vix),
+                        ComparisonOperator::GreaterThan,
+                        Decimal::ZERO,
+                    ),
+                    PolicyAction::skip_opportunity(),
+                ),
+            ],
+        )
+        .unwrap();
+        let evidence = DslEvidence::from_market_snapshot(
+            &strategy,
+            &[
+                Decimal::new(100, 0),
+                Decimal::new(110, 0),
+                Decimal::new(105, 0),
+            ],
+            Decimal::new(20, 0),
+        )
+        .unwrap();
+
+        assert_eq!(
+            evidence.value(IndicatorSpec::ClosePrice).unwrap(),
+            Decimal::new(105, 0)
+        );
+        assert_eq!(
+            evidence
+                .value(IndicatorSpec::SimpleMovingAverage(
+                    LookbackWindow::new(2).unwrap()
+                ))
+                .unwrap(),
+            Decimal::new(1075, 1)
+        );
+        assert_eq!(
+            evidence.value(IndicatorSpec::Vix).unwrap(),
+            Decimal::new(20, 0)
+        );
     }
 }

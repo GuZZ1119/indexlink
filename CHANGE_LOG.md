@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-25 CST — DSL Runtime V2 与 Studio 规则编辑
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：线上/离线共享技术证据计算、当前数据模拟与多规则 Strategy Studio。
+- 涉及文件：`crates/strategy-dsl/src/lib.rs`、`crates/strategy-evaluation/src/lib.rs`、`crates/api/{src/state.rs,src/routes/{decision_preview.rs,strategies.rs}}`、`apps/web/src/{api/types.ts,pages/strategies/index.tsx}`、`API_MANAGEMENT.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`、`CHANGE_LOG.md`。
+- 变更内容：DSL 线上 Runtime 可计算收盘价、SMA、EMA、RSI、回撤与 VIX；`as_of` 前本机 OpenD 日线和 Cboe VIX 快照构成唯一证据，指标计算与离线研究共用纯 Decimal builder。Studio 新增多条有序规则、all/any 条件组、白名单窗口/阈值、版本复制与不产生订单或审计的当前数据模拟；结果说明首条命中规则与实际指标值。
+- 验证：`cargo test -p strategy-dsl --features serde --locked`、`cargo test -p strategy-evaluation --locked`、`cargo test -p indexlink-api --locked`、`cargo test -p core-domain --locked`、`cargo check --workspace --locked`、Clippy、前端 build、fmt 与 `git diff --check`。
+
 ### 2026-08-25 CST — Strategy Studio 与激活执行闭环
 
 - 执行模型：GPT-5 Codex。

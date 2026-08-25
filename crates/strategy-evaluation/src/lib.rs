@@ -1649,6 +1649,18 @@ mod tests {
         }
     }
 
+    /// Verify historical research can call the same price-to-evidence builder as the online runtime.
+    #[test]
+    fn shared_technical_evidence_builder_is_available_to_offline_research() {
+        let strategy = dsl_rsi_opportunity_strategy().unwrap();
+        let closes = (1..=15).map(Decimal::from).collect::<Vec<_>>();
+        let evidence =
+            DslEvidence::from_market_snapshot(&strategy, &closes, Decimal::new(20, 0)).unwrap();
+        let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14).unwrap());
+
+        assert!(evidence.value(rsi).unwrap() > Decimal::ZERO);
+    }
+
     /// Verify the core/opportunity simulation treats retained money as terminal cash.
     #[test]
     fn strategy_never_spends_more_than_external_cash() {

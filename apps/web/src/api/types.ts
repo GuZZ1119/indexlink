@@ -22,15 +22,30 @@ export interface StrategySpecDocument {
 
 /** One form-authored condition/action rule; arbitrary source code is never accepted. */
 export interface StrategyRuleDocument {
-  condition: {
-    kind: 'comparison'
-    expression: { kind: 'indicator'; indicator: { kind: 'relative_strength_index'; lookback_days: number } | { kind: 'vix' } }
-    operator: 'greater_than' | 'greater_than_or_equal' | 'less_than' | 'less_than_or_equal'
-    threshold: string
-  }
+  condition: StrategyConditionDocument
   action:
     | { kind: 'set_opportunity_multiplier'; multiplier: number }
     | { kind: 'skip_opportunity' }
+}
+
+export type StrategyIndicatorDocument =
+  | { kind: 'close_price' }
+  | { kind: 'simple_moving_average'; lookback_days: number }
+  | { kind: 'exponential_moving_average'; lookback_days: number }
+  | { kind: 'relative_strength_index'; lookback_days: number }
+  | { kind: 'drawdown'; lookback_days: number }
+  | { kind: 'vix' }
+
+export type StrategyComparisonDocument = {
+    kind: 'comparison'
+    expression: { kind: 'indicator'; indicator: StrategyIndicatorDocument }
+    operator: 'greater_than' | 'greater_than_or_equal' | 'less_than' | 'less_than_or_equal'
+    threshold: string
+  }
+
+export type StrategyConditionDocument = StrategyComparisonDocument | {
+  kind: 'all' | 'any'
+  conditions: StrategyComparisonDocument[]
 }
 
 /** Immutable stored DSL strategy displayed by the Studio. */

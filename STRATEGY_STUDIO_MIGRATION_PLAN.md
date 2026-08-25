@@ -151,6 +151,12 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - 已激活 DSL 会由自动 Decision Preview、scheduler 与审计共用同一 Runtime；仅允许机会桶倍率或跳过机会桶，核心桶不可否决，审批模式不会自动下单，仍为 paper-only。
 - 当前线上 evidence profile 仅支持 RSI(14) 与 VIX；其余 DSL AST 指标保留给离线研究，不能被激活。
 
+### PR 7c — DSL Runtime V2 / Shared Technical Evidence（已完成 / Complete）
+
+- 线上与离线研究共用 `DslEvidence::from_market_snapshot`：由同一段纯 Decimal 逻辑计算收盘价、SMA、EMA、RSI、窗口回撤和 VIX，输入仅允许决策 `as_of` 当日及以前的日线。
+- 自动 preview/scheduler 在审计来源快照中记录 `as_of`、OpenD/Cboe 数据来源和实际所需指标窗口；保存策略后可用只读 `simulate` 查看首条命中规则和输入证据。
+- Studio 支持多条有序优先规则、单条件/全部满足/任一满足组、窗口与阈值、版本复制以及当前数据模拟；仍不支持自由代码或固定金额动作线上激活。
+
 ### PR 8 — Qwen Strategy Copilot / Qwen Strategy Copilot
 
 - Qwen 根据受限 schema 生成“候选策略草案”、解释与警告。

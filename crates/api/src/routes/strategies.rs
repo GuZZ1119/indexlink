@@ -6,10 +6,14 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::{Datelike, NaiveDate};
 use indexlink_storage::StoredStrategySpec;
+use rust_decimal::Decimal;
 use serde::Serialize;
-use strategy_dsl::StrategySpecDocument;
+use strategy_dsl::{DslEvidence, StrategySpecDocument};
+use strategy_policy::DecisionContext;
 use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
+use time::Date;
 
 use crate::{ApiError, ApiState};
 
@@ -26,12 +30,117 @@ struct StrategyValidationResponse {
     document: Option<StrategySpecDocument>,
 }
 
+/// Current-data simulation output that explains the first matched rule without creating an audit or order.
+#[derive(Debug, Serialize)]
+struct StrategySimulationResponse {
+    /// Immutable version that was interpreted.
+    policy: PolicyRef,
+    /// Market data cutoff used for this pure simulation.
+    as_of: String,
+    /// First matching rule index, or `null` when default opportunity behaviour applies.
+    matched_rule_index: Option<usize>,
+    /// Opportunity-only runtime action selected by the strategy.
+    action: String,
+    /// Bounded opportunity multiplier selected by the strategy.
+    multiplier: f64,
+    /// Stable, source-labelled values read by the condition evaluator.
+    evidence: Vec<StrategyEvidenceValue>,
+}
+
+/// One readable metric used by a current-data strategy simulation.
+#[derive(Debug, Serialize)]
+struct StrategyEvidenceValue {
+    /// Whitelisted indicator and calculation window.
+    indicator: String,
+    /// Decimal value calculated at `as_of`.
+    value: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategySimulationRequest {
+    /// US symbol whose current local OpenD history should be interpreted.
+    symbol: String,
+}
+
 /// Build restricted strategy discovery, validation, and immutable-save routes.
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
         .route("/strategies", get(list_strategies).post(create_strategy))
         .route("/strategies/validate", post(validate_strategy))
+        .route(
+            "/strategies/:policy_id/:policy_version/simulate",
+            post(simulate_strategy),
+        )
         .route("/strategies/:policy_id/:policy_version", get(get_strategy))
+}
+
+/// Simulate one stored version on current provider data without persisting or submitting anything.
+async fn simulate_strategy(
+    State(state): State<ApiState>,
+    path: Result<Path<(String, u32)>, PathRejection>,
+    Json(request): Json<StrategySimulationRequest>,
+) -> Result<Json<StrategySimulationResponse>, ApiError> {
+    let policy = policy_from_path(path)?;
+    let strategy = state
+        .get_strategy_spec(&policy)
+        .await?
+        .document
+        .into_strategy_spec()
+        .map_err(|_| ApiError::ServiceUnavailable)?;
+    if strategy.has_fixed_opportunity_amount_action() {
+        return Err(ApiError::BadRequest);
+    }
+    let input = state.market_signal_input(&request.symbol).await?;
+    let closes = state
+        .market_price_history(&request.symbol, 366)
+        .await?
+        .into_iter()
+        .map(|point| Decimal::from_f64_retain(point.close).ok_or(ApiError::ServiceUnavailable))
+        .collect::<Result<Vec<_>, _>>()?;
+    let vix = Decimal::from_f64_retain(input.vix_current).ok_or(ApiError::ServiceUnavailable)?;
+    let evidence = DslEvidence::from_market_snapshot(&strategy, &closes, vix)
+        .map_err(|_| ApiError::BadRequest)?;
+    let as_of = NaiveDate::parse_from_str(&input.as_of, "%Y-%m-%d")
+        .ok()
+        .and_then(|date| {
+            Date::from_calendar_date(
+                date.year(),
+                time::Month::try_from(date.month() as u8).ok()?,
+                date.day() as u8,
+            )
+            .ok()
+        })
+        .ok_or(ApiError::ServiceUnavailable)?;
+    let context = DecisionContext::new(as_of, Decimal::ONE, evidence.clone())
+        .map_err(|_| ApiError::BadRequest)?;
+    let result = strategy
+        .evaluate(&context)
+        .map_err(|_| ApiError::BadRequest)?;
+    Ok(Json(StrategySimulationResponse {
+        policy,
+        as_of: input.as_of,
+        matched_rule_index: result.matched_rule_index(),
+        action: format!("{:?}", result.action()),
+        multiplier: result.recommendation().multiplier().value(),
+        evidence: evidence
+            .values()
+            .map(|(indicator, value)| StrategyEvidenceValue {
+                indicator: format!("{indicator:?}"),
+                value: value.to_string(),
+            })
+            .collect(),
+    }))
+}
+
+fn policy_from_path(
+    path: Result<Path<(String, u32)>, PathRejection>,
+) -> Result<PolicyRef, ApiError> {
+    let Path((policy_id, policy_version)) = path.map_err(|_| ApiError::BadRequest)?;
+    Ok(PolicyRef::new(
+        PolicyId::new(policy_id).map_err(|_| ApiError::BadRequest)?,
+        PolicyVersion::new(policy_version).map_err(|_| ApiError::BadRequest)?,
+    ))
 }
 
 /// Validate one form-authored restricted DSL document without persisting it.
@@ -78,10 +187,6 @@ async fn get_strategy(
     State(state): State<ApiState>,
     path: Result<Path<(String, u32)>, PathRejection>,
 ) -> Result<Json<StoredStrategySpec>, ApiError> {
-    let Path((policy_id, policy_version)) = path.map_err(|_| ApiError::BadRequest)?;
-    let policy = PolicyRef::new(
-        PolicyId::new(policy_id).map_err(|_| ApiError::BadRequest)?,
-        PolicyVersion::new(policy_version).map_err(|_| ApiError::BadRequest)?,
-    );
+    let policy = policy_from_path(path)?;
     Ok(Json(state.get_strategy_spec(&policy).await?))
 }

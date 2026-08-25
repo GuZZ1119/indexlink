@@ -27,7 +27,7 @@ use rust_decimal::{
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
-use strategy_dsl::{IndicatorSpec, LookbackWindow, StrategySpec};
+use strategy_dsl::StrategySpec;
 
 use crate::ApiError;
 
@@ -376,12 +376,7 @@ impl ApiState {
                     .document
                     .into_strategy_spec()
                     .map_err(|_| ApiError::ServiceUnavailable)?;
-                let rsi14 = IndicatorSpec::RelativeStrengthIndex(
-                    LookbackWindow::new(14).map_err(|_| ApiError::ServiceUnavailable)?,
-                );
-                Ok(strategy.required_indicators().iter().all(|indicator| {
-                    matches!(indicator, IndicatorSpec::Vix) || *indicator == rsi14
-                }) && !strategy.has_fixed_opportunity_amount_action())
+                Ok(!strategy.has_fixed_opportunity_amount_action())
             }
             Err(ApiError::NotFound) => Ok(false),
             Err(error) => Err(error),
@@ -732,6 +727,25 @@ impl ApiState {
             .await
             .inspect_err(|error| tracing::error!(%error, "market signal refresh failed"))
             .map_err(market_data_error)
+    }
+
+    /// 读取只含决策日及以前价格的日线序列，供受限 DSL Runtime 构造可审计技术证据。
+    pub(crate) async fn market_price_history(
+        &self,
+        symbol: &str,
+        lookback_days: i64,
+    ) -> Result<Vec<MarketPricePoint>, ApiError> {
+        let provider = self
+            .market_data
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?;
+        provider
+            .fetch_price_history(symbol, lookback_days)
+            .await
+            .inspect_err(
+                |error| tracing::error!(%error, symbol, "DSL market history refresh failed"),
+            )
+            .map_err(|_| ApiError::ServiceUnavailable)
     }
 
     /// Return the newest trusted local close for safe budget-to-quantity conversion.

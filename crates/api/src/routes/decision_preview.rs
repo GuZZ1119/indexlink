@@ -35,7 +35,7 @@ use quant_engine::{
 use rust_decimal::{prelude::ToPrimitive, Decimal, RoundingStrategy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use strategy_dsl::{DslEvidence, DslRuntimeAction, IndicatorSpec, LookbackWindow, StrategySpec};
+use strategy_dsl::{DslEvidence, DslRuntimeAction, StrategySpec};
 use strategy_policy::DecisionContext;
 use time::{Date, Month};
 use tokio::time::timeout;
@@ -475,8 +475,8 @@ async fn automatic_decision_input(
     )
     .map_err(|_| ApiError::ServiceUnavailable)?;
 
-    let dsl_evidence = if state.policy_resolver().supports(&plan.policy) {
-        None
+    let (dsl_evidence, input_source) = if state.policy_resolver().supports(&plan.policy) {
+        (None, automatic_source_snapshot(&input))
     } else {
         let strategy = state
             .get_strategy_spec(&plan.policy)
@@ -484,7 +484,17 @@ async fn automatic_decision_input(
             .document
             .into_strategy_spec()
             .map_err(|_| ApiError::ServiceUnavailable)?;
-        Some(dsl_evidence_for_live_runtime(&strategy, &input)?)
+        let mut source = automatic_source_snapshot(&input);
+        source["dsl_runtime"] = json!({
+            "as_of": input.as_of,
+            "price_source": "local OpenD daily closes through the decision as_of date",
+            "volatility_source": "Cboe VIX latest validated observation",
+            "indicators": strategy.required_indicators().into_iter().map(|indicator| format!("{indicator:?}")).collect::<Vec<_>>(),
+        });
+        (
+            Some(dsl_evidence_for_live_runtime(state, &strategy, &plan.symbol, &input).await?),
+            source,
+        )
     };
 
     Ok(DecisionPreviewRequest {
@@ -493,7 +503,7 @@ async fn automatic_decision_input(
         fundamental: Some(FundamentalSignalRequest::from(fundamental)),
         trend: Some(TrendSignalRequest::from(trend)),
         paper_order: options.paper_order,
-        input_source: Some(automatic_source_snapshot(&input)),
+        input_source: Some(input_source),
         dsl_evidence,
     })
 }
@@ -503,26 +513,19 @@ async fn automatic_decision_input(
 /// The Studio intentionally exposes only RSI(14) and VIX because those are the two raw values
 /// supplied together by the existing automatic market-data adapter.  Other DSL indicators remain
 /// valid for offline research but cannot be activated until a dedicated data adapter is added.
-fn dsl_evidence_for_live_runtime(
+async fn dsl_evidence_for_live_runtime(
+    state: &ApiState,
     strategy: &StrategySpec,
+    symbol: &str,
     input: &MarketSignalInput,
 ) -> Result<DslEvidence, ApiError> {
-    let rsi14 = IndicatorSpec::RelativeStrengthIndex(
-        LookbackWindow::new(14).map_err(|_| ApiError::ServiceUnavailable)?,
-    );
-    let supported = [rsi14, IndicatorSpec::Vix];
-    if strategy
-        .required_indicators()
-        .iter()
-        .any(|indicator| !supported.contains(indicator))
-    {
-        tracing::warn!(policy = %strategy.policy(), "DSL strategy requires indicators outside the live runtime profile");
-        return Err(ApiError::BadRequest);
-    }
-    let rsi = Decimal::from_f64_retain(input.rsi_current).ok_or(ApiError::ServiceUnavailable)?;
     let vix = Decimal::from_f64_retain(input.vix_current).ok_or(ApiError::ServiceUnavailable)?;
-    DslEvidence::new([(rsi14, rsi), (IndicatorSpec::Vix, vix)])
-        .map_err(|_| ApiError::ServiceUnavailable)
+    let prices = state.market_price_history(symbol, 366).await?;
+    let closes = prices
+        .iter()
+        .map(|point| Decimal::from_f64_retain(point.close).ok_or(ApiError::ServiceUnavailable))
+        .collect::<Result<Vec<_>, _>>()?;
+    DslEvidence::from_market_snapshot(strategy, &closes, vix).map_err(|_| ApiError::BadRequest)
 }
 
 /// Execute a resolved decision and create its audit record before any optional broker side effect.

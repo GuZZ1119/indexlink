@@ -50,10 +50,12 @@ impl MarketSignalProvider for StaticMarketData {
         _symbol: &str,
         _lookback_days: i64,
     ) -> Result<Vec<MarketPricePoint>, MarketDataError> {
-        Ok(vec![MarketPricePoint {
-            date: "2026-08-25".to_owned(),
-            close: 100.0,
-        }])
+        Ok((1..=20)
+            .map(|day| MarketPricePoint {
+                date: format!("2026-08-{day:02}"),
+                close: 100.0 + f64::from(day),
+            })
+            .collect())
     }
 }
 
@@ -260,6 +262,25 @@ async fn activates_a_validated_strategy_and_uses_it_for_automatic_audit() {
         response_json(activated).await["policy"]["id"],
         "dsl_api_test"
     );
+
+    let simulation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/strategies/dsl_api_test/1/simulate")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"symbol":"VOO"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(simulation.status(), StatusCode::OK);
+    let simulation = response_json(simulation).await;
+    assert_eq!(simulation["policy"]["id"], "dsl_api_test");
+    assert!(simulation["evidence"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
 
     let preview = app
         .oneshot(

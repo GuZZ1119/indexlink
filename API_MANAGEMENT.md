@@ -135,7 +135,11 @@
 
 #### `POST /strategies/validate` 与 `POST /strategies`
 
-Strategy Studio 先将表单文档发送到 `POST /strategies/validate`；响应会返回 `valid`、可读校验错误或规范化文档。校验通过后才可 `POST /strategies` 保存为不可变版本。首版白名单只让线上 Runtime 使用 `RSI(14)`、`VIX`、比较条件、机会桶倍率或跳过机会桶；没有自由代码、任意脚本或核心桶否决。
+Strategy Studio 先将表单文档发送到 `POST /strategies/validate`；响应会返回 `valid`、可读校验错误或规范化文档。校验通过后才可 `POST /strategies` 保存为不可变版本。线上 Runtime 支持收盘价、SMA、EMA、RSI、回撤与 VIX；每次运行保存 `as_of`、本机 OpenD 日线/Cboe VIX 来源及所用窗口。没有自由代码、任意脚本或核心桶否决。
+
+#### `POST /strategies/:policy_id/:policy_version/simulate`
+
+以一个计划标的的当前只读市场数据模拟已保存策略，返回截至日期、首条命中规则、机会桶倍率及指标证据；不写入审计、不提交订单。Studio 用它解释“当前为何命中/未命中”。
 
 #### `POST /investment-plans/:id/activate-policy`
 
