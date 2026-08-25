@@ -63,6 +63,31 @@ export interface StrategyValidationResponse {
   document?: StrategySpecDocument
 }
 
+/** Fixed-fixture safety and comparison report required before activating a DSL strategy. */
+export interface StrategyAdmissionReport {
+  eligible: boolean
+  reason?: string
+  core_bucket_safe: boolean
+  budget_safe: boolean
+  assets: StrategyAdmissionAsset[]
+}
+
+/** Matched historical result for one fixed-fixture symbol. */
+export interface StrategyAdmissionAsset {
+  symbol: string
+  observations: number
+  strategy: StrategyAdmissionMetrics
+  fixed_dca: StrategyAdmissionMetrics
+}
+
+/** Comparable non-promotional metrics under one identical contribution schedule. */
+export interface StrategyAdmissionMetrics {
+  terminal_wealth_usd: number
+  maximum_drawdown_percent: number
+  annualized_volatility_percent?: number
+  cash_utilisation_percent: number
+}
+
 /** A server-side investment plan. Decimal values remain JSON strings. */
 export interface InvestmentPlan {
   id: string

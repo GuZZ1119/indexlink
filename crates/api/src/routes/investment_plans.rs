@@ -381,7 +381,7 @@ async fn create_plan(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     let input = input.into_domain()?;
     if let Some(policy) = &input.policy {
-        if !state.supports_plan_policy(policy).await? {
+        if !state.is_plan_policy_eligible_for_activation(policy).await? {
             return Err(ApiError::BadRequest);
         }
     }
@@ -415,7 +415,7 @@ async fn update_plan(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     let input = input.into_domain()?;
     if let Some(policy) = &input.policy {
-        if !state.supports_plan_policy(policy).await? {
+        if !state.is_plan_policy_eligible_for_activation(policy).await? {
             return Err(ApiError::BadRequest);
         }
     }
@@ -431,7 +431,10 @@ async fn activate_policy(
     let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     let policy = input.policy.into_domain()?;
-    if !state.supports_plan_policy(&policy).await? {
+    if !state
+        .is_plan_policy_eligible_for_activation(&policy)
+        .await?
+    {
         return Err(ApiError::BadRequest);
     }
     Ok(Json(

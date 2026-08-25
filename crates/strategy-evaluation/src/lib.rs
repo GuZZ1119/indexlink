@@ -132,6 +132,165 @@ pub fn evaluate_fixture() -> Result<CalibrationReport, EvaluationError> {
     })
 }
 
+/// Fixed-fixture admission report required before a DSL version can be activated online.
+#[derive(Debug, Serialize)]
+pub struct StrategyAdmissionReport {
+    /// Whether the strategy passed deterministic safety and fixed-sample evaluation gates.
+    pub eligible: bool,
+    /// Human-readable reason when activation must remain blocked.
+    pub reason: Option<String>,
+    /// Core-bucket safety result; this must always be true for a DSL strategy.
+    pub core_bucket_safe: bool,
+    /// Period-budget validation result for the fixed sample budget.
+    pub budget_safe: bool,
+    /// Matched fixed-fixture comparison with Fixed DCA, when the needed inputs exist.
+    pub assets: Vec<StrategyAdmissionAsset>,
+}
+
+/// One asset-level fixed-sample comparison used by the activation gate.
+#[derive(Debug, Serialize)]
+pub struct StrategyAdmissionAsset {
+    /// Fixture symbol.
+    pub symbol: String,
+    /// Number of matched contribution observations.
+    pub observations: usize,
+    /// Candidate metrics under the same contribution schedule as Fixed DCA.
+    pub strategy: StrategyAdmissionMetrics,
+    /// Fixed DCA reference metrics.
+    pub fixed_dca: StrategyAdmissionMetrics,
+}
+
+/// Public subset of comparable, non-promotional admission metrics.
+#[derive(Debug, Serialize)]
+pub struct StrategyAdmissionMetrics {
+    /// Terminal wealth after all fixed fixture observations.
+    pub terminal_wealth_usd: f64,
+    /// Maximum peak-to-trough drawdown percentage.
+    pub maximum_drawdown_percent: f64,
+    /// Annualized monthly-return volatility when observable.
+    pub annualized_volatility_percent: Option<f64>,
+    /// Share of external cash invested by the evaluated strategy.
+    pub cash_utilisation_percent: f64,
+}
+
+/// Evaluate one restricted strategy against the committed calibration fixture for activation.
+///
+/// The fixture only includes causal RSI-14 and VIX inputs.  A strategy that requires other
+/// indicators remains valid for online simulation but is intentionally ineligible until an
+/// equally versioned historical fixture is added; no synthetic backtest is substituted.
+pub fn evaluate_strategy_admission(
+    strategy: &StrategySpec,
+) -> Result<StrategyAdmissionReport, EvaluationError> {
+    let core_bucket_safe = strategy
+        .rules()
+        .iter()
+        .all(|rule| rule.action().is_opportunity_only());
+    let budget = Decimal::new(PERIOD_BUDGET, 0);
+    let budget_safe = strategy.validate_for_budget(budget).is_ok();
+    let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14)?);
+    let fixture_supported = strategy
+        .required_indicators()
+        .iter()
+        .all(|indicator| *indicator == rsi || matches!(indicator, IndicatorSpec::Vix));
+    if !core_bucket_safe || !budget_safe || !fixture_supported {
+        let reason = if !core_bucket_safe {
+            "the strategy is not opportunity-bucket-only and would be able to affect the fixed core contribution"
+        } else if !budget_safe {
+            "the strategy can recommend an opportunity amount above the fixed-sample period budget"
+        } else {
+            "fixed calibration fixture currently supports only RSI(14) and VIX; add versioned historical inputs before activating this strategy"
+        };
+        return Ok(StrategyAdmissionReport {
+            eligible: false,
+            reason: Some(reason.to_owned()),
+            core_bucket_safe,
+            budget_safe,
+            assets: Vec::new(),
+        });
+    }
+    let dataset: FixtureDataset =
+        serde_json::from_str(include_str!("../data/generated/calibration-v2.json"))?;
+    let configuration = execution_configuration(Decimal::new(CORE_RATIO, 1))?;
+    let mut assets = Vec::new();
+    for asset in &dataset.assets {
+        let samples = evaluate_asset(asset)?;
+        let strategy_metrics = simulate_admission_dsl(&samples, configuration, strategy)?;
+        let dca = simulate(&samples, configuration, ExecutionMode::FixedDca)?;
+        assets.push(StrategyAdmissionAsset {
+            symbol: asset.source_symbol.clone(),
+            observations: samples.len(),
+            strategy: admission_metrics(strategy_metrics),
+            fixed_dca: admission_metrics(dca),
+        });
+    }
+    Ok(StrategyAdmissionReport {
+        eligible: true,
+        reason: None,
+        core_bucket_safe,
+        budget_safe,
+        assets,
+    })
+}
+
+fn simulate_admission_dsl(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+    strategy: &StrategySpec,
+) -> Result<PerformanceMetrics, EvaluationError> {
+    let budget = Decimal::new(PERIOD_BUDGET, 0);
+    let maximum = Decimal::new(MAX_SINGLE_EXECUTION, 0);
+    let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14)?);
+    let mut cash = Decimal::ZERO;
+    let mut state = PortfolioState::default();
+    for row in samples {
+        state.deposit(row.decision_date, PERIOD_BUDGET as f64);
+        let evidence = DslEvidence::new([
+            (
+                rsi,
+                Decimal::from_f64(row.rsi14).ok_or(EvaluationError::InvalidDecimal)?,
+            ),
+            (
+                IndicatorSpec::Vix,
+                Decimal::from_f64(row.vix).ok_or(EvaluationError::InvalidDecimal)?,
+            ),
+        ])?;
+        let evaluation = strategy.evaluate(&DecisionContext::new(
+            fixture_date(row.decision_date)?,
+            budget,
+            evidence,
+        )?)?;
+        let split = TwoBucketContributionSplit::from_decision_with_carry(
+            budget,
+            maximum,
+            configuration,
+            evaluation.recommendation().action(),
+            evaluation.recommendation().multiplier(),
+            cash,
+        )?;
+        cash = (cash + split.opportunity_budget() - split.opportunity_contribution())
+            .max(Decimal::ZERO);
+        state.buy(
+            row.execution_date,
+            split
+                .recommended_contribution()
+                .to_f64()
+                .ok_or(EvaluationError::InvalidDecimal)?,
+            row.execution_close,
+        );
+        state.mark_to_market(row.execution_date, row.execution_close);
+    }
+    Ok(state.metrics(cash.to_f64().unwrap_or_default()))
+}
+
+fn admission_metrics(metrics: PerformanceMetrics) -> StrategyAdmissionMetrics {
+    StrategyAdmissionMetrics {
+        terminal_wealth_usd: metrics.terminal_wealth_usd,
+        maximum_drawdown_percent: metrics.maximum_drawdown_percent,
+        annualized_volatility_percent: metrics.annualized_volatility_percent,
+        cash_utilisation_percent: metrics.cash_utilisation_percent,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct FixtureDataset {
     dataset_version: String,
@@ -313,6 +472,7 @@ struct DecisionMonth {
     execution_date: NaiveDate,
     execution_close: f64,
     rsi14: f64,
+    vix: f64,
     fundamental: FundamentalSignal,
     trend: TrendSignal,
     fallback: DecisionSignal,
@@ -429,6 +589,7 @@ fn evaluate_asset(asset: &FixtureAsset) -> Result<Vec<DecisionMonth>, Evaluation
                 .map_err(|_| EvaluationError::InvalidDate)?,
             execution_close: current.execution_close,
             rsi14: current.rsi14,
+            vix: current.vix,
             fundamental,
             trend,
             fallback,
@@ -1659,6 +1820,48 @@ mod tests {
         let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14).unwrap());
 
         assert!(evidence.value(rsi).unwrap() > Decimal::ZERO);
+    }
+
+    /// Verify the fixed calibration fixture admits a safe RSI/VIX opportunity-only policy.
+    #[test]
+    fn admission_evaluation_compares_safe_dsl_policy_with_fixed_dca() {
+        let report = evaluate_strategy_admission(&dsl_rsi_opportunity_strategy().unwrap()).unwrap();
+
+        assert!(report.eligible);
+        assert!(report.core_bucket_safe);
+        assert!(report.budget_safe);
+        assert_eq!(report.assets.len(), 2);
+        assert!(report
+            .assets
+            .iter()
+            .all(|asset| asset.observations > 0 && asset.fixed_dca.terminal_wealth_usd > 0.0));
+    }
+
+    /// Verify a policy needing unsupported historical evidence stays saved but cannot activate.
+    #[test]
+    fn admission_rejects_indicators_missing_from_the_versioned_fixture() {
+        let close = IndicatorSpec::ClosePrice;
+        let strategy = StrategySpec::new(
+            PolicyRef::new(
+                PolicyId::new("dsl_close_not_yet_calibrated").unwrap(),
+                PolicyVersion::new(1).unwrap(),
+            ),
+            "Close-price strategy awaiting fixture support",
+            vec![StrategyRule::new(
+                Condition::compare(
+                    ValueExpression::indicator(close),
+                    ComparisonOperator::GreaterThan,
+                    Decimal::ONE,
+                ),
+                PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.0)),
+            )],
+        )
+        .unwrap();
+
+        let report = evaluate_strategy_admission(&strategy).unwrap();
+        assert!(!report.eligible);
+        assert!(report.assets.is_empty());
+        assert!(report.reason.unwrap().contains("RSI(14) and VIX"));
     }
 
     /// Verify the core/opportunity simulation treats retained money as terminal cash.

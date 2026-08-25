@@ -383,6 +383,38 @@ impl ApiState {
         }
     }
 
+    /// 对已保存 DSL 策略运行固定样本准入评估；内置策略不使用此研究门槛。
+    pub(crate) async fn strategy_admission_report(
+        &self,
+        policy: &strategy_policy::PolicyRef,
+    ) -> Result<strategy_evaluation::StrategyAdmissionReport, ApiError> {
+        let stored = self.get_strategy_spec(policy).await?;
+        let strategy = stored
+            .document
+            .into_strategy_spec()
+            .map_err(|_| ApiError::ServiceUnavailable)?;
+        strategy_evaluation::evaluate_strategy_admission(&strategy)
+            .inspect_err(|error| tracing::error!(%error, "strategy admission evaluation failed"))
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// 判断策略是否可被绑定到计划并进入统一执行入口。
+    ///
+    /// 内置版本已随二进制发布并具备各自的回归覆盖；用户保存的 DSL 版本必须
+    /// 通过固定样本回测、预算和核心桶安全门槛，不能仅因结构合法就直接激活。
+    pub(crate) async fn is_plan_policy_eligible_for_activation(
+        &self,
+        policy: &strategy_policy::PolicyRef,
+    ) -> Result<bool, ApiError> {
+        if self.policy_resolver().supports(policy) {
+            return Ok(true);
+        }
+        if !self.supports_plan_policy(policy).await? {
+            return Ok(false);
+        }
+        Ok(self.strategy_admission_report(policy).await?.eligible)
+    }
+
     /// 返回受配置保护的 broker port。
     pub(crate) fn broker(&self) -> &dyn BrokerClient {
         self.broker.as_ref()

@@ -909,6 +909,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "strategy-dsl",
+ "strategy-evaluation",
  "strategy-policy",
  "thiserror",
  "time",

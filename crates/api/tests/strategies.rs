@@ -81,6 +81,26 @@ fn strategy() -> StrategySpec {
     .unwrap()
 }
 
+/// Build a structurally valid version whose required historical fixture is intentionally absent.
+fn unsupported_historical_strategy() -> StrategySpec {
+    StrategySpec::new(
+        PolicyRef::new(
+            PolicyId::new("dsl_close_requires_fixture").unwrap(),
+            PolicyVersion::new(1).unwrap(),
+        ),
+        "Close price requires a calibrated fixture",
+        vec![StrategyRule::new(
+            Condition::compare(
+                ValueExpression::indicator(IndicatorSpec::ClosePrice),
+                ComparisonOperator::GreaterThan,
+                Decimal::ONE,
+            ),
+            PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.0)),
+        )],
+    )
+    .unwrap()
+}
+
 /// Read a JSON HTTP response without leaking internal repository errors into assertions.
 async fn response_json(response: axum::response::Response) -> Value {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -243,6 +263,26 @@ async fn activates_a_validated_strategy_and_uses_it_for_automatic_audit() {
         .unwrap()
         .to_owned();
 
+    let admission = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/strategies/dsl_api_test/1/admission")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admission.status(), StatusCode::OK);
+    let admission = response_json(admission).await;
+    assert_eq!(admission["eligible"], true);
+    assert_eq!(admission["core_bucket_safe"], true);
+    assert_eq!(admission["budget_safe"], true);
+    assert_eq!(admission["assets"].as_array().unwrap().len(), 2);
+    assert!(admission["assets"][0]["fixed_dca"]["terminal_wealth_usd"]
+        .as_f64()
+        .is_some());
+
     let activated = app
         .clone()
         .oneshot(
@@ -299,4 +339,69 @@ async fn activates_a_validated_strategy_and_uses_it_for_automatic_audit() {
     let preview = response_json(preview).await;
     assert_eq!(preview["decision"]["policy"]["id"], "dsl_api_test");
     assert_eq!(preview["decision"]["action"], "standard");
+}
+
+/// Verify structural validity alone cannot bind a strategy lacking a versioned fixed-sample replay.
+#[tokio::test]
+async fn refuses_activation_when_fixed_sample_admission_is_ineligible() {
+    let storage = SqliteStorage::connect_with_options("sqlite::memory:", 1, Duration::from_secs(1))
+        .await
+        .unwrap();
+    storage.migrate().await.unwrap();
+    SqliteStrategySpecRepository::new(storage.pool().clone())
+        .save(&unsupported_historical_strategy())
+        .await
+        .unwrap();
+    let app = build_router(ApiState::new(storage, "0.1.0"));
+    let plan = serde_json::json!({
+        "name": "Admission guarded holding", "symbol": "VOO", "base_contribution": "100.00", "currency": "USD",
+        "schedule_kind": "monthly", "schedule_day": 1, "max_single_execution": "100.00",
+        "bucket_allocation": {"core_ratio":"0.70", "opportunity_ratio":"0.30"}, "risk_mode": "autopilot"
+    });
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/investment-plans")
+                .header("content-type", "application/json")
+                .body(Body::from(plan.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let plan_id = response_json(created).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let admission = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/strategies/dsl_close_requires_fixture/1/admission")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admission.status(), StatusCode::OK);
+    assert_eq!(response_json(admission).await["eligible"], false);
+
+    let activation = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{plan_id}/activate-policy"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"policy":{"id":"dsl_close_requires_fixture","version":1}})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(activation.status(), StatusCode::BAD_REQUEST);
 }

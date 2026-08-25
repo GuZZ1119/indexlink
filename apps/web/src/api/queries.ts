@@ -20,6 +20,7 @@ import type {
   TrendSignal,
   StoredStrategySpec,
   StrategySpecDocument,
+  StrategyAdmissionReport,
   StrategyValidationResponse,
 } from './types'
 
@@ -92,6 +93,11 @@ export function validateStrategy(input: StrategySpecDocument): Promise<StrategyV
 /** Persist one validated immutable DSL strategy version. */
 export function createStrategy(input: StrategySpecDocument): Promise<StoredStrategySpec> {
   return request('/strategies', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/** Run the committed fixed-fixture safety and Fixed-DCA comparison for one stored version. */
+export function evaluateStrategyAdmission(policy: import('./types').PolicyReference): Promise<StrategyAdmissionReport> {
+  return request(`/strategies/${encodeURIComponent(policy.id)}/${policy.version}/admission`)
 }
 
 /** Bind a confirmed immutable strategy version to a recurring plan. */
@@ -226,6 +232,13 @@ export function useCreateStrategy() {
   return useMutation({
     mutationFn: createStrategy,
     onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['strategies'] }) },
+  })
+}
+
+/** Run admission only after the user explicitly requests a fixed-sample evaluation. */
+export function useStrategyAdmission() {
+  return useMutation({
+    mutationFn: (policy: import('./types').PolicyReference) => evaluateStrategyAdmission(policy),
   })
 }
 

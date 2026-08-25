@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 strategy-policy.workspace = true
 strategy-dsl = { workspace = true, features = ["serde"] }
+strategy-evaluation.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true

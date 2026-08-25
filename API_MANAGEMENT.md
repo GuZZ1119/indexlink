@@ -141,9 +141,20 @@ Strategy Studio 先将表单文档发送到 `POST /strategies/validate`；响应
 
 以一个计划标的的当前只读市场数据模拟已保存策略，返回截至日期、首条命中规则、机会桶倍率及指标证据；不写入审计、不提交订单。Studio 用它解释“当前为何命中/未命中”。
 
+#### `GET /strategies/:policy_id/:policy_version/admission`
+
+对已保存的 DSL 版本运行**激活前固定样本准入评估**；不会保存、绑定、审计或下单。响应包含：
+
+- `core_bucket_safe`：规则是否只能影响机会桶；
+- `budget_safe`：动作是否满足固定样本的周期预算上限；
+- `eligible` 与安全的拒绝原因；
+- 每个已覆盖标的在**相同外部现金流、成本、决策/成交时点**下的策略与 `Fixed DCA` 对照：期末净值、最大回撤、年化波动率与现金使用率。
+
+当前不可变 `calibration-v2` 夹具只保存 RSI(14) 与 VIX 的因果历史证据。因此依赖收盘价、SMA、EMA 或回撤的版本仍可保存和当前数据模拟，但会明确拒绝激活，直到补入同样版本化的历史证据；服务端不会以合成输入伪造回测。
+
 #### `POST /investment-plans/:id/activate-policy`
 
-用户确认后将已保存且可由线上证据 profile 支持的策略版本绑定到计划。随后自动 Decision Preview、scheduler 与决策审计都解析同一 `policy_id@version`；审批模式仍只生成建议和审计，不会自动提交 paper order。
+用户确认后将已保存、可由线上 evidence profile 支持、且已通过固定样本准入评估的策略版本绑定到计划。随后自动 Decision Preview、scheduler 与决策审计都解析同一 `policy_id@version`；审批模式仍只生成建议和审计，不会自动提交 paper order。
 
 #### `GET /strategies/:policy_id/:policy_version`
 
@@ -509,10 +520,11 @@ OPEND_SMOKE_CONFIRM=submit-paper-order \
 14. `GET /paper-performance/historical-backtest`
 15. `GET /strategies`
 16. `GET /strategies/:policy_id/:policy_version`
+17. `GET /strategies/:policy_id/:policy_version/admission`
 
 ## 当前 MVP 缺口优先级
 
 1. 使用真实 DashScope Key 完成一次本机 Qwen network smoke。
 2. 使用 Futu/Moomoo 虚拟账户完成一次真实 OpenD paper-order smoke。
 3. 将按月归档的 CAPE、ERP、MA200 distance、RSI、VIX 与 Qwen 情绪输入纳入本地决策快照，才能把当前价格规则回放提升为可完整复现的历史 70/20/10 回测；当前不会伪造这些历史输入。
-4. 扩展 DSL 的回测展示、版本比较和人工审核体验；首版受控创建、验证、激活与 Strategy Studio 已完成。
+4. 扩展 DSL 的版本化历史夹具、跨版本比较和人工审核体验；首版受控创建、验证、固定样本准入、激活与 Strategy Studio 已完成。

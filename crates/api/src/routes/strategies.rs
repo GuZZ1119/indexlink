@@ -72,6 +72,10 @@ pub(crate) fn router() -> Router<ApiState> {
             "/strategies/:policy_id/:policy_version/simulate",
             post(simulate_strategy),
         )
+        .route(
+            "/strategies/:policy_id/:policy_version/admission",
+            get(strategy_admission),
+        )
         .route("/strategies/:policy_id/:policy_version", get(get_strategy))
 }
 
@@ -189,4 +193,16 @@ async fn get_strategy(
 ) -> Result<Json<StoredStrategySpec>, ApiError> {
     let policy = policy_from_path(path)?;
     Ok(Json(state.get_strategy_spec(&policy).await?))
+}
+
+/// Evaluate one stored DSL version against the committed fixed sample before activation.
+///
+/// This route never changes the selected policy or submits an order. Its comparison uses the
+/// same contribution schedule, execution timing, and costs for the candidate and Fixed DCA.
+async fn strategy_admission(
+    State(state): State<ApiState>,
+    path: Result<Path<(String, u32)>, PathRejection>,
+) -> Result<Json<strategy_evaluation::StrategyAdmissionReport>, ApiError> {
+    let policy = policy_from_path(path)?;
+    Ok(Json(state.strategy_admission_report(&policy).await?))
 }

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-25 CST — DSL 策略固定样本准入与激活门槛
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：策略激活安全门槛、固定样本回测对照与 Studio 准入展示。
+- 涉及文件：`Cargo.toml`、`Cargo.lock`、`crates/strategy-evaluation/src/lib.rs`、`crates/api/{Cargo.toml,src/state.rs,src/routes/{strategies.rs,investment_plans.rs},tests/strategies.rs}`、`apps/web/src/{api/{types.ts,queries.ts},pages/strategies/index.tsx}`、`API_MANAGEMENT.md`、`README.md`、`README.en.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`、`CHANGE_LOG.md`。
+- 变更内容：保存 DSL 前继续由领域 DTO 重建并校验；新增只读 `GET /strategies/:policy_id/:policy_version/admission`，以版本化 `calibration-v2` 在一致现金流、成本与 t+1 成交口径下对比候选与 Fixed DCA 的期末净值、最大回撤、年化波动与现金使用率。核心桶/预算检查或历史输入覆盖不足都会阻断激活；当前只为 RSI(14)/VIX 提供完整固定样本，其他白名单指标可以保存和当前数据模拟，但不会用伪造历史输入取得激活资格。Strategy Studio 必须先显示并通过准入结果，才允许绑定计划。
+- 验证：`cargo test --workspace --locked -q`（本机 mock HTTP 测试在允许绑定临时端口的环境中通过；3 个真实外部 smoke 保持 ignored）、`cargo test -p core-domain --locked`、`cargo test -p strategy-evaluation --locked`、`cargo test -p indexlink-api --locked`、`cargo check --workspace --locked`、`cargo clippy -p strategy-evaluation -p indexlink-api --all-targets --all-features --locked -- -D warnings`、`pnpm --dir apps/web build`、`cargo fmt --all -- --check` 与 `git diff --check` 均通过。
+
 ### 2026-08-25 CST — DSL Runtime V2 与 Studio 规则编辑
 
 - 执行模型：GPT-5 Codex。

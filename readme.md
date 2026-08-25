@@ -54,7 +54,7 @@ IndexLink 是一个面向长期投资者的**透明、可审计、可扩展的�
 | 双桶预算、机会现金与周期约束 | 已完成基础闭环 | 受计划预算、可用现金、周期上限和 paper-only 边界约束。 |
 | Mock/OpenD paper trading | 已完成 | 仅 loopback OpenD 模拟账户；不支持实盘。 |
 | 内置策略与统一执行入口 | 已完成 | 新计划默认 `fixed_dca@1`；既有 SQLite 计划迁移为 `core_opportunity_v1@1`；预览、scheduler、审计和 paper-only 订单均经同一 resolver。 |
-| 受限 DSL、确定性 runtime 与版本读取 | 已完成研究基础 | 仅允许白名单指标、有限表达式和机会桶动作；SQLite 持久化规范化 JSON，并经领域构造器重新校验；`GET /strategies` 仅列出/读取版本，不能创建、激活或下单。 |
+| 受限 DSL、确定性 runtime、Studio 与准入 | 已完成受控闭环 | 仅允许白名单指标、有限表达式和机会桶动作；保存前重走领域校验，激活前必须通过固定样本回测、预算与核心桶安全检查；当前夹具只支持 RSI(14)/VIX，其他线上指标会安全拒绝激活而非伪造回测。 |
 
 ## 架构与安全边界
 
@@ -165,7 +165,7 @@ curl http://127.0.0.1:8080/ready
 3. **策略版本与审计升级**：已完成；新记录保存策略版本和通用推荐快照，旧记录保持可读。
 4. **受限 DSL/AST、校验与确定性 runtime**：已完成；仅允许白名单指标、有限表达式与机会桶动作，拒绝任意脚本、超深条件树和超预算固定金额；首条命中规则会在完整快照上生成通用推荐。
 5. **统一历史评估**：已完成首个 runtime-backed 候选；`strategy-evaluation` 直接调用同一 DSL 解释器，以决策日 RSI-14 和下一交易日成交口径生成离线实验结果。
-6. **策略存储与只读 API**：已完成 SQLite 不可变版本存储，以及 `GET /strategies` 和 `GET /strategies/:policy_id/:policy_version`；读取会重新验证 JSON 文档。下一步才是受控创建/验证与 Studio。
+6. **策略存储、Studio 与准入**：已完成不可变版本存储、受控创建/验证、当前数据模拟和计划激活。DSL 版本激活前必须比较固定样本下的 Fixed DCA 期末净值、回撤、波动与现金使用率，并通过预算/核心桶安全门槛；历史夹具覆盖不足时明确拒绝。
 7. **Qwen Copilot**：后续生成候选草案及解释，始终经确定性校验、回测和人工审阅。
 
 详见 [STRATEGY_STUDIO_MIGRATION_PLAN.md](./STRATEGY_STUDIO_MIGRATION_PLAN.md)。

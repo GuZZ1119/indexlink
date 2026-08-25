@@ -36,6 +36,7 @@ quant-engine = { path = "crates/quant-engine" }
 strategy-policy = { path = "crates/strategy-policy" }
 builtin-policies = { path = "crates/builtin-policies" }
 strategy-dsl = { path = "crates/strategy-dsl" }
+strategy-evaluation = { path = "crates/strategy-evaluation" }
 async-trait = "0.1"
 axum = "0.7"
 dotenvy = "0.15"

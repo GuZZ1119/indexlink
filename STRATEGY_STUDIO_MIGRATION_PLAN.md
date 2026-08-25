@@ -157,6 +157,13 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - 自动 preview/scheduler 在审计来源快照中记录 `as_of`、OpenD/Cboe 数据来源和实际所需指标窗口；保存策略后可用只读 `simulate` 查看首条命中规则和输入证据。
 - Studio 支持多条有序优先规则、单条件/全部满足/任一满足组、窗口与阈值、版本复制以及当前数据模拟；仍不支持自由代码或固定金额动作线上激活。
 
+### PR 7d — 固定样本策略准入 / Fixed-fixture Strategy Admission（已完成 / Complete）
+
+- 保存前重走 DSL 文档到领域构造器的完整校验；保存本身不等同于可执行或可激活。
+- `GET /strategies/:policy_id/:policy_version/admission` 对每个已保存版本执行固定、版本化 `calibration-v2` 回测，同时锁定核心桶只能由计划配置生成、DSL 动作只能影响机会桶，并以固定周期预算检验动作边界。
+- 策略与 `Fixed DCA` 必须在相同外部现金流、成本与“决策日后下一观察日成交”口径下展示期末净值、最大回撤、年化波动率和现金使用率；结果是准入信息，不构成收益承诺，也不以跑赢为激活条件。
+- 当前夹具仅含 RSI(14)/VIX 的版本化因果输入。依赖价格、SMA、EMA、回撤的策略可继续保存/当前数据模拟，但不能激活，直到其历史证据被纳入不可变夹具。
+
 ### PR 8 — Qwen Strategy Copilot / Qwen Strategy Copilot
 
 - Qwen 根据受限 schema 生成“候选策略草案”、解释与警告。
@@ -172,6 +179,6 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 8. 当前结论 / Current Decision
 
-策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计、受限 DSL 定义/校验、首个 runtime-backed 历史候选，以及不可变版本存储/只读 API 已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 或 DSL RSI 候选升级为默认生产策略。下一项可执行工作应是 **PR 7b：受控策略验证、回测与 Web Studio**。
+策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计、受限 DSL 定义/校验、首个 runtime-backed 历史候选、不可变版本存储、Studio 与固定样本准入已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 或 DSL RSI 候选升级为默认生产策略。下一项可执行工作是 **PR 8：Qwen Strategy Copilot**，或先扩展版本化历史夹具以放开更多 DSL 指标的准入。
 
-With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 7b: controlled strategy validation, backtesting, and Web Studio**.
+With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 8: Qwen Strategy Copilot**, or versioned historical-fixture expansion for additional DSL indicators.

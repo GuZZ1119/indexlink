@@ -43,7 +43,7 @@ See the [Strategy Studio Migration Plan](./STRATEGY_STUDIO_MIGRATION_PLAN.md) fo
 
 The current demo still includes the historical 70/20/10 decision path: fundamental/historical-position, trend, and bounded Qwen sentiment produce a recommendation and evidence. This is the candidate semantics of `CoreOpportunityV1`; it is **not** a proven claim of superior returns.
 
-The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The legacy model is now retained as a versioned built-in policy, and `FixedDcaPolicy` is the new-plan default and fair benchmark. The restricted DSL now has a deterministic, I/O-free interpreter that the historical evaluator calls directly; SQLite now stores immutable DSL versions and exposes read-only HTTP discovery, while creation, activation, live execution, and Studio remain future work.
+The repository keeps C1–C4, calibration fixtures, and reports as reproducible research assets. Under matched fixed-DCA historical samples, some candidates primarily changed cash utilisation, drawdown, or volatility and did not establish a stable return advantage. The legacy model is now retained as a versioned built-in policy, and `FixedDcaPolicy` is the new-plan default and fair benchmark. The restricted DSL has a deterministic, I/O-free interpreter shared by historical evaluation and live simulation; SQLite stores immutable versions, while Studio validates and saves them. A DSL version must pass fixed-fixture backtest, budget, and core-bucket safety gates before it can activate.
 
 | Capability | Current state | Boundary |
 | :--- | :--- | :--- |
@@ -54,7 +54,7 @@ The repository keeps C1–C4, calibration fixtures, and reports as reproducible 
 | Two-bucket budget, opportunity cash, and period constraints | Base loop implemented | Constrained by plan budget, available cash, period caps, and paper-only boundaries. |
 | Mock/OpenD paper trading | Implemented | Local-loopback OpenD paper accounts only; no live trading. |
 | Built-in policies and unified execution entry | Implemented | New plans default to `fixed_dca@1`; existing SQLite plans migrate to `core_opportunity_v1@1`; preview, scheduler, audit, and paper-only orders use the same resolver. |
-| Restricted DSL, deterministic runtime, and version discovery | Research foundation implemented | Only allow-listed indicators, bounded expressions, and opportunity actions are representable; SQLite persists canonical JSON and reconstructs it through domain constructors; `GET /strategies` only lists/reads versions and cannot create, activate, or order. |
+| Restricted DSL, deterministic runtime, Studio, and admission | Controlled loop implemented | Only allow-listed indicators, bounded expressions, and opportunity actions are representable. Saving rebuilds domain invariants; activation requires a fixed-fixture backtest plus budget/core-bucket safety. The current fixture supports RSI(14)/VIX only, so unsupported history is rejected rather than fabricated. |
 
 ## Architecture and Safety Boundaries
 
