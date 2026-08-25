@@ -27,6 +27,7 @@ use rust_decimal::{
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+use strategy_dsl::{IndicatorSpec, LookbackWindow, StrategySpec};
 
 use crate::ApiError;
 
@@ -346,6 +347,45 @@ impl ApiState {
                     ApiError::ServiceUnavailable
                 }
             })
+    }
+
+    /// 保存一份已通过领域校验的不可变受限 DSL 策略版本。
+    pub(crate) async fn save_strategy_spec(
+        &self,
+        strategy: &StrategySpec,
+    ) -> Result<StoredStrategySpec, ApiError> {
+        self.strategy_specs
+            .as_ref()
+            .ok_or(ApiError::ServiceUnavailable)?
+            .save(strategy)
+            .await
+            .map_err(|_| ApiError::ServiceUnavailable)
+    }
+
+    /// 判断一个计划策略引用是否为内置策略或已保存的可执行 DSL 版本。
+    pub(crate) async fn supports_plan_policy(
+        &self,
+        policy: &strategy_policy::PolicyRef,
+    ) -> Result<bool, ApiError> {
+        if self.policy_resolver().supports(policy) {
+            return Ok(true);
+        }
+        match self.get_strategy_spec(policy).await {
+            Ok(strategy) => {
+                let strategy = strategy
+                    .document
+                    .into_strategy_spec()
+                    .map_err(|_| ApiError::ServiceUnavailable)?;
+                let rsi14 = IndicatorSpec::RelativeStrengthIndex(
+                    LookbackWindow::new(14).map_err(|_| ApiError::ServiceUnavailable)?,
+                );
+                Ok(strategy.required_indicators().iter().all(|indicator| {
+                    matches!(indicator, IndicatorSpec::Vix) || *indicator == rsi14
+                }) && !strategy.has_fixed_opportunity_amount_action())
+            }
+            Err(ApiError::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// 返回受配置保护的 broker port。

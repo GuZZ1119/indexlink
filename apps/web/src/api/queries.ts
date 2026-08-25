@@ -18,6 +18,9 @@ import type {
   MarketSentimentEvidence,
   TrendPreviewRequest,
   TrendSignal,
+  StoredStrategySpec,
+  StrategySpecDocument,
+  StrategyValidationResponse,
 } from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -74,6 +77,29 @@ export function fetchPlans(): Promise<InvestmentPlan[]> {
 /** Create one normalized investment plan through the Rust API. */
 export function createPlan(input: CreateInvestmentPlanRequest): Promise<InvestmentPlan> {
   return request('/investment-plans', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/** List immutable restricted strategy versions for the Strategy Studio. */
+export function fetchStrategies(): Promise<StoredStrategySpec[]> {
+  return request('/strategies')
+}
+
+/** Validate a form-authored strategy without writing it to SQLite. */
+export function validateStrategy(input: StrategySpecDocument): Promise<StrategyValidationResponse> {
+  return request('/strategies/validate', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/** Persist one validated immutable DSL strategy version. */
+export function createStrategy(input: StrategySpecDocument): Promise<StoredStrategySpec> {
+  return request('/strategies', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/** Bind a confirmed immutable strategy version to a recurring plan. */
+export function activatePlanPolicy(planId: string, policy: import('./types').PolicyReference): Promise<InvestmentPlan> {
+  return request(`/investment-plans/${encodeURIComponent(planId)}/activate-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ policy }),
+  })
 }
 
 /** Delete one recurring holding and its local-only dependent records. */
@@ -182,6 +208,34 @@ export function fetchDecisionRecord(id: string): Promise<DecisionRecord> {
 /** React Query hook for live plan data. */
 export function usePlans() {
   return useQuery({ queryKey: ['plans'], queryFn: fetchPlans })
+}
+
+/** React Query hook for Strategy Studio discovery data. */
+export function useStrategies() {
+  return useQuery({ queryKey: ['strategies'], queryFn: fetchStrategies })
+}
+
+/** Validate without mutation so form failures remain readable and local. */
+export function useValidateStrategy() {
+  return useMutation({ mutationFn: validateStrategy })
+}
+
+/** Save an immutable strategy and refresh the Studio list. */
+export function useCreateStrategy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: createStrategy,
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['strategies'] }) },
+  })
+}
+
+/** Activate a policy then refresh all plan-backed screens. */
+export function useActivatePlanPolicy() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ planId, policy }: { planId: string; policy: import('./types').PolicyReference }) => activatePlanPolicy(planId, policy),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['plans'] }) },
+  })
 }
 
 /** React Query mutation that refreshes the plan list after creation. */

@@ -1,4 +1,4 @@
-import { CalendarClock, LayoutDashboard, ListChecks } from 'lucide-react'
+import { CalendarClock, LayoutDashboard, ListChecks, SlidersHorizontal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, useLocation } from 'react-router'
 
@@ -17,6 +17,7 @@ const navItems = [
   { to: '/', key: 'nav.dashboard', icon: LayoutDashboard, end: true },
   { to: '/decisions', key: 'nav.decisions', icon: ListChecks, end: false },
   { to: '/plans', key: 'nav.plans', icon: CalendarClock, end: false },
+  { to: '/strategies', key: 'nav.strategies', icon: SlidersHorizontal, end: false },
 ] as const
 
 export function AppSidebar() {

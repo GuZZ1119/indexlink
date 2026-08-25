@@ -35,6 +35,8 @@ use quant_engine::{
 use rust_decimal::{prelude::ToPrimitive, Decimal, RoundingStrategy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use strategy_dsl::{DslEvidence, DslRuntimeAction, IndicatorSpec, LookbackWindow, StrategySpec};
+use strategy_policy::DecisionContext;
 use time::{Date, Month};
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -65,6 +67,9 @@ struct DecisionPreviewRequest {
     /// Trusted source disclosure attached only by server-side automatic orchestration.
     #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     input_source: Option<Value>,
+    /// Runtime evidence constructed exclusively by the server for a bound DSL strategy.
+    #[serde(skip_deserializing, skip_serializing, default)]
+    dsl_evidence: Option<DslEvidence>,
 }
 
 /// Server-sourced decision request that deliberately excludes 70/20 signal fields.
@@ -425,11 +430,12 @@ async fn automatic_decision_input(
     day_of_month: i16,
     options: AutomaticDecisionPreviewRequest,
 ) -> Result<DecisionPreviewRequest, ApiError> {
-    if state
-        .policy_resolver()
-        .evidence_kind(&plan.policy)
-        .map_err(map_policy_error)?
-        == BuiltinPolicyEvidenceKind::FixedDca
+    if state.policy_resolver().supports(&plan.policy)
+        && state
+            .policy_resolver()
+            .evidence_kind(&plan.policy)
+            .map_err(map_policy_error)?
+            == BuiltinPolicyEvidenceKind::FixedDca
     {
         return Ok(DecisionPreviewRequest {
             day_of_month,
@@ -441,6 +447,7 @@ async fn automatic_decision_input(
                 "kind": "fixed_dca",
                 "description": "fixed_dca does not read market or AI signals",
             })),
+            dsl_evidence: None,
         });
     }
 
@@ -468,6 +475,18 @@ async fn automatic_decision_input(
     )
     .map_err(|_| ApiError::ServiceUnavailable)?;
 
+    let dsl_evidence = if state.policy_resolver().supports(&plan.policy) {
+        None
+    } else {
+        let strategy = state
+            .get_strategy_spec(&plan.policy)
+            .await?
+            .document
+            .into_strategy_spec()
+            .map_err(|_| ApiError::ServiceUnavailable)?;
+        Some(dsl_evidence_for_live_runtime(&strategy, &input)?)
+    };
+
     Ok(DecisionPreviewRequest {
         day_of_month,
         bucket_allocation: options.bucket_allocation,
@@ -475,7 +494,35 @@ async fn automatic_decision_input(
         trend: Some(TrendSignalRequest::from(trend)),
         paper_order: options.paper_order,
         input_source: Some(automatic_source_snapshot(&input)),
+        dsl_evidence,
     })
+}
+
+/// Build the current online Runtime evidence profile from one trusted market snapshot.
+///
+/// The Studio intentionally exposes only RSI(14) and VIX because those are the two raw values
+/// supplied together by the existing automatic market-data adapter.  Other DSL indicators remain
+/// valid for offline research but cannot be activated until a dedicated data adapter is added.
+fn dsl_evidence_for_live_runtime(
+    strategy: &StrategySpec,
+    input: &MarketSignalInput,
+) -> Result<DslEvidence, ApiError> {
+    let rsi14 = IndicatorSpec::RelativeStrengthIndex(
+        LookbackWindow::new(14).map_err(|_| ApiError::ServiceUnavailable)?,
+    );
+    let supported = [rsi14, IndicatorSpec::Vix];
+    if strategy
+        .required_indicators()
+        .iter()
+        .any(|indicator| !supported.contains(indicator))
+    {
+        tracing::warn!(policy = %strategy.policy(), "DSL strategy requires indicators outside the live runtime profile");
+        return Err(ApiError::BadRequest);
+    }
+    let rsi = Decimal::from_f64_retain(input.rsi_current).ok_or(ApiError::ServiceUnavailable)?;
+    let vix = Decimal::from_f64_retain(input.vix_current).ok_or(ApiError::ServiceUnavailable)?;
+    DslEvidence::new([(rsi14, rsi), (IndicatorSpec::Vix, vix)])
+        .map_err(|_| ApiError::ServiceUnavailable)
 }
 
 /// Execute a resolved decision and create its audit record before any optional broker side effect.
@@ -499,11 +546,9 @@ async fn preview_decision_input(
     if legacy_bucket_config.is_some() {
         tracing::warn!(plan_id = %id, "legacy decision-preview bucket allocation ignored; persisted plan configuration is authoritative");
     }
-    let evidence_kind = state
-        .policy_resolver()
-        .evidence_kind(&plan.policy)
-        .map_err(map_policy_error)?;
-    let market_sentiment = if evidence_kind == BuiltinPolicyEvidenceKind::CoreOpportunity {
+    let is_legacy_core = state.policy_resolver().evidence_kind(&plan.policy).ok()
+        == Some(BuiltinPolicyEvidenceKind::CoreOpportunity);
+    let market_sentiment = if is_legacy_core {
         market_sentiment_for_decision(state).await
     } else {
         None
@@ -515,7 +560,8 @@ async fn preview_decision_input(
         execution_date,
         &input,
         market_sentiment.as_ref(),
-    )?;
+    )
+    .await?;
     let carried_opportunity_cash = state.opportunity_cash_balance(id).await?;
     let execution = state
         .plans()
@@ -526,7 +572,8 @@ async fn preview_decision_input(
             decision.recommendation().multiplier(),
             carried_opportunity_cash,
         )
-        .await?;
+        .await
+        .inspect_err(|error| tracing::warn!(%error, policy = %plan.policy, "plan execution preview rejected policy recommendation"))?;
     let paper_order = match input.paper_order.clone() {
         Some(order)
             if matches!(
@@ -666,7 +713,7 @@ async fn preview_decision_input(
 }
 
 /// 通过计划绑定的策略解析一次统一推荐；策略本身不进行 IO。
-fn resolve_policy_decision(
+async fn resolve_policy_decision(
     state: &ApiState,
     plan: &InvestmentPlan,
     execution_date: NaiveDate,
@@ -679,6 +726,32 @@ fn resolve_policy_decision(
         execution_date.day() as u8,
     )
     .map_err(|_| ApiError::BadRequest)?;
+    if !state.policy_resolver().supports(&plan.policy) {
+        let strategy = state
+            .get_strategy_spec(&plan.policy)
+            .await?
+            .document
+            .into_strategy_spec()
+            .map_err(|_| ApiError::ServiceUnavailable)?;
+        let evidence = input.dsl_evidence.clone().ok_or(ApiError::BadRequest)?;
+        let context = DecisionContext::new(date, plan.base_contribution, evidence)
+            .map_err(|_| ApiError::BadRequest)?;
+        let evaluation = strategy.evaluate(&context).map_err(|error| {
+            tracing::warn!(%error, policy = %plan.policy, "DSL policy evidence could not be evaluated");
+            ApiError::BadRequest
+        })?;
+        if matches!(
+            evaluation.action(),
+            DslRuntimeAction::OpportunityFixedAmount(_)
+        ) {
+            // Fixed-dollar opportunity actions will become executable only when the execution
+            // layer can represent them without converting through a multiplier.
+            return Err(ApiError::BadRequest);
+        }
+        return Ok(BuiltinPolicyDecision::FixedDca {
+            recommendation: evaluation.recommendation().clone(),
+        });
+    }
     let evidence = match state
         .policy_resolver()
         .evidence_kind(&plan.policy)
@@ -925,8 +998,8 @@ impl DecisionResponse {
                 sentiment_score: signal.sentiment_score.map(Percentile::value),
             },
             BuiltinPolicyDecision::FixedDca { .. } => Self {
+                market_signals_used: policy.id.starts_with("dsl_"),
                 policy,
-                market_signals_used: false,
                 final_score: None,
                 multiplier: recommendation.multiplier().value(),
                 action: recommendation.action().into(),
@@ -1097,7 +1170,7 @@ fn policy_signal_snapshot(
             "layer": layer,
             "used": false,
             "policy": policy.to_string(),
-            "reason": "the selected fixed_dca policy does not read market signals",
+            "reason": "the selected policy does not expose legacy 70/20 signals",
         })),
     }
 }
@@ -1270,7 +1343,7 @@ fn summarize_decision(
     let recommendation = decision.recommendation();
     let Some(decision) = decision.legacy_signal() else {
         return format!(
-            "Decision preview for {}: execution={}; planned_contribution={} {}; policy={}; fixed periodic contribution uses no fundamental, trend, or AI sentiment inputs; multiplier={:.2}; action={}; bucket_split={}; {}.",
+            "Decision preview for {}: execution={}; planned_contribution={} {}; policy={}; the selected policy produced a bounded opportunity-bucket recommendation without a legacy 70/20 signal payload; multiplier={:.2}; action={}; bucket_split={}; {}.",
             execution.symbol,
             execution_status,
             contribution,

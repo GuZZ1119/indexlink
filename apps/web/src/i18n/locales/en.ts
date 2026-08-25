@@ -8,6 +8,7 @@ export default {
     dashboard: 'Dashboard',
     decisions: 'Decisions',
     plans: 'Recurring holdings',
+    strategies: 'Strategy Studio',
   },
   header: {
     toggleSidebar: 'Toggle sidebar',

@@ -1,13 +1,16 @@
 use std::time::Duration;
 
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Datelike;
 use core_domain::Multiplier;
 use http_body_util::BodyExt;
 use indexlink_api::{build_router, ApiState};
 use indexlink_storage::{SqliteStorage, SqliteStrategySpecRepository};
+use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use strategy_dsl::{
@@ -16,6 +19,43 @@ use strategy_dsl::{
 };
 use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
 use tower::ServiceExt;
+
+/// Deterministic automatic data source covering the online DSL RSI(14)/VIX profile.
+struct StaticMarketData;
+
+#[async_trait]
+impl MarketSignalProvider for StaticMarketData {
+    /// Return a complete source-labelled snapshot without network access.
+    async fn fetch(&self, symbol: &str) -> Result<MarketSignalInput, MarketDataError> {
+        let values = vec![1.0; 60];
+        Ok(MarketSignalInput {
+            symbol: symbol.to_ascii_uppercase(),
+            as_of: "2026-08-25".to_owned(),
+            cape_history: values.clone(),
+            cape_current: 1.0,
+            erp_history: values.clone(),
+            erp_current: 1.0,
+            ma_distance_history: values.clone(),
+            ma_distance_current: 1.0,
+            rsi_history: values.clone(),
+            rsi_current: 1.0,
+            vix_history: values,
+            vix_current: 1.0,
+        })
+    }
+
+    /// Return one harmless close because this test does not submit an order.
+    async fn fetch_price_history(
+        &self,
+        _symbol: &str,
+        _lookback_days: i64,
+    ) -> Result<Vec<MarketPricePoint>, MarketDataError> {
+        Ok(vec![MarketPricePoint {
+            date: "2026-08-25".to_owned(),
+            close: 100.0,
+        }])
+    }
+}
 
 /// Build a valid immutable strategy version for read-only API tests.
 fn strategy() -> StrategySpec {
@@ -33,7 +73,7 @@ fn strategy() -> StrategySpec {
                 ComparisonOperator::LessThan,
                 Decimal::new(35, 0),
             ),
-            PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.1)),
+            PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(0.8)),
         )],
     )
     .unwrap()
@@ -118,4 +158,124 @@ async fn rejects_invalid_or_unknown_strategy_references() {
         .await
         .unwrap();
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
+
+/// Verify a Studio form can validate and persist one immutable DSL version through safe routes.
+#[tokio::test]
+async fn validates_then_saves_a_restricted_strategy_document() {
+    let storage = SqliteStorage::connect_with_options("sqlite::memory:", 1, Duration::from_secs(1))
+        .await
+        .unwrap();
+    storage.migrate().await.unwrap();
+    let app = build_router(ApiState::new(storage, "0.1.0"));
+    let document = serde_json::to_value(strategy_dsl::StrategySpecDocument::from_strategy_spec(
+        &strategy(),
+    ))
+    .unwrap();
+
+    let validated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/strategies/validate")
+                .header("content-type", "application/json")
+                .body(Body::from(document.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validated.status(), StatusCode::OK);
+    assert_eq!(response_json(validated).await["valid"], true);
+
+    let saved = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/strategies")
+                .header("content-type", "application/json")
+                .body(Body::from(document.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::CREATED);
+    assert_eq!(response_json(saved).await["policy"]["id"], "dsl_api_test");
+}
+
+/// Verify explicit activation makes automatic preview execute the persisted DSL runtime version.
+#[tokio::test]
+async fn activates_a_validated_strategy_and_uses_it_for_automatic_audit() {
+    let storage = SqliteStorage::connect_with_options("sqlite::memory:", 1, Duration::from_secs(1))
+        .await
+        .unwrap();
+    storage.migrate().await.unwrap();
+    SqliteStrategySpecRepository::new(storage.pool().clone())
+        .save(&strategy())
+        .await
+        .unwrap();
+    let app = build_router(
+        ApiState::new(storage, "0.1.0").with_market_data(std::sync::Arc::new(StaticMarketData)),
+    );
+    let day = chrono::Utc::now().day();
+    let plan = serde_json::json!({
+        "name": "DSL holding", "symbol": "VOO", "base_contribution": "100.00", "currency": "USD",
+        "schedule_kind": "monthly", "schedule_day": day, "max_single_execution": "100.00",
+        "bucket_allocation": {"core_ratio":"0.70", "opportunity_ratio":"0.30"}, "risk_mode": "autopilot"
+    });
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/investment-plans")
+                .header("content-type", "application/json")
+                .body(Body::from(plan.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let plan_id = response_json(created).await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let activated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{plan_id}/activate-policy"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"policy":{"id":"dsl_api_test","version":1}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(activated.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(activated).await["policy"]["id"],
+        "dsl_api_test"
+    );
+
+    let preview = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/investment-plans/{plan_id}/automatic-decision-preview"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview = response_json(preview).await;
+    assert_eq!(preview["decision"]["policy"]["id"], "dsl_api_test");
+    assert_eq!(preview["decision"]["action"], "standard");
 }

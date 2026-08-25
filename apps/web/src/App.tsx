@@ -4,6 +4,7 @@ import { AppLayout } from '@/components/layout/app-layout'
 import DashboardPage from '@/pages/dashboard'
 import DecisionsPage from '@/pages/decisions'
 import PlansPage from '@/pages/plans'
+import StrategiesPage from '@/pages/strategies'
 
 const router = createBrowserRouter([
   {
@@ -12,6 +13,7 @@ const router = createBrowserRouter([
       { path: '/', element: <DashboardPage /> },
       { path: '/decisions/:id?', element: <DecisionsPage /> },
       { path: '/plans/:id?', element: <PlansPage /> },
+      { path: '/strategies', element: <StrategiesPage /> },
     ],
   },
 ])

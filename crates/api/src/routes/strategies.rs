@@ -2,22 +2,68 @@
 
 use axum::{
     extract::{rejection::PathRejection, Path, State},
-    routing::get,
+    http::StatusCode,
+    routing::{get, post},
     Json, Router,
 };
 use indexlink_storage::StoredStrategySpec;
+use serde::Serialize;
+use strategy_dsl::StrategySpecDocument;
 use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
 
 use crate::{ApiError, ApiState};
 
-/// Build read-only strategy discovery routes.
-///
-/// This PR intentionally has no create, update, activation, evaluation, or order route. A
-/// stored strategy remains inert until a later reviewed activation flow exists.
+/// A safe validation result for one form-authored restricted DSL strategy.
+#[derive(Debug, Serialize)]
+struct StrategyValidationResponse {
+    /// Whether the submitted document rebuilt into a validated immutable strategy.
+    valid: bool,
+    /// Human-readable validation failure without transport, database, or credential details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    /// Canonical validated document, returned only when validation succeeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    document: Option<StrategySpecDocument>,
+}
+
+/// Build restricted strategy discovery, validation, and immutable-save routes.
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
-        .route("/strategies", get(list_strategies))
+        .route("/strategies", get(list_strategies).post(create_strategy))
+        .route("/strategies/validate", post(validate_strategy))
         .route("/strategies/:policy_id/:policy_version", get(get_strategy))
+}
+
+/// Validate one form-authored restricted DSL document without persisting it.
+async fn validate_strategy(
+    Json(document): Json<StrategySpecDocument>,
+) -> Json<StrategyValidationResponse> {
+    match document.into_strategy_spec() {
+        Ok(strategy) => Json(StrategyValidationResponse {
+            valid: true,
+            error: None,
+            document: Some(StrategySpecDocument::from_strategy_spec(&strategy)),
+        }),
+        Err(error) => Json(StrategyValidationResponse {
+            valid: false,
+            error: Some(error.to_string()),
+            document: None,
+        }),
+    }
+}
+
+/// Persist one new immutable validated DSL strategy version.
+async fn create_strategy(
+    State(state): State<ApiState>,
+    Json(document): Json<StrategySpecDocument>,
+) -> Result<(StatusCode, Json<StoredStrategySpec>), ApiError> {
+    let strategy = document
+        .into_strategy_spec()
+        .map_err(|_| ApiError::BadRequest)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(state.save_strategy_spec(&strategy).await?),
+    ))
 }
 
 /// List all immutable persisted DSL strategy versions.

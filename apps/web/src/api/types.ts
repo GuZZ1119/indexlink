@@ -8,8 +8,44 @@ export type DecisionAction =
 
 /** Immutable strategy identity selected by a plan and persisted in each new audit. */
 export interface PolicyReference {
-  id: 'fixed_dca' | 'core_opportunity_v1'
+  id: string
   version: number
+}
+
+/** Read-only document of one immutable restricted DSL strategy version. */
+export interface StrategySpecDocument {
+  policy_id: string
+  policy_version: number
+  name: string
+  rules: StrategyRuleDocument[]
+}
+
+/** One form-authored condition/action rule; arbitrary source code is never accepted. */
+export interface StrategyRuleDocument {
+  condition: {
+    kind: 'comparison'
+    expression: { kind: 'indicator'; indicator: { kind: 'relative_strength_index'; lookback_days: number } | { kind: 'vix' } }
+    operator: 'greater_than' | 'greater_than_or_equal' | 'less_than' | 'less_than_or_equal'
+    threshold: string
+  }
+  action:
+    | { kind: 'set_opportunity_multiplier'; multiplier: number }
+    | { kind: 'skip_opportunity' }
+}
+
+/** Immutable stored DSL strategy displayed by the Studio. */
+export interface StoredStrategySpec {
+  policy: PolicyReference
+  name: string
+  document: StrategySpecDocument
+  created_at: string
+}
+
+/** Safe validation result shown beside the Studio form. */
+export interface StrategyValidationResponse {
+  valid: boolean
+  error?: string
+  document?: StrategySpecDocument
 }
 
 /** A server-side investment plan. Decimal values remain JSON strings. */

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-25 CST — Strategy Studio 与激活执行闭环
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：受限 DSL 策略前端、验证/保存/显式激活与统一 Runtime 接入。
+- 涉及文件：`crates/strategy-dsl/src/lib.rs`、`crates/api/{src/state.rs,src/routes/{strategies.rs,investment_plans.rs,decision_preview.rs},tests/strategies.rs}`、`apps/web/src/{App.tsx,api/{types.ts,queries.ts},components/layout/app-sidebar.tsx,pages/strategies/index.tsx,i18n/locales/{zh,en}.ts}`、`API_MANAGEMENT.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`、`CHANGE_LOG.md`。
+- 变更内容：新增 Studio 可调用的策略校验/不可变保存 API、计划确认激活入口和策略页面；DSL Runtime 已接入自动 Decision Preview、scheduler 与审计的同一计划绑定版本。线上只接受可由当前自动市场数据可靠提供的 RSI(14)/VIX 规则；固定金额动作及其他指标保留离线研究，不能激活。核心桶仍由领域层保留，DSL 只能影响机会桶；审批模式不自动下单且系统仍 paper-only。
+- 验证：`pnpm --dir apps/web build`、`cargo test -p indexlink-api --test strategies --locked`、`cargo test -p strategy-dsl --features serde --locked`、`cargo test -p core-domain --locked`、`cargo fmt --all -- --check`、`cargo clippy -p strategy-dsl -p indexlink-api --all-targets --all-features --locked -- -D warnings` 与 `git diff --check`。
+
 ### 2026-08-25 CST — PR 7a
 
 - 执行模型：GPT-5 Codex。

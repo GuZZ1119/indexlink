@@ -133,7 +133,13 @@
 
 列出本机 SQLite 中已保存的不可变 DSL 策略版本，按创建时间倒序排列。每个响应包含 `policy`、`name`、经过领域校验的 `document` 与 UTC `created_at`。服务端读取 `document` 后会重新通过 DSL 构造器校验；损坏或不一致的本地数据不会返回给客户端，而是统一返回 `503 service_unavailable`。
 
-当前接口仅用于发现与审阅策略版本：**不提供**创建、更新、删除、激活、Decision Preview 接入、scheduler 接入或下单能力。
+#### `POST /strategies/validate` 与 `POST /strategies`
+
+Strategy Studio 先将表单文档发送到 `POST /strategies/validate`；响应会返回 `valid`、可读校验错误或规范化文档。校验通过后才可 `POST /strategies` 保存为不可变版本。首版白名单只让线上 Runtime 使用 `RSI(14)`、`VIX`、比较条件、机会桶倍率或跳过机会桶；没有自由代码、任意脚本或核心桶否决。
+
+#### `POST /investment-plans/:id/activate-policy`
+
+用户确认后将已保存且可由线上证据 profile 支持的策略版本绑定到计划。随后自动 Decision Preview、scheduler 与决策审计都解析同一 `policy_id@version`；审批模式仍只生成建议和审计，不会自动提交 paper order。
 
 #### `GET /strategies/:policy_id/:policy_version`
 
@@ -505,4 +511,4 @@ OPEND_SMOKE_CONFIRM=submit-paper-order \
 1. 使用真实 DashScope Key 完成一次本机 Qwen network smoke。
 2. 使用 Futu/Moomoo 虚拟账户完成一次真实 OpenD paper-order smoke。
 3. 将按月归档的 CAPE、ERP、MA200 distance、RSI、VIX 与 Qwen 情绪输入纳入本地决策快照，才能把当前价格规则回放提升为可完整复现的历史 70/20/10 回测；当前不会伪造这些历史输入。
-4. 为 DSL 增加受控创建/验证、回测、人工激活与 Strategy Studio；在这些能力完成前，已保存 DSL 版本保持只读且不会影响任何计划或订单。
+4. 扩展 DSL 的回测展示、版本比较和人工审核体验；首版受控创建、验证、激活与 Strategy Studio 已完成。

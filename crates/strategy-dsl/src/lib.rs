@@ -131,6 +131,22 @@ impl ValueExpression {
         Self(ExpressionKind::Divide(Box::new(expression), divisor))
     }
 
+    fn collect_indicators(&self, output: &mut std::collections::BTreeSet<IndicatorSpec>) {
+        match &self.0 {
+            ExpressionKind::Constant(_) => {}
+            ExpressionKind::Indicator(indicator) => {
+                output.insert(*indicator);
+            }
+            ExpressionKind::Add(left, right) | ExpressionKind::Subtract(left, right) => {
+                left.collect_indicators(output);
+                right.collect_indicators(output);
+            }
+            ExpressionKind::Multiply(expression, _) | ExpressionKind::Divide(expression, _) => {
+                expression.collect_indicators(output);
+            }
+        }
+    }
+
     fn complexity(&self) -> (usize, usize) {
         match &self.0 {
             ExpressionKind::Constant(_) | ExpressionKind::Indicator(_) => (1, 1),
@@ -207,6 +223,17 @@ impl Condition {
             return Err(StrategyDslValidationError::EmptyConditionGroup);
         }
         Ok(Self(ConditionKind::Any(conditions)))
+    }
+
+    fn collect_indicators(&self, output: &mut std::collections::BTreeSet<IndicatorSpec>) {
+        match &self.0 {
+            ConditionKind::Comparison { expression, .. } => expression.collect_indicators(output),
+            ConditionKind::All(conditions) | ConditionKind::Any(conditions) => {
+                for condition in conditions {
+                    condition.collect_indicators(output);
+                }
+            }
+        }
     }
 
     fn complexity(&self) -> (usize, usize) {
@@ -371,6 +398,33 @@ impl StrategySpec {
     #[must_use]
     pub fn rules(&self) -> &[StrategyRule] {
         &self.rules
+    }
+
+    /// 返回本策略在运行时需要的白名单指标集合。
+    ///
+    /// 应用层可用此集合在激活前确认当前数据适配器能够提供全部证据，避免把只能
+    /// 离线研究的策略误用于线上计划。
+    #[must_use]
+    pub fn required_indicators(&self) -> std::collections::BTreeSet<IndicatorSpec> {
+        let mut indicators = std::collections::BTreeSet::new();
+        for rule in &self.rules {
+            rule.condition.collect_indicators(&mut indicators);
+        }
+        indicators
+    }
+
+    /// 是否包含需要执行层按精确金额处理的机会桶固定金额动作。
+    ///
+    /// 当前线上 Runtime 仅把 DSL 的倍率或跳过动作映射到既有双桶执行接口；调用方
+    /// 应在激活前拒绝这种动作，而离线研究仍可保留它。
+    #[must_use]
+    pub fn has_fixed_opportunity_amount_action(&self) -> bool {
+        self.rules.iter().any(|rule| {
+            matches!(
+                rule.action.0,
+                PolicyActionKind::SetOpportunityFixedAmount(_)
+            )
+        })
     }
 
     /// 使用某个计划周期预算再次校验固定金额动作。

@@ -122,6 +122,14 @@ struct PolicyReferenceRequest {
     version: u32,
 }
 
+/// Explicit user-confirmed activation of one immutable validated strategy version.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActivatePolicyRequest {
+    /// Strategy version selected by the user from the Strategy Studio.
+    policy: PolicyReferenceRequest,
+}
+
 impl PolicyReferenceRequest {
     /// 转换为已校验的领域策略引用。
     fn into_domain(self) -> Result<PolicyRef, ApiError> {
@@ -359,6 +367,10 @@ pub(crate) fn router() -> Router<ApiState> {
             "/investment-plans/:id/execution-preview",
             post(preview_plan_execution),
         )
+        .route(
+            "/investment-plans/:id/activate-policy",
+            post(activate_policy),
+        )
 }
 
 /// 创建 investment plan。
@@ -369,7 +381,7 @@ async fn create_plan(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     let input = input.into_domain()?;
     if let Some(policy) = &input.policy {
-        if !state.policy_resolver().supports(policy) {
+        if !state.supports_plan_policy(policy).await? {
             return Err(ApiError::BadRequest);
         }
     }
@@ -403,11 +415,37 @@ async fn update_plan(
     let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
     let input = input.into_domain()?;
     if let Some(policy) = &input.policy {
-        if !state.policy_resolver().supports(policy) {
+        if !state.supports_plan_policy(policy).await? {
             return Err(ApiError::BadRequest);
         }
     }
     Ok(Json(state.plans().update(id, input).await?))
+}
+
+/// Bind a user-confirmed immutable built-in or validated DSL policy version to one plan.
+async fn activate_policy(
+    State(state): State<ApiState>,
+    id: Result<Path<Uuid>, PathRejection>,
+    input: Result<Json<ActivatePolicyRequest>, JsonRejection>,
+) -> Result<Json<InvestmentPlan>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::BadRequest)?;
+    let Json(input) = input.map_err(|_| ApiError::BadRequest)?;
+    let policy = input.policy.into_domain()?;
+    if !state.supports_plan_policy(&policy).await? {
+        return Err(ApiError::BadRequest);
+    }
+    Ok(Json(
+        state
+            .plans()
+            .update(
+                id,
+                UpdateInvestmentPlan {
+                    policy: Some(policy),
+                    ..Default::default()
+                },
+            )
+            .await?,
+    ))
 }
 
 /// 删除一个定投标的及其本地关联记录。

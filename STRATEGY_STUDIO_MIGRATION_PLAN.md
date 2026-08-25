@@ -144,10 +144,12 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - 新增只读 `GET /strategies` 与 `GET /strategies/:policy_id/:policy_version`；没有创建、更新、删除、激活、执行或下单 HTTP 入口。
 - 该阶段不改变现有计划绑定、内置 resolver、scheduler 或 paper-only 执行边界。
 
-### PR 7b — 策略验证与 Web Studio / Strategy Validation and Web Studio
+### PR 7b — 策略验证、激活与 Web Studio / Strategy Validation, Activation and Web Studio（已完成 / Complete）
 
-- 提供受控策略创建、验证、回测、版本、激活、Decision Preview 和审计查询 API。
-- Web 仅管理服务端数据；浏览器 UI 状态使用既有前端约定。先呈现内置策略和只读审计，再逐步开放 DSL 编辑器。
+- `POST /strategies/validate` 返回可读、无内部细节的 DSL 校验结果；`POST /strategies` 只保存已验证的不可变版本，策略不支持更新或任意脚本。
+- Strategy Studio 提供版本列表、只读规则详情、RSI(14)/VIX 白名单表单、验证错误与明确的计划激活确认。
+- 已激活 DSL 会由自动 Decision Preview、scheduler 与审计共用同一 Runtime；仅允许机会桶倍率或跳过机会桶，核心桶不可否决，审批模式不会自动下单，仍为 paper-only。
+- 当前线上 evidence profile 仅支持 RSI(14) 与 VIX；其余 DSL AST 指标保留给离线研究，不能被激活。
 
 ### PR 8 — Qwen Strategy Copilot / Qwen Strategy Copilot
 

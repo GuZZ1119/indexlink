@@ -8,6 +8,7 @@ export default {
     dashboard: '仪表盘',
     decisions: '决策明细',
     plans: '定投标的',
+    strategies: '策略 Studio',
   },
   header: {
     toggleSidebar: '收放侧栏',
