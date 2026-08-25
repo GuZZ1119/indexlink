@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### 2026-08-25 CST
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：策略版本与决策审计升级。
+- 涉及文件：
+  - `crates/decision-records/**`
+  - `crates/storage/src/sqlite_decision_records.rs`
+  - `crates/storage/src/decision_records.rs`
+  - `migrations/sqlite/20260825090000_add_decision_policy_evidence.sql`
+  - `crates/api/src/routes/decision_preview.rs`
+  - `crates/api/tests/decision_preview.rs`
+  - `apps/web/src/api/types.ts`
+  - `apps/web/src/pages/plans/index.tsx`
+  - `apps/web/src/pages/decisions/index.tsx`
+  - `apps/web/src/i18n/locales/{zh,en}.ts`
+  - `README.md`、`README.en.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`
+  - `Cargo.lock`、`CHANGE_LOG.md`
+- 变更内容：
+  - 新决策记录结构化保存不可变 `policy_id + policy_version` 与不含凭据的通用推荐快照；SQLite 以追加列与写入触发器保证三列成组、版本为正、快照为非空 JSON。
+  - 旧决策记录不回填、不删除，读取时显式显示为“迁移前记录”；新的手动预览、自动预览和 scheduler 审计均通过同一结构化记录入口。
+  - PostgreSQL 兼容 adapter 不会静默丢弃新策略证据：在未完成对应 schema migration 前安全拒绝该写入；当前生产 SQLite 路径完整支持。
+  - 前端计划创建页可显式选择内置 `fixed_dca@1` 或 `core_opportunity_v1@1`，审计详情显示实际策略版本。
+  - 本次不改变策略公式、默认固定 DCA、scheduler 自动下单边界或 OpenD paper-only 安全限制。
+- 验证：
+  - `cargo test -p decision-records -p indexlink-storage -p indexlink-api --offline` 通过。
+  - 其余 workspace、核心领域、Clippy、前端构建与 diff 检查见本次提交验证记录。
+
 ### 2026-08-24 CST
 
 - 执行模型：GPT-5 Codex。

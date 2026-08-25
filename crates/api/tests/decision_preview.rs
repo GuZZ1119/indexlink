@@ -166,6 +166,7 @@ impl DecisionRecordRepository for FakeDecisionRecordRepository {
             trend_snapshot: input.trend_snapshot,
             sentiment_snapshot: input.sentiment_snapshot,
             decision_snapshot: input.decision_snapshot,
+            policy_evidence: input.policy_evidence,
             broker_order_request: input.broker_order_request,
             broker_order_ack: input.broker_order_ack,
             summary: input.summary,
@@ -498,7 +499,11 @@ async fn fixed_dca_automatic_preview_does_not_require_market_signals() {
     input.policy = None;
     let created = repository.create(input).await.unwrap();
     let records = Arc::new(FakeDecisionRecordRepository::default());
-    let app = app_without_sentiment_provider(repository, broker, records);
+    let app = app_without_sentiment_provider(
+        repository,
+        broker,
+        Arc::clone(&records) as Arc<dyn DecisionRecordRepository>,
+    );
 
     let response = app
         .oneshot(
@@ -520,6 +525,16 @@ async fn fixed_dca_automatic_preview_does_not_require_market_signals() {
     assert_eq!(body["decision"]["policy"]["id"], json!("fixed_dca"));
     assert_eq!(body["decision"]["market_signals_used"], json!(false));
     assert!(body["decision"].get("final_score").is_none());
+    let persisted = records.records.lock().unwrap();
+    let evidence = persisted[0]
+        .policy_evidence
+        .as_ref()
+        .expect("new audit records must retain structured policy evidence");
+    assert_eq!(evidence.policy.to_string(), "fixed_dca@1");
+    assert_eq!(
+        evidence.recommendation_snapshot["market_signals_used"],
+        json!(false)
+    );
 }
 
 /// Verify a due executable decision submits one MockBroker paper order.

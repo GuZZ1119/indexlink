@@ -49,7 +49,7 @@ The repository keeps C1–C4, calibration fixtures, and reports as reproducible 
 | :--- | :--- | :--- |
 | Plans, schedule rules, and local SQLite | Implemented | Single-user local data; existing plans retain their current behaviour. |
 | 70/20 market inputs and Qwen evidence | Implemented | Source failure is explicit degradation or a rejected automatic decision, never fabricated input. |
-| Decision evidence and history | Implemented | Stores inputs, result, Qwen rationale/news/warnings, and optional order acknowledgement. |
+| Decision evidence and history | Implemented | New records store policy ID/version, a generic recommendation, inputs, result, Qwen rationale/news/warnings, and an optional order acknowledgement; legacy records remain readable. |
 | Minimum scheduler | Implemented | Creates idempotent evidence on due dates; **never auto-submits an order**. |
 | Two-bucket budget, opportunity cash, and period constraints | Base loop implemented | Constrained by plan budget, available cash, period caps, and paper-only boundaries. |
 | Mock/OpenD paper trading | Implemented | Local-loopback OpenD paper accounts only; no live trading. |
@@ -92,7 +92,7 @@ Key constraints:
 - **No I/O in policy runtime:** a policy receives resolved context only. It cannot query a database, call the network, read secrets, or place an order.
 - **AI is bounded:** Qwen produces explanations, warnings, and policy candidates. It cannot bypass validation, budget, operator confirmation, or paper-only restrictions.
 - **Order safety:** only an explicit, due, validated paper-order request can be submitted. There is no live trading, automated cancellation, or scheduler auto-ordering.
-- **Audit first:** retain inputs rather than conclusions only. Future records will append policy ID, version, snapshot, and hash while old records remain readable.
+- **Audit first:** retain inputs rather than conclusions only. New records retain policy ID, version, and a generic recommendation snapshot while old records remain readable.
 
 ## Current Workspace
 
@@ -117,7 +117,7 @@ indexlink/
 └─ deployment/aliyun/       # ECS Docker Compose deployment scripts
 ```
 
-> The migration will add `strategy-policy` for the policy contract and a restricted Strategy DSL. Arbitrary user scripts will never enter the runtime.
+> `strategy-policy` and two built-in policies are implemented. The next extension is a restricted Strategy DSL; arbitrary user scripts will never enter the runtime.
 
 ## Run Locally
 
@@ -161,9 +161,10 @@ See [deployment/aliyun/README.md](./deployment/aliyun/README.md) for deployment 
 
 1. **Policy contract and legacy wrapper:** completed: the generic `InvestmentPolicy` contract wraps legacy logic as `CoreOpportunityV1` and locks its behaviour with regression tests.
 2. **Fixed DCA and unified resolver:** completed; fixed DCA and the legacy policy run through one preview, scheduler, audit, and paper-only flow.
-3. **Policy versions and restricted DSL:** next, save, validate, backtest, version, and activate allow-listed rule policies.
-4. **Unified evaluation and Studio:** use the same runtime for historical and live execution; show comparable XIRR, terminal wealth, drawdown, volatility, Sortino, and cash utilisation.
-5. **Qwen Copilot:** generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
+3. **Policy-version and audit upgrade:** complete; new records retain the policy version and generic recommendation snapshot while legacy records remain readable.
+4. **Restricted DSL:** next, save, validate, backtest, version, and activate allow-listed rule policies.
+5. **Unified evaluation and Studio:** use the same runtime for historical and live execution; show comparable XIRR, terminal wealth, drawdown, volatility, Sortino, and cash utilisation.
+6. **Qwen Copilot:** generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
 
 See [STRATEGY_STUDIO_MIGRATION_PLAN.md](./STRATEGY_STUDIO_MIGRATION_PLAN.md) for details.
 

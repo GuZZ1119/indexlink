@@ -6,6 +6,12 @@ export type DecisionAction =
   | 'underweight'
   | 'skip'
 
+/** Immutable strategy identity selected by a plan and persisted in each new audit. */
+export interface PolicyReference {
+  id: 'fixed_dca' | 'core_opportunity_v1'
+  version: number
+}
+
 /** A server-side investment plan. Decimal values remain JSON strings. */
 export interface InvestmentPlan {
   id: string
@@ -15,6 +21,7 @@ export interface InvestmentPlan {
   currency: string
   schedule_kind: 'monthly'
   schedule_day: number
+  policy: PolicyReference
   max_single_execution: string
   is_active: boolean
   created_at: string
@@ -29,6 +36,7 @@ export interface CreateInvestmentPlanRequest {
   currency: string
   schedule_kind: 'monthly'
   schedule_day: number
+  policy?: PolicyReference
   max_single_execution: string
 }
 
@@ -283,6 +291,17 @@ export interface DecisionPreviewResponse {
   summary: string
 }
 
+/** Immutable policy identity and provider-neutral recommendation saved with new audits. */
+export interface DecisionPolicyEvidence {
+  policy: { id: string; version: number }
+  recommendation_snapshot: {
+    action: DecisionAction
+    multiplier: number
+    scheduled_contribution: string
+    market_signals_used: boolean
+  }
+}
+
 /** Persisted decision-record history item. */
 export interface DecisionRecord {
   id: string
@@ -296,6 +315,7 @@ export interface DecisionRecord {
   trend_snapshot: Record<string, unknown>
   sentiment_snapshot?: PersistedMarketSentimentSnapshot
   decision_snapshot: DecisionResult
+  policy_evidence?: DecisionPolicyEvidence
   broker_order_request?: Record<string, unknown>
   broker_order_ack?: BrokerOrderAck
   summary: string

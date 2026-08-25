@@ -335,6 +335,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "strategy-policy",
  "thiserror",
  "time",
  "tokio",

@@ -73,6 +73,12 @@ impl DecisionRecordRepository for PostgresDecisionRecordRepository {
         input: CreateDecisionRecord,
     ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
         let input = input.normalize()?;
+        if input.policy_evidence.is_some() {
+            tracing::warn!(
+                "PostgreSQL decision records do not yet support policy evidence columns"
+            );
+            return Err(DecisionRecordRepositoryError::Unavailable);
+        }
         let row = sqlx::query(INSERT_RECORD_SQL)
             .bind(input.plan_id.to_string())
             .bind(input.symbol)
@@ -172,6 +178,7 @@ fn record_from_row(row: PgRow) -> Result<DecisionRecord, DecisionRecordRepositor
             row.try_get("sentiment_snapshot").map_err(map_sqlx_error)?,
         )?,
         decision_snapshot: parse_json(row.try_get("decision_snapshot").map_err(map_sqlx_error)?)?,
+        policy_evidence: None,
         broker_order_request: parse_optional_json(
             row.try_get("broker_order_request")
                 .map_err(map_sqlx_error)?,

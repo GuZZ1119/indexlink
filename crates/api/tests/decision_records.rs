@@ -218,6 +218,7 @@ fn decision_record(id: Uuid, plan_id: Uuid, created_at: i64) -> DecisionRecord {
         trend_snapshot: json!({"score": 0.5}),
         sentiment_snapshot: Some(json!({"score": 0.2})),
         decision_snapshot: json!({"action": "standard"}),
+        policy_evidence: None,
         broker_order_request: None,
         broker_order_ack: None,
         summary: "Decision preview completed.".to_owned(),

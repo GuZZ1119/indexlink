@@ -8,6 +8,7 @@ async-trait.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+strategy-policy.workspace = true
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

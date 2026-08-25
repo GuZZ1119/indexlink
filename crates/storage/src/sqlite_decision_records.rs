@@ -2,12 +2,14 @@
 
 use async_trait::async_trait;
 use decision_records::{
-    CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus, DecisionRecord,
-    DecisionRecordListQuery, DecisionRecordRepository, DecisionRecordRepositoryError,
+    CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus, DecisionPolicyEvidence,
+    DecisionRecord, DecisionRecordListQuery, DecisionRecordRepository,
+    DecisionRecordRepositoryError,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use strategy_policy::{PolicyId, PolicyRef, PolicyVersion};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
@@ -17,29 +19,34 @@ const INSERT_RECORD_SQL: &str = concat!(
     "INSERT INTO decision_records ",
     "(id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
-    "decision_snapshot, broker_order_request, broker_order_ack, summary) ",
-    "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) ",
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary) ",
+    "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) ",
     "RETURNING id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
-    "decision_snapshot, broker_order_request, broker_order_ack, summary, created_at"
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary, created_at"
 );
 const LIST_RECORDS_BY_PLAN_SQL: &str = concat!(
     "SELECT id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
-    "decision_snapshot, broker_order_request, broker_order_ack, summary, created_at ",
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary, created_at ",
     "FROM decision_records WHERE plan_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2"
 );
 const GET_RECORD_SQL: &str = concat!(
     "SELECT id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
-    "decision_snapshot, broker_order_request, broker_order_ack, summary, created_at ",
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary, created_at ",
     "FROM decision_records WHERE id = ?1"
 );
 const COMPLETE_BROKER_ORDER_SQL: &str = concat!(
     "UPDATE decision_records SET broker_order_ack = ?1, summary = ?2 WHERE id = ?3 ",
     "RETURNING id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
-    "decision_snapshot, broker_order_request, broker_order_ack, summary, created_at"
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary, created_at"
 );
 
 /// SQLite implementation of [`DecisionRecordRepository`].
@@ -68,6 +75,17 @@ impl DecisionRecordRepository for SqliteDecisionRecordRepository {
             .planned_contribution
             .map(encode_planned_contribution)
             .transpose()?;
+        let (policy_id, policy_version, recommendation_snapshot) = input
+            .policy_evidence
+            .as_ref()
+            .map(|evidence| {
+                (
+                    Some(evidence.policy.id().as_str().to_owned()),
+                    Some(i64::from(evidence.policy.version().value())),
+                    Some(evidence.recommendation_snapshot.to_string()),
+                )
+            })
+            .unwrap_or((None, None, None));
         let row = sqlx::query(INSERT_RECORD_SQL)
             .bind(Uuid::new_v4().to_string())
             .bind(input.plan_id.to_string())
@@ -84,6 +102,9 @@ impl DecisionRecordRepository for SqliteDecisionRecordRepository {
                     .map(|snapshot| snapshot.to_string()),
             )
             .bind(input.decision_snapshot.to_string())
+            .bind(policy_id)
+            .bind(policy_version)
+            .bind(recommendation_snapshot)
             .bind(
                 input
                     .broker_order_request
@@ -171,11 +192,40 @@ fn record_from_row(row: SqliteRow) -> Result<DecisionRecord, DecisionRecordRepos
         trend_snapshot: parse_json(column(&row, "trend_snapshot")?)?,
         sentiment_snapshot: parse_optional_json(column(&row, "sentiment_snapshot")?)?,
         decision_snapshot: parse_json(column(&row, "decision_snapshot")?)?,
+        policy_evidence: policy_evidence_from_row(&row)?,
         broker_order_request: parse_optional_json(column(&row, "broker_order_request")?)?,
         broker_order_ack: parse_optional_json(column(&row, "broker_order_ack")?)?,
         summary: column(&row, "summary")?,
         created_at: parse_timestamp(column(&row, "created_at")?)?,
     })
+}
+
+/// 从可选数据库列还原完整策略证据，并拒绝部分写入的无效状态。
+fn policy_evidence_from_row(
+    row: &SqliteRow,
+) -> Result<Option<DecisionPolicyEvidence>, DecisionRecordRepositoryError> {
+    let policy_id = column::<Option<String>>(row, "policy_id")?;
+    let policy_version = column::<Option<i64>>(row, "policy_version")?;
+    let recommendation_snapshot = column::<Option<String>>(row, "recommendation_snapshot")?;
+
+    match (policy_id, policy_version, recommendation_snapshot) {
+        (None, None, None) => Ok(None),
+        (Some(id), Some(version), Some(snapshot)) => {
+            let version = u32::try_from(version)
+                .ok()
+                .and_then(|value| PolicyVersion::new(value).ok())
+                .ok_or(DecisionRecordRepositoryError::Unavailable)?;
+            let policy = PolicyRef::new(
+                PolicyId::new(id).map_err(|_| DecisionRecordRepositoryError::Unavailable)?,
+                version,
+            );
+            Ok(Some(DecisionPolicyEvidence {
+                policy,
+                recommendation_snapshot: parse_json(snapshot)?,
+            }))
+        }
+        _ => Err(DecisionRecordRepositoryError::Unavailable),
+    }
 }
 
 /// 从 SQLite row 读取一个列，并将底层错误映射为安全 repository 错误。
@@ -327,9 +377,29 @@ mod tests {
             trend_snapshot: json!({"score": 0.5}),
             sentiment_snapshot: Some(json!({"score": 0.1})),
             decision_snapshot: json!({"action": "standard"}),
+            policy_evidence: None,
             broker_order_request: Some(json!({"symbol": "VOO"})),
             broker_order_ack: Some(json!({"order_id": "paper-1"})),
             summary: "  执行本次计划投入。  ".to_owned(),
+        }
+    }
+
+    /// 构造包含结构化策略版本的审计输入。
+    fn input_with_policy_evidence(plan_id: Uuid) -> CreateDecisionRecord {
+        CreateDecisionRecord {
+            policy_evidence: Some(DecisionPolicyEvidence {
+                policy: PolicyRef::new(
+                    PolicyId::new("fixed_dca").unwrap(),
+                    PolicyVersion::new(1).unwrap(),
+                ),
+                recommendation_snapshot: json!({
+                    "action": "standard",
+                    "multiplier": 1.0,
+                    "scheduled_contribution": "1000.00",
+                    "market_signals_used": false,
+                }),
+            }),
+            ..input(plan_id)
         }
     }
 
@@ -356,6 +426,45 @@ mod tests {
             vec![created.clone()]
         );
         assert_eq!(repository.get(created.id).await.unwrap(), created);
+    }
+
+    /// 验证 SQLite 迁移后会写入并还原策略版本与通用推荐快照。
+    #[tokio::test]
+    async fn persists_structured_policy_evidence() {
+        let (repository, plans) = repositories().await;
+        let created = repository
+            .create(input_with_policy_evidence(create_plan(&plans).await))
+            .await
+            .unwrap();
+
+        let evidence = created
+            .policy_evidence
+            .expect("policy evidence must be retained");
+        assert_eq!(evidence.policy.to_string(), "fixed_dca@1");
+        assert_eq!(evidence.recommendation_snapshot["multiplier"], json!(1.0));
+    }
+
+    /// 验证 SQLite 触发器拒绝绕过领域层的部分策略证据写入。
+    #[tokio::test]
+    async fn rejects_partial_policy_evidence_at_the_schema_boundary() {
+        let (repository, plans) = repositories().await;
+        let created = repository
+            .create(input(create_plan(&plans).await))
+            .await
+            .unwrap();
+        assert_eq!(created.policy_evidence, None);
+
+        let result = sqlx::query("UPDATE decision_records SET policy_id = ?1 WHERE id = ?2")
+            .bind("fixed_dca")
+            .bind(created.id.to_string())
+            .execute(&repository.pool)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            repository.get(created.id).await.unwrap().policy_evidence,
+            None
+        );
     }
 
     /// Verify SQLite updates only the broker completion fields of an existing record.

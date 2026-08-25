@@ -1,7 +1,7 @@
 # IndexLink 策略工作台迁移计划 / Strategy Studio Migration Plan
 
-> 状态：PR 1 已完成；其余阶段已预登记，尚未实现。
-> Status: PR 1 is complete; the remaining stages are pre-registered and not implemented.
+> 状态：PR 1–3 已完成；PR 4 及后续阶段已预登记，尚未实现。
+> Status: PRs 1–3 are complete; PR 4 and later stages are pre-registered and not implemented.
 
 ## 1. 新定位 / New Positioning
 
@@ -40,7 +40,7 @@ Create Strategy → Validate → Backtest → Review → Save Version → Activa
 
 ### 3.1 新增稳定契约 / New Stable Contract
 
-新增一个无 IO 的策略领域 crate（建议名称：`strategy-policy`）。它定义：
+已新增无 IO 的策略领域 crate：`strategy-policy`。它定义：
 
 | 类型 / Type | 用途 / Purpose |
 | :--- | :--- |
@@ -48,7 +48,7 @@ Create Strategy → Validate → Backtest → Review → Save Version → Activa
 | `PolicyVersion` | 不可变策略版本。 |
 | `PolicyRef` | `id + version` 的激活绑定。 |
 | `DecisionContext` | 已解析的执行日期、预算、计划约束、市场证据和 `as_of`；不得包含 IO。 |
-| `InvestmentRecommendation` | 推荐金额、桶拆分、动作、原因、风险提示、证据摘要和策略引用。 |
+| `InvestmentRecommendation` | 已实现策略引用、动作、倍率与周期预算；桶拆分、原因和风险提示继续由计划/应用层保留。 |
 | `InvestmentPolicy` | `DecisionContext -> InvestmentRecommendation` 的确定性评估契约。 |
 
 The proposed `strategy-policy` crate is pure and IO-free. Its runtime contract is:
@@ -113,10 +113,11 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 绑定 `fixed_dca@1`。固定 DCA 不读取市场、Qwen 或调用方伪造的 70/20 信号；其审计快照
 会明确记录信号未使用。当前 resolver 仅接受两个内置策略，未知引用在 HTTP 边界安全拒绝。
 
-### PR 3 — 策略版本领域与审计升级 / Strategy Version Domain and Audit Upgrade
+### PR 3 — 策略版本领域与审计升级 / Strategy Version Domain and Audit Upgrade（已完成 / Complete）
 
-- 定义 `StrategySpec`、版本状态、激活引用和哈希规则。
-- 追加保存策略快照、证据快照和 recommendation 快照；旧记录继续读取。
+- 计划通过不可变 `PolicyRef` 绑定支持的内置策略版本；未知策略在 HTTP 边界安全拒绝。
+- SQLite 决策记录追加保存 `policy_id`、`policy_version` 和通用 `recommendation_snapshot`；旧记录继续读取为无策略证据。
+- `StrategySpec`、策略状态、哈希与用户策略 CRUD 仍属于后续受限 DSL/Studio 工作。
 
 ### PR 4 — 受限 DSL/AST 与校验 / Restricted DSL/AST and Validation
 
@@ -153,6 +154,6 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 8. 当前结论 / Current Decision
 
-策略契约、Legacy 包装、Fixed DCA 与统一 resolver 已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 3：策略版本领域与审计升级**。
+策略契约、Legacy 包装、Fixed DCA、统一 resolver 与最小策略版本审计已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 4：受限 DSL/AST 与校验**。
 
-With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 3: strategy-version domain and audit upgrades**.
+With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 4: restricted DSL/AST and validation**.

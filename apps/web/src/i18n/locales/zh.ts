@@ -257,6 +257,11 @@ export default {
       currency: '币种',
       scheduleDay: '月内执行日',
       maxExecution: '单次执行上限',
+      policy: '执行策略',
+      fixedDca: '固定定投（默认）',
+      coreOpportunity: '核心 / 机会 V1（旧策略）',
+      fixedDcaDescription: '每个计划周期按固定预算生成可审计建议，不读取市场或 Qwen 信号。',
+      coreOpportunityDescription: '保留既有 70/20/10 信号逻辑，仅适用于明确选择的旧策略。',
     },
     history: {
       title: '决策历史',

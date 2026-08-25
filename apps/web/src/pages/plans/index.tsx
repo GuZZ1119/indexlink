@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router'
 import { useSnapshot } from 'valtio'
 
 import { useCreatePlan, useDeletePlan, usePlans } from '@/api/queries'
-import type { CreateInvestmentPlanRequest } from '@/api/types'
+import type { CreateInvestmentPlanRequest, PolicyReference } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -18,6 +18,7 @@ const initialPlan: CreateInvestmentPlanRequest = {
   currency: 'USD',
   schedule_kind: 'monthly',
   schedule_day: 15,
+  policy: { id: 'fixed_dca', version: 1 },
   max_single_execution: '1500.00',
 }
 
@@ -34,6 +35,9 @@ export default function PlansPage() {
 
   const update = <K extends keyof CreateInvestmentPlanRequest>(key: K, value: string | number) => {
     setInput((current) => ({ ...current, [key]: value }) as CreateInvestmentPlanRequest)
+  }
+  const updatePolicy = (id: PolicyReference['id']) => {
+    setInput((current) => ({ ...current, policy: { id, version: 1 } }))
   }
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -64,7 +68,7 @@ export default function PlansPage() {
             <div key={plan.id} className={`flex w-full items-start gap-2 rounded-lg border p-1 transition-colors hover:bg-muted/50 ${selectedPlanId === plan.id ? 'border-primary bg-primary/5' : 'border-border'}`}>
               <button type="button" onClick={() => setSelectedPlanId(plan.id)} className="min-w-0 flex-1 rounded-md p-3 text-left">
                 <div className="flex items-center justify-between gap-3"><span className="font-semibold">{plan.name}</span><span className="font-mono text-sm">{plan.symbol}</span></div>
-                <div className="mt-2 text-sm text-muted-foreground">{plan.currency} {plan.base_contribution} · {t('live.plans.scheduleDay')} {plan.schedule_day} · {t('live.plans.maxExecution')} {plan.max_single_execution}</div>
+                <div className="mt-2 text-sm text-muted-foreground">{plan.currency} {plan.base_contribution} · {t('live.plans.scheduleDay')} {plan.schedule_day} · {t('live.plans.maxExecution')} {plan.max_single_execution} · {plan.policy.id}@{plan.policy.version}</div>
               </button>
               <Button type="button" variant="ghost" size="icon" className="mt-1 shrink-0 text-muted-foreground hover:text-destructive" aria-label={`删除 ${plan.name}`} disabled={remove.isPending} onClick={() => { if (globalThis.confirm(`删除“${plan.name}”及其本地决策、账本和快照记录？此操作不可恢复。`)) { if (selectedPlanId === plan.id) setSelectedPlanId(null); remove.mutate(plan.id) } }}><Trash2 className="size-4" /></Button>
             </div>
@@ -88,6 +92,20 @@ export default function PlansPage() {
               value={input.base_contribution}
               onChange={(value) => update('base_contribution', value)}
             />
+            <label className="grid gap-1.5 text-sm font-medium">
+              {t('live.plans.policy')}
+              <select
+                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                value={input.policy?.id ?? 'fixed_dca'}
+                onChange={(event) => updatePolicy(event.target.value as PolicyReference['id'])}
+              >
+                <option value="fixed_dca">{t('live.plans.fixedDca')}</option>
+                <option value="core_opportunity_v1">{t('live.plans.coreOpportunity')}</option>
+              </select>
+              <span className="text-xs font-normal text-muted-foreground">
+                {input.policy?.id === 'fixed_dca' ? t('live.plans.fixedDcaDescription') : t('live.plans.coreOpportunityDescription')}
+              </span>
+            </label>
             <PlanField label={t('live.plans.currency')} value={input.currency} onChange={(value) => update('currency', value)} />
             <PlanField
               label={t('live.plans.scheduleDay')}

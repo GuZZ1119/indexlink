@@ -172,11 +172,13 @@ function PageMessage({ message }: { message: string }) {
 function AuditOverview({ record }: { record: DecisionRecord }) {
   const decision = record.decision_snapshot
   const trigger = readText(record.execution_snapshot, 'trigger')
+  const policy = record.policy_evidence?.policy ?? decision.policy
   return (
     <section className="grid gap-3 rounded-lg border bg-muted/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
       <AuditFact label="执行时间" value={new Date(record.created_at).toLocaleString()} />
       <AuditFact label="计划投入" value={record.planned_contribution ? `${record.planned_contribution} ${record.currency}` : '本次不在执行日'} />
       <AuditFact label="触发方式" value={trigger ?? '历史记录'} />
+      <AuditFact label="策略版本" value={policy ? `${policy.id}@${policy.version}` : '迁移前记录'} />
       <AuditFact label="综合决策" value={`${decision.action} · ${(decision.multiplier * 100).toFixed(0)}%`} />
       <AuditFact label="70% 基本面" value={formatScore(decision.fundamental_score)} />
       <AuditFact label="20% 趋势" value={formatScore(decision.trend_score)} />

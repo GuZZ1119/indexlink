@@ -19,7 +19,9 @@ use builtin_policies::{
 use chrono::{Datelike, NaiveDate, Utc};
 use core_domain::{Action, Percentile};
 use decision_engine::{DecisionInput, DecisionSentiment, DecisionWeightMode};
-use decision_records::{CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus};
+use decision_records::{
+    CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus, DecisionPolicyEvidence,
+};
 use indexlink_storage::OpportunityCashSettlementInput;
 use investment_plans::{
     BucketAllocationRatio, ExecutionPreviewStatus, InvestmentPlan, InvestmentPlanExecutionPreview,
@@ -1061,9 +1063,24 @@ fn record_input(context: DecisionRecordContext<'_>) -> Result<CreateDecisionReco
         )?,
         sentiment_snapshot: context.market_sentiment.map(market_sentiment_snapshot),
         decision_snapshot: decision_snapshot(context.decision),
+        policy_evidence: Some(DecisionPolicyEvidence {
+            policy: context.policy.clone(),
+            recommendation_snapshot: recommendation_snapshot(context.decision),
+        }),
         broker_order_request: context.paper_order.map(snapshot).transpose()?,
         broker_order_ack: context.paper_order_ack.map(snapshot).transpose()?,
         summary: context.summary,
+    })
+}
+
+/// Build the policy-neutral recommendation evidence retained with every new audit record.
+fn recommendation_snapshot(decision: &BuiltinPolicyDecision) -> Value {
+    let recommendation = decision.recommendation();
+    json!({
+        "action": action_label(recommendation.action()),
+        "multiplier": recommendation.multiplier().value(),
+        "scheduled_contribution": recommendation.scheduled_contribution().to_string(),
+        "market_signals_used": decision.legacy_signal().is_some(),
     })
 }
 

@@ -257,6 +257,11 @@ export default {
       currency: 'Currency',
       scheduleDay: 'Schedule day',
       maxExecution: 'Max single execution',
+      policy: 'Execution policy',
+      fixedDca: 'Fixed DCA (default)',
+      coreOpportunity: 'Core / Opportunity V1 (legacy)',
+      fixedDcaDescription: 'Creates an auditable fixed-budget recommendation each period without market or Qwen signals.',
+      coreOpportunityDescription: 'Retains the existing 70/20/10 signal logic and is available only when explicitly selected.',
     },
     history: {
       title: 'Decision history',
