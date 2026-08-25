@@ -54,7 +54,7 @@ IndexLink 是一个面向长期投资者的**透明、可审计、可扩展的�
 | 双桶预算、机会现金与周期约束 | 已完成基础闭环 | 受计划预算、可用现金、周期上限和 paper-only 边界约束。 |
 | Mock/OpenD paper trading | 已完成 | 仅 loopback OpenD 模拟账户；不支持实盘。 |
 | 内置策略与统一执行入口 | 已完成 | 新计划默认 `fixed_dca@1`；既有 SQLite 计划迁移为 `core_opportunity_v1@1`；预览、scheduler、审计和 paper-only 订单均经同一 resolver。 |
-| 策略版本库 / DSL Studio | 计划中 | 当前仅允许受支持的内置策略；见迁移计划。 |
+| 受限 DSL 定义与校验 | 已完成基础契约 | 仅允许白名单指标、有限表达式和机会桶动作；尚未接入运行时、存储或 Studio。 |
 
 ## 架构与安全边界
 
@@ -109,6 +109,7 @@ indexlink/
 │  ├─ broker/               # Mock/OpenD paper-only adapter
 │  ├─ storage/              # SQLite 与持久化 adapter
 │  ├─ strategy-evaluation/  # 离线、版本化策略研究
+│  ├─ strategy-dsl/         # 受限策略 AST 与纯函数校验
 │  └─ api/                  # Axum HTTP 与应用编排
 ├─ apps/
 │  ├─ server/               # 组合根与 scheduler
@@ -162,9 +163,10 @@ curl http://127.0.0.1:8080/ready
 1. **策略契约与兼容包装**：已增加通用 `InvestmentPolicy` 契约，用 `CoreOpportunityV1` 包装旧逻辑并锁定回归。
 2. **固定 DCA 与统一解析入口**：已完成；固定 DCA 与旧策略通过同一预览、scheduler、审计和 paper-only 流程运行。
 3. **策略版本与审计升级**：已完成；新记录保存策略版本和通用推荐快照，旧记录保持可读。
-4. **受限 DSL**：下一步保存、验证、回测、版本化和激活白名单规则策略。
-5. **统一评估与 Studio**：历史与实时复用同一运行时；呈现可比的 XIRR、终值、回撤、波动、Sortino 和现金使用率。
-6. **Qwen Copilot**：生成候选草案及解释，始终经确定性校验、回测和人工审阅。
+4. **受限 DSL/AST 与校验**：已完成；仅允许白名单指标、有限表达式与机会桶动作，拒绝任意脚本、超深条件树和超预算固定金额。
+5. **确定性 DSL Runtime**：下一步将完整上下文解释为通用推荐，仍不接触 IO 或下单。
+6. **统一评估与 Studio**：历史与实时复用同一运行时；呈现可比的 XIRR、终值、回撤、波动、Sortino 和现金使用率。
+7. **Qwen Copilot**：生成候选草案及解释，始终经确定性校验、回测和人工审阅。
 
 详见 [STRATEGY_STUDIO_MIGRATION_PLAN.md](./STRATEGY_STUDIO_MIGRATION_PLAN.md)。
 

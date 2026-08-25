@@ -1,7 +1,7 @@
 # IndexLink 策略工作台迁移计划 / Strategy Studio Migration Plan
 
-> 状态：PR 1–3 已完成；PR 4 及后续阶段已预登记，尚未实现。
-> Status: PRs 1–3 are complete; PR 4 and later stages are pre-registered and not implemented.
+> 状态：PR 1–4 已完成；PR 5 及后续阶段已预登记，尚未实现。
+> Status: PRs 1–4 are complete; PR 5 and later stages are pre-registered and not implemented.
 
 ## 1. 新定位 / New Positioning
 
@@ -71,7 +71,7 @@ PolicyRef + complete DecisionContext → InvestmentRecommendation
 
 ### 3.3 策略内部证据 / Internal Evidence
 
-CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunityV1` 的内部证据或标签，不是平台级 API/Broker 语义。后续 DSL 初始仅支持价格、SMA、EMA、RSI、回撤和 VIX；动作仅包括 `BuyFixedAmount` 与 `Skip`。
+CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunityV1` 的内部证据或标签，不是平台级 API/Broker 语义。DSL 初始仅支持价格、SMA、EMA、RSI、回撤和 VIX；动作仅可影响机会桶（固定金额、倍率或跳过），不能否决核心桶。
 
 ## 4. 当前耦合审计 / Current Coupling Audit
 
@@ -119,10 +119,12 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - SQLite 决策记录追加保存 `policy_id`、`policy_version` 和通用 `recommendation_snapshot`；旧记录继续读取为无策略证据。
 - `StrategySpec`、策略状态、哈希与用户策略 CRUD 仍属于后续受限 DSL/Studio 工作。
 
-### PR 4 — 受限 DSL/AST 与校验 / Restricted DSL/AST and Validation
+### PR 4 — 受限 DSL/AST 与校验 / Restricted DSL/AST and Validation（已完成 / Complete）
 
-- 实现 `IndicatorSpec`、表达式、条件和动作白名单。
-- 拒绝未知指标、未定义变量、除零、越界金额、递归和任意代码执行。
+- 新增独立的无 IO `strategy-dsl` crate，提供 `StrategySpec`、`StrategyRule`、白名单 `IndicatorSpec`、有限 `ValueExpression`、条件树和动作定义。
+- 只允许价格、SMA、EMA、RSI、回撤、VIX；动作仅为固定金额、机会桶倍率与跳过机会桶，不能表达核心桶否决、网络调用或任意代码执行。
+- 构造器和校验器拒绝非法窗口、空条件组、零除、非自定义策略 ID、空/过多规则、过深/过大条件树及超过调用方周期预算的固定金额。
+- 本阶段不含 serde、SQLite、HTTP、策略运行时、回测接入、Qwen 或前端编辑器。
 
 ### PR 5 — 确定性 DSL Runtime / Deterministic DSL Runtime
 
@@ -154,6 +156,6 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 8. 当前结论 / Current Decision
 
-策略契约、Legacy 包装、Fixed DCA、统一 resolver 与最小策略版本审计已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 4：受限 DSL/AST 与校验**。
+策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计与受限 DSL 定义/校验已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 5：确定性 DSL Runtime**。
 
-With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 4: restricted DSL/AST and validation**.
+With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 5: deterministic DSL runtime**.

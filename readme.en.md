@@ -54,7 +54,7 @@ The repository keeps C1–C4, calibration fixtures, and reports as reproducible 
 | Two-bucket budget, opportunity cash, and period constraints | Base loop implemented | Constrained by plan budget, available cash, period caps, and paper-only boundaries. |
 | Mock/OpenD paper trading | Implemented | Local-loopback OpenD paper accounts only; no live trading. |
 | Built-in policies and unified execution entry | Implemented | New plans default to `fixed_dca@1`; existing SQLite plans migrate to `core_opportunity_v1@1`; preview, scheduler, audit, and paper-only orders use the same resolver. |
-| Policy registry / DSL Studio | Planned | Only supported built-in policies can be selected today; see the migration plan. |
+| Restricted DSL definition and validation | Base contract implemented | Only allow-listed indicators, bounded expressions, and opportunity actions are representable; runtime, storage, and Studio remain future work. |
 
 ## Architecture and Safety Boundaries
 
@@ -109,6 +109,7 @@ indexlink/
 │  ├─ broker/               # Mock/OpenD paper-only adapters
 │  ├─ storage/              # SQLite and persistence adapters
 │  ├─ strategy-evaluation/  # Offline, versioned policy research
+│  ├─ strategy-dsl/         # Restricted policy AST and pure validation
 │  └─ api/                  # Axum HTTP and application orchestration
 ├─ apps/
 │  ├─ server/               # Composition root and scheduler
@@ -162,9 +163,10 @@ See [deployment/aliyun/README.md](./deployment/aliyun/README.md) for deployment 
 1. **Policy contract and legacy wrapper:** completed: the generic `InvestmentPolicy` contract wraps legacy logic as `CoreOpportunityV1` and locks its behaviour with regression tests.
 2. **Fixed DCA and unified resolver:** completed; fixed DCA and the legacy policy run through one preview, scheduler, audit, and paper-only flow.
 3. **Policy-version and audit upgrade:** complete; new records retain the policy version and generic recommendation snapshot while legacy records remain readable.
-4. **Restricted DSL:** next, save, validate, backtest, version, and activate allow-listed rule policies.
-5. **Unified evaluation and Studio:** use the same runtime for historical and live execution; show comparable XIRR, terminal wealth, drawdown, volatility, Sortino, and cash utilisation.
-6. **Qwen Copilot:** generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
+4. **Restricted DSL/AST and validation:** complete; it allows only allow-listed indicators, bounded expressions, and opportunity actions, rejecting arbitrary scripts, excessive condition trees, and fixed actions above budget.
+5. **Deterministic DSL runtime:** next, interpret complete context into a generic recommendation without I/O or order submission.
+6. **Unified evaluation and Studio:** use the same runtime for historical and live execution; show comparable XIRR, terminal wealth, drawdown, volatility, Sortino, and cash utilisation.
+7. **Qwen Copilot:** generate candidate specifications and explanations, always subject to deterministic validation, backtesting, and human review.
 
 See [STRATEGY_STUDIO_MIGRATION_PLAN.md](./STRATEGY_STUDIO_MIGRATION_PLAN.md) for details.
 

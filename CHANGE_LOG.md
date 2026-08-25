@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 2026-08-25 CST — PR 4
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：受限策略 DSL/AST 与校验。
+- 涉及文件：
+  - `Cargo.toml`、`Cargo.lock`
+  - `crates/strategy-dsl/Cargo.toml`
+  - `crates/strategy-dsl/src/lib.rs`
+  - `README.md`、`README.en.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - 新增无 IO 的 `strategy-dsl` crate，提供版本化自定义策略定义、白名单指标、有限值表达式、条件树与固定金额/机会桶动作。
+  - 对窗口、名称、规则数量、条件树复杂度、除数、固定金额及调用方周期预算建立不变量；DSL 无法表示核心桶否决、任意脚本、网络访问、数据库访问或订单执行。
+  - 本次仅定义和验证 AST，尚未向 SQLite、HTTP、前端 Studio、Qwen 或实际策略 runtime 暴露；现有内置策略与执行行为不变。
+- 验证：
+  - `cargo test -p strategy-dsl --offline` 通过（6 个测试）。
+  - `cargo clippy -p strategy-dsl --all-targets --all-features --offline -- -D warnings` 通过。
+  - `cargo test -p core-domain --offline` 通过。
+
 ### 2026-08-25 CST
 
 - 执行模型：GPT-5 Codex。

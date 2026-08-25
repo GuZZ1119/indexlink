@@ -14,6 +14,7 @@ members = [
     "crates/strategy-evaluation",
     "crates/strategy-policy",
     "crates/builtin-policies",
+    "crates/strategy-dsl",
     "apps/server",
 ]
 
@@ -34,6 +35,7 @@ indexlink-api = { path = "crates/api" }
 quant-engine = { path = "crates/quant-engine" }
 strategy-policy = { path = "crates/strategy-policy" }
 builtin-policies = { path = "crates/builtin-policies" }
+strategy-dsl = { path = "crates/strategy-dsl" }
 async-trait = "0.1"
 axum = "0.7"
 dotenvy = "0.15"
