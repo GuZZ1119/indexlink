@@ -1,7 +1,7 @@
 # IndexLink 策略工作台迁移计划 / Strategy Studio Migration Plan
 
-> 状态：PR 1–4 已完成；PR 5 及后续阶段已预登记，尚未实现。
-> Status: PRs 1–4 are complete; PR 5 and later stages are pre-registered and not implemented.
+> 状态：PR 1–6（DSL runtime 与首个统一历史评估候选）已完成；PR 7 及后续阶段已预登记，尚未实现。
+> Status: PRs 1–6 (DSL runtime and the first unified historical evaluation candidate) are complete; PR 7 and later stages are pre-registered and not implemented.
 
 ## 1. 新定位 / New Positioning
 
@@ -126,15 +126,17 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 - 构造器和校验器拒绝非法窗口、空条件组、零除、非自定义策略 ID、空/过多规则、过深/过大条件树及超过调用方周期预算的固定金额。
 - 本阶段不含 serde、SQLite、HTTP、策略运行时、回测接入、Qwen 或前端编辑器。
 
-### PR 5 — 确定性 DSL Runtime / Deterministic DSL Runtime
+### PR 5 — 确定性 DSL Runtime / Deterministic DSL Runtime（已完成 / Complete）
 
-- 将完整 `DecisionContext` 解释为 `InvestmentRecommendation`。
-- 为金额守恒、`as_of`、无未来函数、可重复性与错误信息建立聚焦测试。
+- `StrategySpec::evaluate` 将完整 `DecisionContext<DslEvidence>` 解释为 `DslEvaluation` 与通用 `InvestmentRecommendation`。
+- 规则按固定首条命中顺序求值；缺失指标、重复指标、算术溢出和无效周期预算安全失败。
+- 运行时不得发起 IO、写审计或生成订单；其动作只能作用于机会桶，核心桶不会被 DSL 否决。
 
-### PR 6 — 统一历史评估 / Unified Historical Evaluation
+### PR 6 — 统一历史评估 / Unified Historical Evaluation（首个候选已完成 / First Candidate Complete）
 
-- 让 `strategy-evaluation` 使用同一 policy runtime。
-- 使用匹配的现金流、成本、成交时点、XIRR、期末净值、最大回撤、波动率、Sortino 与现金使用率比较策略和固定 DCA。
+- `strategy-evaluation` 直接调用相同 `StrategySpec::evaluate` runtime，新增 `dsl_rsi_opportunity_guard_v1` 研究候选。
+- 候选在决策日只读取 RSI-14：低于 35 时机会桶为 `1.10x`，高于 65 时为 `0.85x`，否则为 `1.00x`；核心桶固定，成交仍在第一条严格更晚的观察价格。
+- 使用匹配的现金流、成本、成交时点、XIRR、期末净值、最大回撤、波动率、Sortino 与现金使用率比较策略和固定 DCA。该候选仅为研究，未变更生产默认策略。
 
 ### PR 7 — 策略 API 与 Web Studio / Strategy API and Web Studio
 
@@ -156,6 +158,6 @@ CAPE、ERP、MA、RSI、VIX、Qwen 情绪和 `TacticalDelay` 是 `CoreOpportunit
 
 ## 8. 当前结论 / Current Decision
 
-策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计与受限 DSL 定义/校验已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 升级为默认生产策略。下一项可执行工作应是 **PR 5：确定性 DSL Runtime**。
+策略契约、Legacy 包装、Fixed DCA、统一 resolver、最小策略版本审计、受限 DSL 定义/校验，以及首个 runtime-backed 历史候选已建立；不继续以 C5/C6/C7 方式搜索 70/20/10 权重，也不把 C1–C4 或 DSL RSI 候选升级为默认生产策略。下一项可执行工作应是 **PR 7：版本化 DSL 存储、验证与只读 API**。
 
-With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 5: deterministic DSL runtime**.
+With this foundation in place, no further C5/C6/C7 weight search will be promoted to production. The next executable work item is **PR 7: versioned DSL storage, validation, and read-only APIs**.

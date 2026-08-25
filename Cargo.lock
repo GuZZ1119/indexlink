@@ -2021,6 +2021,7 @@ dependencies = [
  "rust_decimal",
  "strategy-policy",
  "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -2036,7 +2037,10 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "strategy-dsl",
+ "strategy-policy",
  "thiserror",
+ "time",
 ]
 
 [[package]]

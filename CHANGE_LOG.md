@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### 2026-08-25 CST — PR 5–6
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：确定性 DSL runtime 与统一历史评估研究候选。
+- 涉及文件：
+  - `Cargo.lock`
+  - `crates/strategy-dsl/Cargo.toml`
+  - `crates/strategy-dsl/src/lib.rs`
+  - `crates/strategy-evaluation/Cargo.toml`
+  - `crates/strategy-evaluation/src/lib.rs`
+  - `readme.md`、`readme.en.md`、`STRATEGY_STUDIO_MIGRATION_PLAN.md`
+  - `CHANGE_LOG.md`
+- 变更内容：
+  - `strategy-dsl` 新增无 IO 的确定性解释器：`DslEvidence` 将同一 `as_of` 已解析指标固定为不可重复的白名单快照；`StrategySpec::evaluate` 以首条命中顺序返回 `DslEvaluation` 与通用 `InvestmentRecommendation`。
+  - 对缺失/重复指标、Decimal 算术溢出和调用时周期预算不匹配安全失败；DSL 动作仍只能作用于机会桶，不能生成核心桶否决、网络调用、审计写入或订单。
+  - `strategy-evaluation` 新增 `dsl_rsi_opportunity_guard_v1`：直接调用上述 runtime，在决策日读取 RSI-14，低于 35 时机会桶 `1.10x`、高于 65 时 `0.85x`、否则 `1.00x`；核心桶固定，并保持 `t` 日决策、严格更晚观察日成交及对称成本口径。
+  - 该候选仅用于离线研究和与固定 DCA 的匹配对照；未接入生产 resolver、SQLite、HTTP、scheduler、前端 Studio 或下单路径，未改变任何现有计划的默认策略和执行行为。
+- 验证：
+  - `cargo fmt --all` 通过。
+  - `cargo test -p strategy-dsl --offline` 通过（9 个测试）。
+  - `cargo test -p strategy-evaluation --offline` 通过（9 个测试）。
+  - 其余 workspace、核心领域与 Clippy 验证见本次提交记录。
+
 ### 2026-08-25 CST — PR 4
 
 - 执行模型：GPT-5 Codex。

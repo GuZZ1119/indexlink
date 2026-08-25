@@ -10,8 +10,8 @@
 use std::collections::BTreeMap;
 
 use ai_client::Sentiment;
-use chrono::NaiveDate;
-use core_domain::{Multiplier, Percentile};
+use chrono::{Datelike, NaiveDate};
+use core_domain::{Action, Multiplier, Percentile};
 use decision_engine::{
     evaluate_decision, DecisionConfig, DecisionInput, DecisionSentiment, DecisionSignal,
 };
@@ -23,9 +23,19 @@ use quant_engine::{
     evaluate_fundamental, evaluate_trend, FundamentalConfig, FundamentalSignal,
     FundamentalSnapshot, TrendSignal, TrendSnapshot,
 };
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use rust_decimal::{
+    prelude::{FromPrimitive, ToPrimitive},
+    Decimal,
+};
 use serde::{Deserialize, Serialize};
+use strategy_dsl::{
+    ComparisonOperator, Condition, DslEvidence, IndicatorSpec, LookbackWindow, PolicyAction,
+    StrategyDslRuntimeError, StrategyDslValidationError, StrategyRule, StrategySpec,
+    ValueExpression,
+};
+use strategy_policy::{DecisionContext, PolicyId, PolicyRef, PolicyValidationError, PolicyVersion};
 use thiserror::Error;
+use time::{Date, Month};
 
 const PERIOD_BUDGET: i64 = 1_000;
 const MAX_SINGLE_EXECUTION: i64 = 1_500;
@@ -62,6 +72,18 @@ pub enum EvaluationError {
     /// The two-bucket domain function rejected a fixed baseline configuration.
     #[error(transparent)]
     Plan(#[from] investment_plans::PlanValidationError),
+    /// A versioned DSL strategy definition is invalid.
+    #[error(transparent)]
+    DslValidation(#[from] StrategyDslValidationError),
+    /// The deterministic DSL interpreter rejected an evidence snapshot.
+    #[error(transparent)]
+    DslRuntime(#[from] StrategyDslRuntimeError),
+    /// A strategy policy identifier, version, or context is invalid.
+    #[error(transparent)]
+    Policy(#[from] PolicyValidationError),
+    /// A fixture number cannot be represented by the Decimal-based DSL evidence.
+    #[error("calibration fixture contains an unsupported decimal value")]
+    InvalidDecimal,
 }
 
 /// A complete machine-readable result for calibration-v2.
@@ -290,6 +312,7 @@ struct DecisionMonth {
     decision_date: NaiveDate,
     execution_date: NaiveDate,
     execution_close: f64,
+    rsi14: f64,
     fundamental: FundamentalSignal,
     trend: TrendSignal,
     fallback: DecisionSignal,
@@ -357,6 +380,12 @@ fn strategy_catalog() -> Vec<StrategyDefinition> {
             status: "experimental; predeclared; not a production default".to_owned(),
             mechanical_difference: "Keep the core bucket fixed. Rank only prior directional fundamental scores to set a [0.85, 1.15] opportunity tilt; trend caps only the part above 1.00. Deferred opportunity cash expires after three periods and is forcibly caught up, so it cannot accumulate indefinitely. AI remains explanatory-only.".to_owned(),
         },
+        StrategyDefinition {
+            id: "dsl_rsi_opportunity_guard_v1".to_owned(),
+            label: "DSL RSI opportunity guard / DSL RSI 机会桶守卫".to_owned(),
+            status: "experimental; deterministic runtime-backed; not a production default".to_owned(),
+            mechanical_difference: "Evaluate the saved, restricted strategy-dsl AST in first-match order using only the decision-date RSI-14 evidence: below 35 applies a 1.10 opportunity multiplier, above 65 applies 0.85, otherwise the opportunity bucket remains standard. The core bucket remains fixed and execution uses the next observed trading day.".to_owned(),
+        },
     ]
 }
 
@@ -399,6 +428,7 @@ fn evaluate_asset(asset: &FixtureAsset) -> Result<Vec<DecisionMonth>, Evaluation
             execution_date: NaiveDate::parse_from_str(&current.execution_as_of, "%Y-%m-%d")
                 .map_err(|_| EvaluationError::InvalidDate)?,
             execution_close: current.execution_close,
+            rsi14: current.rsi14,
             fundamental,
             trend,
             fallback,
@@ -445,6 +475,7 @@ fn asset_report(
         trend_continuous_cap_candidate(samples, configuration, &dca)?,
         fundamental_trend_addition_cap_candidate(samples, configuration, &dca)?,
         bounded_budget_with_deadline_candidate(samples, configuration, &dca)?,
+        dsl_rsi_opportunity_candidate(samples, configuration, &dca)?,
     ];
 
     Ok(AssetReport {
@@ -484,6 +515,7 @@ enum ExecutionMode {
     CandidateBoundedContinuous,
     CandidateTrendContinuousCap,
     CandidateFundamentalTrendAdditionCap,
+    CandidateDslRsiOpportunity,
 }
 
 fn simulate(
@@ -495,6 +527,7 @@ fn simulate(
     let maximum = Decimal::new(MAX_SINGLE_EXECUTION, 0);
     let mut opportunity_cash = Decimal::ZERO;
     let mut state = PortfolioState::default();
+    let dsl_strategy = dsl_rsi_opportunity_strategy()?;
     for row in samples {
         state.deposit(row.decision_date, PERIOD_BUDGET as f64);
         let (action, multiplier) = match mode {
@@ -515,6 +548,9 @@ fn simulate(
                     &row.trend,
                 );
                 (multiplier.to_action(), multiplier)
+            }
+            ExecutionMode::CandidateDslRsiOpportunity => {
+                dsl_rsi_opportunity_recommendation(&dsl_strategy, row, budget)?
             }
             _ => (row.fallback.action, row.fallback.multiplier),
         };
@@ -537,6 +573,7 @@ fn simulate(
             ExecutionMode::CandidateFundamentalTrendAdditionCap => {
                 intended.recommended_contribution()
             }
+            ExecutionMode::CandidateDslRsiOpportunity => intended.recommended_contribution(),
         };
         if !matches!(mode, ExecutionMode::FixedDca) {
             opportunity_cash = (opportunity_cash + intended.opportunity_budget()
@@ -548,6 +585,107 @@ fn simulate(
         state.mark_to_market(row.execution_date, row.execution_close);
     }
     Ok(state.metrics(opportunity_cash.to_f64().unwrap_or_default()))
+}
+
+fn dsl_rsi_opportunity_candidate(
+    samples: &[DecisionMonth],
+    configuration: PlanExecutionConfiguration,
+    fixed_dca: &PerformanceMetrics,
+) -> Result<CandidateReport, EvaluationError> {
+    let performance = simulate(
+        samples,
+        configuration,
+        ExecutionMode::CandidateDslRsiOpportunity,
+    )?;
+    let rolling_out_of_sample = (0..samples.len())
+        .step_by(OOS_STEP_MONTHS)
+        .filter_map(|start| samples.get(start..start + OOS_WINDOW_MONTHS))
+        .map(|window| {
+            let candidate = simulate(
+                window,
+                configuration,
+                ExecutionMode::CandidateDslRsiOpportunity,
+            )?;
+            let dca = simulate(window, configuration, ExecutionMode::FixedDca)?;
+            Ok(CandidateRollingWindow {
+                start: window[0].decision_date.to_string(),
+                end: window[window.len() - 1].decision_date.to_string(),
+                months: window.len(),
+                terminal_difference_vs_dca_percent: relative_difference(
+                    candidate.terminal_wealth_usd,
+                    dca.terminal_wealth_usd,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, EvaluationError>>()?;
+    Ok(CandidateReport {
+        id: "dsl_rsi_opportunity_guard_v1".to_owned(),
+        status: "experimental; deterministic runtime-backed; not a production default".to_owned(),
+        rule: "Run the same restricted strategy-dsl runtime that future preview and scheduler integrations will call. At the decision date, RSI-14 < 35 sets a 1.10 opportunity multiplier; RSI-14 > 65 sets 0.85; otherwise no DSL rule matches and the opportunity bucket remains at 1.00. The 70% core bucket is fixed, no rule can emit TacticalDelay, and buys occur at the first strictly later observed close.".to_owned(),
+        terminal_difference_vs_dca_percent: relative_difference(
+            performance.terminal_wealth_usd,
+            fixed_dca.terminal_wealth_usd,
+        ),
+        worst_rolling_window: worst_rolling_window(&rolling_out_of_sample),
+        performance,
+        rolling_out_of_sample,
+        c4_cash_diagnostics: None,
+    })
+}
+
+fn dsl_rsi_opportunity_strategy() -> Result<StrategySpec, EvaluationError> {
+    let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14)?);
+    StrategySpec::new(
+        PolicyRef::new(
+            PolicyId::new("dsl_rsi_opportunity_guard")?,
+            PolicyVersion::new(1)?,
+        ),
+        "DSL RSI opportunity guard",
+        vec![
+            StrategyRule::new(
+                Condition::compare(
+                    ValueExpression::indicator(rsi),
+                    ComparisonOperator::LessThan,
+                    Decimal::new(35, 0),
+                ),
+                PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.10)),
+            ),
+            StrategyRule::new(
+                Condition::compare(
+                    ValueExpression::indicator(rsi),
+                    ComparisonOperator::GreaterThan,
+                    Decimal::new(65, 0),
+                ),
+                PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(0.85)),
+            ),
+        ],
+    )
+    .map_err(EvaluationError::from)
+}
+
+fn dsl_rsi_opportunity_recommendation(
+    strategy: &StrategySpec,
+    row: &DecisionMonth,
+    budget: Decimal,
+) -> Result<(Action, Multiplier), EvaluationError> {
+    let as_of = fixture_date(row.decision_date)?;
+    let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14)?);
+    let evidence = DslEvidence::new([(
+        rsi,
+        Decimal::from_f64(row.rsi14).ok_or(EvaluationError::InvalidDecimal)?,
+    )])?;
+    let context = DecisionContext::new(as_of, budget, evidence)?;
+    let evaluation = strategy.evaluate(&context)?;
+    Ok((
+        evaluation.recommendation().action(),
+        evaluation.recommendation().multiplier(),
+    ))
+}
+
+fn fixture_date(value: NaiveDate) -> Result<Date, EvaluationError> {
+    let month = Month::try_from(value.month() as u8).map_err(|_| EvaluationError::InvalidDate)?;
+    Date::from_calendar_date(value.year(), month, value.day() as u8)
+        .map_err(|_| EvaluationError::InvalidDate)
 }
 
 fn bounded_continuous_candidate(
@@ -1475,6 +1613,38 @@ mod tests {
                 .unwrap();
                 assert_eq!(c3_split.core_contribution(), Decimal::new(700, 0));
                 assert_ne!(c3_multiplier.to_action(), Action::TacticalDelay);
+            }
+        }
+    }
+
+    /// Verify the historical candidate calls the shared DSL interpreter and cannot veto core.
+    #[test]
+    fn dsl_runtime_candidate_preserves_core_on_every_fixture_observation() {
+        let configuration = execution_configuration(Decimal::new(CORE_RATIO, 1)).unwrap();
+        let strategy = dsl_rsi_opportunity_strategy().unwrap();
+        let dataset: FixtureDataset =
+            serde_json::from_str(include_str!("../data/generated/calibration-v2.json")).unwrap();
+
+        for asset in dataset.assets {
+            for sample in evaluate_asset(&asset).unwrap() {
+                let (action, multiplier) = dsl_rsi_opportunity_recommendation(
+                    &strategy,
+                    &sample,
+                    Decimal::new(PERIOD_BUDGET, 0),
+                )
+                .unwrap();
+                let split = TwoBucketContributionSplit::from_decision_with_carry(
+                    Decimal::new(PERIOD_BUDGET, 0),
+                    Decimal::new(MAX_SINGLE_EXECUTION, 0),
+                    configuration,
+                    action,
+                    multiplier,
+                    Decimal::ZERO,
+                )
+                .unwrap();
+
+                assert_eq!(split.core_contribution(), Decimal::new(700, 0));
+                assert_ne!(action, Action::TacticalDelay);
             }
         }
     }

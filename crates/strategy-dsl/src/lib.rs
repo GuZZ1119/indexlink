@@ -4,12 +4,15 @@
 //! 受限、无 IO 的策略 DSL 抽象语法树与校验器。
 //!
 //! 本 crate 只定义可保存、可审阅的策略规则，不读取市场数据、环境变量或数据库，
-//! 也不执行订单。运行时解释器、存储和 HTTP API 属于后续阶段。该边界只允许白名单
-//! 指标与动作，因此不会执行用户代码或任意脚本。
+//! 也不执行订单。运行时只解释已校验的 AST，不读取市场数据、环境变量、数据库或
+//! 网络；存储和 HTTP API 属于后续阶段。该边界只允许白名单指标与动作，因此不会执行
+//! 用户代码或任意脚本。
 
-use core_domain::Multiplier;
+use std::collections::BTreeMap;
+
+use core_domain::{Action, Multiplier};
 use rust_decimal::Decimal;
-use strategy_policy::PolicyRef;
+use strategy_policy::{DecisionContext, InvestmentRecommendation, PolicyRef};
 
 const MAX_NAME_LEN: usize = 120;
 const MAX_RULES: usize = 32;
@@ -58,7 +61,7 @@ impl NonZeroDecimal {
 }
 
 /// DSL 首版允许读取的市场指标。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IndicatorSpec {
     /// 当期可得收盘价。
     ClosePrice,
@@ -272,6 +275,18 @@ impl PolicyAction {
         }
         Ok(())
     }
+
+    fn runtime_action(&self) -> DslRuntimeAction {
+        match self.0 {
+            PolicyActionKind::SetOpportunityFixedAmount(amount) => {
+                DslRuntimeAction::OpportunityFixedAmount(amount)
+            }
+            PolicyActionKind::SetOpportunityMultiplier(multiplier) => {
+                DslRuntimeAction::OpportunityMultiplier(multiplier)
+            }
+            PolicyActionKind::SkipOpportunity => DslRuntimeAction::SkipOpportunity,
+        }
+    }
 }
 
 /// 一个受限条件与单个白名单动作组成的策略规则。
@@ -301,7 +316,7 @@ impl StrategyRule {
     }
 }
 
-/// 可保存、可审阅但尚不可执行的受限策略定义。
+/// 可保存、可审阅且可由确定性解释器执行的受限策略定义。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrategySpec {
     policy: PolicyRef,
@@ -367,6 +382,203 @@ impl StrategySpec {
             .iter()
             .try_for_each(|rule| rule.action.validate_for_budget(budget))
     }
+
+    /// 在已解析的证据上以固定规则顺序执行本策略。
+    ///
+    /// 第一个满足条件的规则生效；没有规则满足时，运行时返回机会桶的标准倍率。该
+    /// 解释器不会读取或写入外部状态，也不会生成 broker 订单。调用方仍必须将返回的
+    /// [`InvestmentRecommendation`] 与核心桶、周期上限、可用现金及审批约束合并。
+    pub fn evaluate(
+        &self,
+        context: &DecisionContext<DslEvidence>,
+    ) -> Result<DslEvaluation, StrategyDslRuntimeError> {
+        self.validate_for_budget(context.scheduled_contribution())?;
+
+        for (index, rule) in self.rules.iter().enumerate() {
+            if rule.condition.matches(context.evidence())? {
+                return Ok(DslEvaluation::from_action(
+                    self.policy.clone(),
+                    context,
+                    Some(index),
+                    rule.action.runtime_action(),
+                ));
+            }
+        }
+
+        Ok(DslEvaluation::from_action(
+            self.policy.clone(),
+            context,
+            None,
+            DslRuntimeAction::StandardOpportunity,
+        ))
+    }
+}
+
+impl ValueExpression {
+    fn evaluate(&self, evidence: &DslEvidence) -> Result<Decimal, StrategyDslRuntimeError> {
+        match &self.0 {
+            ExpressionKind::Constant(value) => Ok(*value),
+            ExpressionKind::Indicator(indicator) => evidence.value(*indicator),
+            ExpressionKind::Add(left, right) => left
+                .evaluate(evidence)?
+                .checked_add(right.evaluate(evidence)?)
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow),
+            ExpressionKind::Subtract(left, right) => left
+                .evaluate(evidence)?
+                .checked_sub(right.evaluate(evidence)?)
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow),
+            ExpressionKind::Multiply(expression, factor) => expression
+                .evaluate(evidence)?
+                .checked_mul(*factor)
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow),
+            ExpressionKind::Divide(expression, divisor) => expression
+                .evaluate(evidence)?
+                .checked_div(divisor.value())
+                .ok_or(StrategyDslRuntimeError::ArithmeticOverflow),
+        }
+    }
+}
+
+impl Condition {
+    fn matches(&self, evidence: &DslEvidence) -> Result<bool, StrategyDslRuntimeError> {
+        match &self.0 {
+            ConditionKind::Comparison {
+                expression,
+                operator,
+                threshold,
+            } => {
+                let value = expression.evaluate(evidence)?;
+                Ok(match operator {
+                    ComparisonOperator::GreaterThan => value > *threshold,
+                    ComparisonOperator::GreaterThanOrEqual => value >= *threshold,
+                    ComparisonOperator::LessThan => value < *threshold,
+                    ComparisonOperator::LessThanOrEqual => value <= *threshold,
+                })
+            }
+            ConditionKind::All(conditions) => {
+                for condition in conditions {
+                    if !condition.matches(evidence)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            ConditionKind::Any(conditions) => {
+                for condition in conditions {
+                    if condition.matches(evidence)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// 一组与策略声明完全匹配的已解析指标数值。
+///
+/// 证据必须由应用层或研究器在 `as_of` 时点之前准备。运行时只读取该快照，因此不会
+/// 隐式引入网络、数据库或未来数据。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DslEvidence {
+    values: BTreeMap<IndicatorSpec, Decimal>,
+}
+
+impl DslEvidence {
+    /// 从白名单指标及其同一时点数值构造证据快照。
+    ///
+    /// 同一指标重复出现会被拒绝，避免调用方依赖插入顺序覆盖证据。
+    pub fn new(
+        values: impl IntoIterator<Item = (IndicatorSpec, Decimal)>,
+    ) -> Result<Self, StrategyDslRuntimeError> {
+        let mut normalized = BTreeMap::new();
+        for (indicator, value) in values {
+            if normalized.insert(indicator, value).is_some() {
+                return Err(StrategyDslRuntimeError::DuplicateIndicator);
+            }
+        }
+        Ok(Self { values: normalized })
+    }
+
+    /// 返回某个已提供指标的快照值。
+    pub fn value(&self, indicator: IndicatorSpec) -> Result<Decimal, StrategyDslRuntimeError> {
+        self.values
+            .get(&indicator)
+            .copied()
+            .ok_or(StrategyDslRuntimeError::MissingIndicator)
+    }
+}
+
+/// 解释器实际命中的、只影响机会桶的动作。
+#[derive(Debug, Clone, PartialEq)]
+pub enum DslRuntimeAction {
+    /// 用固定金额建议机会桶投入；实际金额仍受计划执行约束。
+    OpportunityFixedAmount(Decimal),
+    /// 用有界倍率建议机会桶投入。
+    OpportunityMultiplier(Multiplier),
+    /// 跳过当前机会桶；核心桶不受影响。
+    SkipOpportunity,
+    /// 没有匹配规则时的标准机会桶投入。
+    StandardOpportunity,
+}
+
+impl DslRuntimeAction {
+    fn action_and_multiplier(&self) -> (Action, Multiplier) {
+        match self {
+            Self::OpportunityFixedAmount(_) | Self::StandardOpportunity => {
+                (Action::Standard, Multiplier::new_clamped(1.0))
+            }
+            Self::OpportunityMultiplier(multiplier) => (multiplier.to_action(), *multiplier),
+            Self::SkipOpportunity => (Action::Skip, Multiplier::MIN),
+        }
+    }
+}
+
+/// 一次 DSL 解释的确定性结果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DslEvaluation {
+    recommendation: InvestmentRecommendation,
+    matched_rule_index: Option<usize>,
+    action: DslRuntimeAction,
+}
+
+impl DslEvaluation {
+    fn from_action(
+        policy: PolicyRef,
+        context: &DecisionContext<DslEvidence>,
+        matched_rule_index: Option<usize>,
+        action: DslRuntimeAction,
+    ) -> Self {
+        let (recommendation_action, multiplier) = action.action_and_multiplier();
+        Self {
+            recommendation: InvestmentRecommendation::from_context(
+                policy,
+                context,
+                recommendation_action,
+                multiplier,
+            ),
+            matched_rule_index,
+            action,
+        }
+    }
+
+    /// 返回策略契约可消费的通用推荐。
+    #[must_use]
+    pub fn recommendation(&self) -> &InvestmentRecommendation {
+        &self.recommendation
+    }
+
+    /// 返回首条命中的规则位置；没有命中时为 `None`。
+    #[must_use]
+    pub fn matched_rule_index(&self) -> Option<usize> {
+        self.matched_rule_index
+    }
+
+    /// 返回不会影响核心桶的具体 DSL 动作。
+    #[must_use]
+    pub fn action(&self) -> &DslRuntimeAction {
+        &self.action
+    }
 }
 
 fn normalize_name(value: String) -> Result<String, StrategyDslValidationError> {
@@ -413,10 +625,28 @@ pub enum StrategyDslValidationError {
     InvalidBudget,
 }
 
+/// 已校验 DSL 在已解析证据上执行失败。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StrategyDslRuntimeError {
+    /// 当前证据快照没有策略表达式所需的白名单指标。
+    #[error("strategy evidence is missing a required indicator")]
+    MissingIndicator,
+    /// 同一指标在一份证据快照中被提供多次。
+    #[error("strategy evidence contains a duplicate indicator")]
+    DuplicateIndicator,
+    /// 有界 AST 的 Decimal 运算超出可表示范围。
+    #[error("strategy expression arithmetic overflowed")]
+    ArithmeticOverflow,
+    /// 调用时的周期预算无法满足已保存 DSL 的固定金额约束。
+    #[error(transparent)]
+    Validation(#[from] StrategyDslValidationError),
+}
+
 #[cfg(test)]
 mod tests {
     use core_domain::Multiplier;
     use strategy_policy::{PolicyId, PolicyVersion};
+    use time::{Date, Month};
 
     use super::*;
 
@@ -435,6 +665,15 @@ mod tests {
             ComparisonOperator::LessThan,
             Decimal::new(30, 0),
         )
+    }
+
+    fn context(evidence: DslEvidence) -> DecisionContext<DslEvidence> {
+        DecisionContext::new(
+            Date::from_calendar_date(2026, Month::January, 15).unwrap(),
+            Decimal::new(100, 0),
+            evidence,
+        )
+        .unwrap()
     }
 
     /// Verify a bounded, white-listed rule can be saved and checked against a plan budget.
@@ -556,5 +795,88 @@ mod tests {
         let action = PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.2));
         assert!(action.is_opportunity_only());
         assert!(PolicyAction::skip_opportunity().is_opportunity_only());
+    }
+
+    /// Verify the interpreter uses first-match order and returns a policy recommendation.
+    #[test]
+    fn evaluates_the_first_matching_rule_deterministically() {
+        let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14).unwrap());
+        let strategy = StrategySpec::new(
+            policy(),
+            "Ordered RSI rules",
+            vec![
+                StrategyRule::new(
+                    Condition::compare(
+                        ValueExpression::indicator(rsi),
+                        ComparisonOperator::LessThan,
+                        Decimal::new(40, 0),
+                    ),
+                    PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.2)),
+                ),
+                StrategyRule::new(condition(), PolicyAction::skip_opportunity()),
+            ],
+        )
+        .unwrap();
+        let evaluation = strategy
+            .evaluate(&context(
+                DslEvidence::new([(rsi, Decimal::new(25, 0))]).unwrap(),
+            ))
+            .unwrap();
+
+        assert_eq!(evaluation.matched_rule_index(), Some(0));
+        assert_eq!(evaluation.recommendation().multiplier().value(), 1.2);
+        assert_eq!(evaluation.recommendation().action(), Action::Overweight);
+        assert_eq!(
+            evaluation.action(),
+            &DslRuntimeAction::OpportunityMultiplier(Multiplier::new_clamped(1.2))
+        );
+    }
+
+    /// Verify absent evidence fails closed instead of silently substituting an indicator value.
+    #[test]
+    fn rejects_execution_when_required_evidence_is_missing() {
+        let strategy = StrategySpec::new(
+            policy(),
+            "Required RSI",
+            vec![StrategyRule::new(
+                condition(),
+                PolicyAction::set_opportunity_multiplier(Multiplier::new_clamped(1.1)),
+            )],
+        )
+        .unwrap();
+
+        assert_eq!(
+            strategy.evaluate(&context(DslEvidence::new([]).unwrap())),
+            Err(StrategyDslRuntimeError::MissingIndicator)
+        );
+    }
+
+    /// Verify a no-match result leaves the opportunity bucket at its standard multiplier.
+    #[test]
+    fn defaults_to_standard_opportunity_when_no_rule_matches() {
+        let rsi = IndicatorSpec::RelativeStrengthIndex(LookbackWindow::new(14).unwrap());
+        let strategy = StrategySpec::new(
+            policy(),
+            "No match default",
+            vec![StrategyRule::new(
+                Condition::compare(
+                    ValueExpression::indicator(rsi),
+                    ComparisonOperator::LessThan,
+                    Decimal::new(30, 0),
+                ),
+                PolicyAction::skip_opportunity(),
+            )],
+        )
+        .unwrap();
+        let evaluation = strategy
+            .evaluate(&context(
+                DslEvidence::new([(rsi, Decimal::new(55, 0))]).unwrap(),
+            ))
+            .unwrap();
+
+        assert_eq!(evaluation.matched_rule_index(), None);
+        assert_eq!(evaluation.recommendation().action(), Action::Standard);
+        assert_eq!(evaluation.recommendation().multiplier().value(), 1.0);
+        assert_eq!(evaluation.action(), &DslRuntimeAction::StandardOpportunity);
     }
 }
