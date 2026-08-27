@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-27 CST — Strategy Studio 本地开发代理修正
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：前端开发环境 API 联调修复。
+- 涉及文件：`apps/web/vite.config.ts`、`CHANGE_LOG.md`。
+- 变更内容：为 `/strategies` 增加 Vite 到本机 Rust API `127.0.0.1:8080` 的代理，确保 Strategy Studio 的列表、保存、模拟、准入与激活请求不会错误落在前端 `5173`。
+- 验证：`pnpm --dir apps/web build`、`git diff --check`。
+
 ### 2026-08-25 CST — DSL 策略固定样本准入与激活门槛
 
 - 执行模型：GPT-5 Codex。

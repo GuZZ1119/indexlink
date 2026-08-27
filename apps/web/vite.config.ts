@@ -15,6 +15,7 @@ export default defineConfig({
       '/market-data': 'http://127.0.0.1:8080',
       '/paper-portfolio': 'http://127.0.0.1:8080',
       '/paper-performance': 'http://127.0.0.1:8080',
+      '/strategies': 'http://127.0.0.1:8080',
     },
   },
   resolve: {
