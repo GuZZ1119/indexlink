@@ -181,6 +181,15 @@ pub struct CompleteDecisionRecord {
     pub summary: String,
 }
 
+/// Broker order intent atomically attached to an existing approval record before submission.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AttachBrokerOrderRequest {
+    /// Validated paper-order request snapshot without credentials.
+    pub broker_order_request: Value,
+    /// User-facing state explaining that the broker outcome is pending.
+    pub summary: String,
+}
+
 /// Query options for listing decision records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecisionRecordListQuery {
@@ -267,6 +276,17 @@ impl CompleteDecisionRecord {
     }
 }
 
+impl AttachBrokerOrderRequest {
+    /// Normalize and validate the persisted intent before the broker side effect starts.
+    pub fn normalize(self) -> Result<Self, DecisionRecordValidationError> {
+        validate_snapshot(&self.broker_order_request, "broker_order_request")?;
+        Ok(Self {
+            summary: normalize_summary(self.summary)?,
+            ..self
+        })
+    }
+}
+
 /// Decision record validation error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecisionRecordValidationError {
@@ -347,6 +367,15 @@ pub trait DecisionRecordRepository: Send + Sync {
         input: CompleteDecisionRecord,
     ) -> Result<DecisionRecord, DecisionRecordRepositoryError>;
 
+    /// Atomically attach a broker request only when the record has not entered an order flow.
+    async fn attach_broker_order_request(
+        &self,
+        _id: Uuid,
+        _input: AttachBrokerOrderRequest,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
     /// List decision records for one investment plan.
     async fn list_by_plan(
         &self,
@@ -399,6 +428,18 @@ impl DecisionRecordService {
     ) -> Result<DecisionRecord, DecisionRecordApplicationError> {
         self.repository
             .complete_broker_order(id, input.normalize()?)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Claim an approval record for a single broker submission by persisting its intent first.
+    pub async fn attach_broker_order_request(
+        &self,
+        id: Uuid,
+        input: AttachBrokerOrderRequest,
+    ) -> Result<DecisionRecord, DecisionRecordApplicationError> {
+        self.repository
+            .attach_broker_order_request(id, input.normalize()?)
             .await
             .map_err(Into::into)
     }

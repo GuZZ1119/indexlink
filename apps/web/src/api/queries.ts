@@ -22,6 +22,7 @@ import type {
   StrategySpecDocument,
   StrategyAdmissionReport,
   StrategyValidationResponse,
+  UpdateInvestmentPlanRequest,
 } from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -78,6 +79,11 @@ export function fetchPlans(): Promise<InvestmentPlan[]> {
 /** Create one normalized investment plan through the Rust API. */
 export function createPlan(input: CreateInvestmentPlanRequest): Promise<InvestmentPlan> {
   return request('/investment-plans', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/** Update one existing plan without changing its symbol, currency, or schedule kind. */
+export function updatePlan(planId: string, input: UpdateInvestmentPlanRequest): Promise<InvestmentPlan> {
+  return request(`/investment-plans/${encodeURIComponent(planId)}`, { method: 'PATCH', body: JSON.stringify(input) })
 }
 
 /** List immutable restricted strategy versions for the Strategy Studio. */
@@ -211,6 +217,14 @@ export function fetchDecisionRecord(id: string): Promise<DecisionRecord> {
   return request(`/decisions/${id}`)
 }
 
+/** Confirm the immutable approval record and submit its audited paper order once. */
+export function approveDecisionPaperOrder(id: string, idempotencyKey: string) {
+  return request(`/decisions/${encodeURIComponent(id)}/approve-paper-order`, {
+    method: 'POST',
+    body: JSON.stringify({ idempotency_key: idempotencyKey }),
+  })
+}
+
 /** React Query hook for live plan data. */
 export function usePlans() {
   return useQuery({ queryKey: ['plans'], queryFn: fetchPlans })
@@ -273,6 +287,15 @@ export function useDeletePlan() {
   })
 }
 
+/** Update plan configuration then refresh all plan-backed views. */
+export function useUpdatePlan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ planId, input }: { planId: string; input: UpdateInvestmentPlanRequest }) => updatePlan(planId, input),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['plans'] }) },
+  })
+}
+
 /** React Query hook for the selected plan's decision history. */
 export function useDecisionRecords(planId: string | null) {
   return useQuery({
@@ -288,5 +311,19 @@ export function useDecisionRecord(id: string | null) {
     queryKey: ['decision-record', id],
     queryFn: () => fetchDecisionRecord(id!),
     enabled: id !== null,
+  })
+}
+
+/** Submit a human-approved paper order and refresh its immutable audit record. */
+export function useApproveDecisionPaperOrder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, idempotencyKey }: { id: string; idempotencyKey: string }) => approveDecisionPaperOrder(id, idempotencyKey),
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ['decision-record', variables.id] })
+      await queryClient.invalidateQueries({ queryKey: ['decision-records'] })
+      await queryClient.invalidateQueries({ queryKey: ['paper-portfolio'] })
+      await queryClient.invalidateQueries({ queryKey: ['actual-performance'] })
+    },
   })
 }

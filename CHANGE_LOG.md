@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-28 CST — V1.1 计划配置、双桶展示与审批下单闭环
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：前后端联调、安全审批执行与审计一致性修复。
+- 涉及文件：`apps/web/src/{api/{queries.ts,types.ts},pages/{dashboard,decisions,plans}/index.tsx}`、`crates/api/src/routes/{decision_preview.rs,decision_records.rs}`、`crates/decision-records/src/lib.rs`、`crates/storage/src/sqlite_decision_records.rs`、`API_MANAGEMENT.md`、`CHANGE_LOG.md`。
+- 变更内容：Dashboard 不再提交会被服务端忽略的临时双桶比例，改为只读显示已持久化计划配置，并补足推荐总额、核心/机会金额、机会倍率、滚存、现金策略与审批状态。Plans 支持创建及编辑多执行日、核心/机会桶、风险模式、现金滚存/上限、周期执行上限和启停；计划的周期类型、标的与币种仍属于账本口径，编辑时明确要求创建新计划而非静默变更。新增 `POST /decisions/:id/approve-paper-order`：仅审批模式且 `due` 的既有存证可提交，金额仅取自不可变审计快照；SQLite 先原子持久化订单意图，再调用 paper-only broker，并阻止重复确认。审批计划的自动 Preview 不再提前写入订单意图或直接下单，前端改为在决策详情确认同一条存证。
+- 验证：`cargo fmt --all -- --check`、`cargo test -p decision-records -p indexlink-storage -p indexlink-api --lib`、`cargo test -p core-domain`、`cargo clippy -p indexlink-api -p decision-records -p indexlink-storage --all-targets --all-features -- -D warnings`、`pnpm --dir apps/web build`、`git diff --check` 均通过。
+
 ### 2026-08-27 CST — 市场数据、应用状态与优雅关闭覆盖率补全
 
 - 执行模型：GPT-5 Codex。

@@ -2,9 +2,9 @@
 
 use async_trait::async_trait;
 use decision_records::{
-    CompleteDecisionRecord, CreateDecisionRecord, DecisionExecutionStatus, DecisionPolicyEvidence,
-    DecisionRecord, DecisionRecordListQuery, DecisionRecordRepository,
-    DecisionRecordRepositoryError,
+    AttachBrokerOrderRequest, CompleteDecisionRecord, CreateDecisionRecord,
+    DecisionExecutionStatus, DecisionPolicyEvidence, DecisionRecord, DecisionRecordListQuery,
+    DecisionRecordRepository, DecisionRecordRepositoryError,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -42,7 +42,16 @@ const GET_RECORD_SQL: &str = concat!(
     "FROM decision_records WHERE id = ?1"
 );
 const COMPLETE_BROKER_ORDER_SQL: &str = concat!(
-    "UPDATE decision_records SET broker_order_ack = ?1, summary = ?2 WHERE id = ?3 ",
+    "UPDATE decision_records SET broker_order_ack = ?1, summary = ?2 ",
+    "WHERE id = ?3 AND broker_order_request IS NOT NULL AND broker_order_ack IS NULL ",
+    "RETURNING id, plan_id, symbol, currency, execution_status, planned_contribution, ",
+    "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary, created_at"
+);
+const ATTACH_BROKER_ORDER_REQUEST_SQL: &str = concat!(
+    "UPDATE decision_records SET broker_order_request = ?1, summary = ?2 ",
+    "WHERE id = ?3 AND broker_order_request IS NULL AND broker_order_ack IS NULL ",
     "RETURNING id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
     "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
@@ -128,6 +137,25 @@ impl DecisionRecordRepository for SqliteDecisionRecordRepository {
         let input = input.normalize()?;
         let row = sqlx::query(COMPLETE_BROKER_ORDER_SQL)
             .bind(input.broker_order_ack.to_string())
+            .bind(input.summary)
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?
+            .ok_or(DecisionRecordRepositoryError::NotFound)?;
+
+        record_from_row(row)
+    }
+
+    /// Persist an approval-order intent exactly once before contacting the broker.
+    async fn attach_broker_order_request(
+        &self,
+        id: Uuid,
+        input: AttachBrokerOrderRequest,
+    ) -> Result<DecisionRecord, DecisionRecordRepositoryError> {
+        let input = input.normalize()?;
+        let row = sqlx::query(ATTACH_BROKER_ORDER_REQUEST_SQL)
+            .bind(input.broker_order_request.to_string())
             .bind(input.summary)
             .bind(id.to_string())
             .fetch_optional(&self.pool)
@@ -449,7 +477,11 @@ mod tests {
     async fn rejects_partial_policy_evidence_at_the_schema_boundary() {
         let (repository, plans) = repositories().await;
         let created = repository
-            .create(input(create_plan(&plans).await))
+            .create(CreateDecisionRecord {
+                broker_order_request: None,
+                broker_order_ack: None,
+                ..input(create_plan(&plans).await)
+            })
             .await
             .unwrap();
         assert_eq!(created.policy_evidence, None);
@@ -467,14 +499,31 @@ mod tests {
         );
     }
 
-    /// Verify SQLite updates only the broker completion fields of an existing record.
+    /// Verify SQLite atomically claims one approval order before recording its acknowledgement.
     #[tokio::test]
     async fn completes_persisted_broker_order() {
         let (repository, plans) = repositories().await;
         let created = repository
-            .create(input(create_plan(&plans).await))
+            .create(CreateDecisionRecord {
+                broker_order_request: None,
+                broker_order_ack: None,
+                ..input(create_plan(&plans).await)
+            })
             .await
             .unwrap();
+
+        let claimed = repository
+            .attach_broker_order_request(
+                created.id,
+                AttachBrokerOrderRequest {
+                    broker_order_request: json!({"side": "buy", "quantity": "1"}),
+                    summary: "paper order pending".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.broker_order_ack, None);
+        assert!(claimed.broker_order_request.is_some());
 
         let completed = repository
             .complete_broker_order(
@@ -493,6 +542,18 @@ mod tests {
         );
         assert_eq!(completed.summary, "paper order accepted");
         assert_eq!(completed.execution_snapshot, created.execution_snapshot);
+        assert_eq!(
+            repository
+                .attach_broker_order_request(
+                    created.id,
+                    AttachBrokerOrderRequest {
+                        broker_order_request: json!({"side": "buy", "quantity": "1"}),
+                        summary: "duplicate".to_owned(),
+                    },
+                )
+                .await,
+            Err(DecisionRecordRepositoryError::NotFound)
+        );
         assert_eq!(
             repository
                 .complete_broker_order(
@@ -589,6 +650,7 @@ mod tests {
             LIST_RECORDS_BY_PLAN_SQL,
             GET_RECORD_SQL,
             COMPLETE_BROKER_ORDER_SQL,
+            ATTACH_BROKER_ORDER_REQUEST_SQL,
         ] {
             assert!(!query.contains('$'));
         }

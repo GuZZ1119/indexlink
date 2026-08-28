@@ -63,8 +63,6 @@ export default function DashboardPage() {
   const { data: plans = [], isPending: plansPending, error: plansError } = usePlans()
   const { selectedPlanId } = useSnapshot(uiStore)
   const queryClient = useQueryClient()
-  const [coreRatio, setCoreRatio] = useState('0.80')
-  const [opportunityRatio, setOpportunityRatio] = useState('0.20')
   const [submitPaperOrder, setSubmitPaperOrder] = useState(false)
   const [quantity, setQuantity] = useState('1.00')
   const [result, setResult] = useState<DecisionPreviewResponse | null>(null)
@@ -82,6 +80,7 @@ export default function DashboardPage() {
     () => plans.find((plan) => plan.id === selectedPlanId) ?? null,
     [plans, selectedPlanId],
   )
+  const isApprovalPlan = selectedPlan?.execution_configuration.risk_mode === 'approval'
   const { data: decisionRecords = [], error: decisionRecordsError } = useDecisionRecords(selectedPlan?.id ?? null)
 
   const decisionMutation = useMutation({
@@ -90,11 +89,7 @@ export default function DashboardPage() {
         throw new ApiRequestError('select a plan before running a decision')
       }
       const preview = await previewAutomaticDecision(selectedPlan.id, {
-        bucket_allocation: {
-          core_ratio: coreRatio,
-          opportunity_ratio: opportunityRatio,
-        },
-        ...(submitPaperOrder
+        ...(submitPaperOrder && !isApprovalPlan
           ? {
               paper_order: {
                 idempotency_key: paperOrderKey(),
@@ -215,7 +210,7 @@ export default function DashboardPage() {
             planReady={selectedPlan !== null}
             signalReady={hasSignalInput}
             result={result}
-            paperOrderRequested={submitPaperOrder}
+            paperOrderRequested={submitPaperOrder && !isApprovalPlan}
           />
           <label className="grid gap-1.5 text-sm font-medium">
             {t('live.decision.plan')}
@@ -243,19 +238,7 @@ export default function DashboardPage() {
             </p>
           )}
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-1.5 text-sm font-medium">
-              {t('live.decision.coreRatio')}
-              <Input value={coreRatio} onChange={(event) => setCoreRatio(event.target.value)} />
-            </label>
-            <label className="grid gap-1.5 text-sm font-medium">
-              {t('live.decision.opportunityRatio')}
-              <Input
-                value={opportunityRatio}
-                onChange={(event) => setOpportunityRatio(event.target.value)}
-              />
-            </label>
-          </div>
+          {selectedPlan && <PlanExecutionConfig plan={selectedPlan} />}
         </CardContent>
       </Card>
 
@@ -308,15 +291,19 @@ export default function DashboardPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={submitPaperOrder}
-              onChange={(event) => setSubmitPaperOrder(event.target.checked)}
-            />
-            {t('live.decision.submitPaper')}
-          </label>
-          {submitPaperOrder && (
+          {isApprovalPlan ? (
+            <p className="max-w-xl text-sm text-muted-foreground">当前计划为人工审批模式：这里仅生成决策存证。请到“决策历史”打开对应记录并确认模拟下单，以确保订单与同一份审计存证一一对应。</p>
+          ) : (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={submitPaperOrder}
+                onChange={(event) => setSubmitPaperOrder(event.target.checked)}
+              />
+              {t('live.decision.submitPaper')}
+            </label>
+          )}
+          {submitPaperOrder && !isApprovalPlan && (
             <label className="grid gap-1.5 text-sm font-medium">
               {t('live.decision.quantity')}
               <Input value={quantity} onChange={(event) => setQuantity(event.target.value)} />
@@ -338,7 +325,7 @@ export default function DashboardPage() {
         </p>
       )}
 
-      {result && <DecisionResultCard result={result} paperOrderRequested={submitPaperOrder} />}
+      {result && <DecisionResultCard result={result} paperOrderRequested={submitPaperOrder && !isApprovalPlan} />}
     </div>
   )
 }
@@ -369,6 +356,19 @@ function latestOverviewDecision(
     summary: record.summary,
     marketSentiment: evidenceFromSnapshot(record.sentiment_snapshot),
   }
+}
+
+/** Display the persisted plan configuration that the server will actually execute. */
+function PlanExecutionConfig({ plan }: { plan: InvestmentPlan }) {
+  const config = plan.execution_configuration
+  return (
+    <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+      <OverviewFact label="核心桶" value={`${config.bucket_allocation.core_ratio}（固定）`} />
+      <OverviewFact label="机会桶" value={`${config.bucket_allocation.opportunity_ratio}（策略调整）`} />
+      <OverviewFact label="执行模式" value={config.risk_mode === 'approval' ? '人工审批' : config.risk_mode === 'autopilot' ? '自动执行' : '固定定投'} />
+      <OverviewFact label="机会现金" value={config.opportunity_cash_policy} />
+    </div>
+  )
 }
 
 /** Return structured evidence only when a persisted snapshot has every required field. */
@@ -1169,10 +1169,15 @@ function DecisionResultCard({
           />
         </div>
         {result.execution.bucket_split && (
-          <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-            {t('live.decision.bucketSplit')}: {t('live.decision.coreBucket')} {result.execution.bucket_split.core_contribution} {result.execution.currency}
-            {' · '}{t('live.decision.opportunityBucket')} {result.execution.bucket_split.opportunity_contribution}{' '}
-            {result.execution.currency}
+          <div className="grid gap-3 rounded-lg border bg-muted/30 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <Metric label="核心桶（固定）" value={formatCurrency(Number(result.execution.bucket_split.core_contribution), result.execution.currency)} />
+            <Metric label="机会桶建议" value={formatCurrency(Number(result.execution.bucket_split.opportunity_contribution), result.execution.currency)} />
+            <Metric label="机会桶倍率" value={`${result.execution.bucket_split.opportunity_multiplier}x`} />
+            <Metric label="本次建议总额" value={formatCurrency(Number(result.execution.bucket_split.recommended_contribution), result.execution.currency)} />
+            <Metric label="待处理机会现金" value={formatCurrency(Number(result.execution.bucket_split.carried_opportunity_cash), result.execution.currency)} />
+            <Metric label="本期未投入机会额" value={formatCurrency(Number(result.execution.bucket_split.unallocated_opportunity_contribution), result.execution.currency)} />
+            <Metric label="现金策略" value={result.execution.bucket_split.opportunity_cash_policy} />
+            <Metric label="执行授权" value={result.execution.bucket_split.requires_approval ? '等待人工审批' : '可自动提交'} />
           </div>
         )}
         <DecisionExplanation decision={result.decision} marketSentiment={result.market_sentiment} />

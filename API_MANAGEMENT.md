@@ -339,6 +339,12 @@ GET /investment-plans/00000000-0000-0000-0000-000000000001/decisions?limit=20
 
 按 ID 查询单条 decision record。不存在时返回 `404 not_found`。
 
+#### `POST /decisions/:id/approve-paper-order`
+
+仅允许对已持久化且状态为 `due` 的 `approval` 模式 decision record 进行一次人工确认模拟下单。请求体只接受非空 `idempotency_key`；服务端从该记录的不可变双桶快照读取推荐金额，再以本机最新可信价格换算整股数量，**不会重新运行 70/20/10、Qwen 或接受调用方自填金额/数量**。
+
+订单意图会先原子写入该 decision record，再调用 paper-only broker；重复确认会返回 `400 bad_request`，避免同一存证重复下单。网络超时返回 `409 order_outcome_unknown`，客户端不得自动重试。
+
 ## Market Sentiment API
 
 ### 阿里云 Qwen Market Sentiment API
@@ -515,8 +521,9 @@ OPEND_SMOKE_CONFIRM=submit-paper-order \
 9. `POST /signals/trend/preview`
 10. `GET /investment-plans/:id/decisions`
 11. `GET /decisions/:id`
-12. `GET /paper-performance/actual`
-13. `GET /market-data/holdings?period=1y`
+12. `POST /decisions/:id/approve-paper-order`
+13. `GET /paper-performance/actual`
+14. `GET /market-data/holdings?period=1y`
 14. `GET /paper-performance/historical-backtest`
 15. `GET /strategies`
 16. `GET /strategies/:policy_id/:policy_version`

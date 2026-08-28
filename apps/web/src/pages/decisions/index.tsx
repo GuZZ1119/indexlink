@@ -3,8 +3,9 @@ import { Link, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useSnapshot } from 'valtio'
 
-import { useDecisionRecord, useDecisionRecords, usePlans } from '@/api/queries'
+import { useApproveDecisionPaperOrder, useDecisionRecord, useDecisionRecords, usePlans } from '@/api/queries'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { actionBadgeClass } from '@/lib/decision'
 import { cn } from '@/lib/utils'
@@ -19,6 +20,7 @@ export default function DecisionsPage() {
   const { data: plans = [] } = usePlans()
   const history = useDecisionRecords(selectedPlanId)
   const record = useDecisionRecord(id ?? null)
+  const approvePaperOrder = useApproveDecisionPaperOrder()
 
   if (id) {
     if (record.isPending) {
@@ -46,7 +48,7 @@ export default function DecisionsPage() {
               <SignalEvidence title={t('live.history.trend')} snapshot={record.data.trend_snapshot} />
             </div>
             {record.data.sentiment_snapshot && <SentimentEvidence value={record.data.sentiment_snapshot} />}
-            <OrderEvidence record={record.data} />
+            <OrderEvidence record={record.data} approvePaperOrder={approvePaperOrder} />
           </CardContent>
         </Card>
       </div>
@@ -212,8 +214,16 @@ function SignalEvidence({ title, snapshot }: { title: string; snapshot: Record<s
 }
 
 /** Render the paper-order intent and acknowledgement as readable evidence. */
-function OrderEvidence({ record }: { record: DecisionRecord }) {
-  if (!record.broker_order_request && !record.broker_order_ack) return null
+function OrderEvidence({
+  record,
+  approvePaperOrder,
+}: {
+  record: DecisionRecord
+  approvePaperOrder: ReturnType<typeof useApproveDecisionPaperOrder>
+}) {
+  const approvalRequired = readBoolean(record.execution_snapshot, 'execution', 'bucket_split', 'requires_approval')
+  const canApprove = approvalRequired && !record.broker_order_request && !record.broker_order_ack && record.execution_status === 'due'
+  if (!record.broker_order_request && !record.broker_order_ack && !canApprove) return null
   return (
     <section className="space-y-2 rounded-lg border p-4 text-sm">
       <h2 className="font-semibold">订单与回执</h2>
@@ -221,6 +231,18 @@ function OrderEvidence({ record }: { record: DecisionRecord }) {
       {record.broker_order_ack
         ? <p className="text-semantic-positive">回执：{record.broker_order_ack.status} · {record.broker_order_ack.order_id} · {record.broker_order_ack.environment}</p>
         : <p className="text-muted-foreground">尚未提交订单；本存证仅记录本次决策。</p>}
+      {canApprove && (
+        <div className="space-y-2 pt-2">
+          <p className="text-xs text-muted-foreground">审批模式：将严格使用这份存证中的推荐金额，不会重新计算信号或金额。</p>
+          <Button
+            disabled={approvePaperOrder.isPending}
+            onClick={() => approvePaperOrder.mutate({ id: record.id, idempotencyKey: globalThis.crypto.randomUUID() })}
+          >
+            {approvePaperOrder.isPending ? '正在提交模拟订单…' : '确认模拟下单'}
+          </Button>
+          {approvePaperOrder.error && <p className="text-xs text-destructive">{approvePaperOrder.error instanceof Error ? approvePaperOrder.error.message : 'request failed'}</p>}
+        </div>
+      )}
     </section>
   )
 }
@@ -229,6 +251,16 @@ function OrderEvidence({ record }: { record: DecisionRecord }) {
 function readText(value: Record<string, unknown> | undefined, key: string): string | undefined {
   const field = value?.[key]
   return typeof field === 'string' || typeof field === 'number' ? String(field) : undefined
+}
+
+/** Read a nested boolean from a trusted audit snapshot for display-only gating. */
+function readBoolean(value: Record<string, unknown>, ...keys: string[]): boolean {
+  let current: unknown = value
+  for (const key of keys) {
+    if (typeof current !== 'object' || current === null || Array.isArray(current)) return false
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current === true
 }
 
 /** Narrow one unknown JSON value to an object for display-only extraction. */

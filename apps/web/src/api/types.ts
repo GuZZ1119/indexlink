@@ -95,13 +95,24 @@ export interface InvestmentPlan {
   symbol: string
   base_contribution: string
   currency: string
-  schedule_kind: 'monthly'
+  schedule_kind: 'monthly' | 'weekly'
   schedule_day: number
+  schedule_days: number[]
   policy: PolicyReference
+  execution_configuration: PlanExecutionConfiguration
   max_single_execution: string
   is_active: boolean
   created_at: string
   updated_at: string
+}
+
+/** Persisted core/opportunity allocation and execution guardrails for one plan. */
+export interface PlanExecutionConfiguration {
+  bucket_allocation: { core_ratio: string; opportunity_ratio: string }
+  risk_mode: 'fixed' | 'autopilot' | 'approval'
+  opportunity_cash_policy: 'expire_each_period' | 'carry_forward' | 'carry_with_cap'
+  opportunity_cash_cap?: string
+  period_execution_limit?: string
 }
 
 /** Payload accepted when creating an investment plan. */
@@ -110,11 +121,20 @@ export interface CreateInvestmentPlanRequest {
   symbol: string
   base_contribution: string
   currency: string
-  schedule_kind: 'monthly'
+  schedule_kind: 'monthly' | 'weekly'
   schedule_day: number
+  schedule_days?: number[]
   policy?: PolicyReference
+  bucket_allocation?: { core_ratio: string; opportunity_ratio: string }
+  risk_mode?: PlanExecutionConfiguration['risk_mode']
+  opportunity_cash_policy?: PlanExecutionConfiguration['opportunity_cash_policy']
+  opportunity_cash_cap?: string
+  period_execution_limit?: string
   max_single_execution: string
 }
+
+/** Mutable subset accepted by PATCH /investment-plans/:id. */
+export type UpdateInvestmentPlanRequest = Partial<Omit<CreateInvestmentPlanRequest, 'symbol' | 'currency' | 'schedule_kind'>> & { is_active?: boolean }
 
 /** Caller-supplied monthly input for the 70% fundamental calculation. */
 export interface FundamentalPreviewRequest {
@@ -255,10 +275,6 @@ export interface DecisionPreviewRequest {
 
 /** Request accepted by the server-sourced Decision Preview endpoint. */
 export interface AutomaticDecisionPreviewRequest {
-  bucket_allocation?: {
-    core_ratio: string
-    opportunity_ratio: string
-  }
   paper_order?: PaperOrderRequest
 }
 
@@ -267,12 +283,22 @@ export interface ExecutionPreview {
   plan_id: string
   symbol: string
   currency: string
+  schedule_kind: 'monthly' | 'weekly'
+  schedule_day: number
+  schedule_days: number[]
   status: 'due' | 'waiting' | 'inactive'
   planned_contribution?: string
   bucket_split?: {
     planned_contribution: string
     core_contribution: string
+    opportunity_budget: string
+    opportunity_multiplier: string
+    carried_opportunity_cash: string
     opportunity_contribution: string
+    unallocated_opportunity_contribution: string
+    recommended_contribution: string
+    opportunity_cash_policy: PlanExecutionConfiguration['opportunity_cash_policy']
+    requires_approval: boolean
   }
 }
 

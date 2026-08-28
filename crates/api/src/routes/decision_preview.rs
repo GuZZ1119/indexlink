@@ -594,6 +594,16 @@ async fn preview_decision_input(
         }
         None => None,
     };
+    // Approval-mode plans must retain a decision-only record first. The later approval endpoint
+    // derives an order from this immutable snapshot instead of accepting a second preview's input.
+    let paper_order = if execution
+        .bucket_split
+        .is_some_and(|split| split.requires_approval())
+    {
+        None
+    } else {
+        paper_order
+    };
     let decision_response = DecisionResponse::from_policy_decision(&decision);
     let should_submit = should_submit_paper_order(&execution, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
