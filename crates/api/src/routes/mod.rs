@@ -7,6 +7,7 @@ mod market_sentiment;
 mod paper_performance;
 mod paper_portfolio;
 mod ready;
+mod runtime_status;
 mod signals;
 mod strategies;
 
@@ -18,6 +19,7 @@ pub(crate) fn router() -> Router<ApiState> {
     Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(ready::ready))
+        .route("/runtime-status", get(runtime_status::runtime_status))
         .merge(decision_preview::router())
         .merge(decision_records::router())
         .merge(investment_plans::router())

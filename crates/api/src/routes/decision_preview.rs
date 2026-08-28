@@ -203,7 +203,7 @@ struct DecisionPreviewResponse {
 }
 
 /// Result counters emitted by one periodic automatic scheduler tick.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct ScheduledDecisionRunSummary {
     /// Due active plans for which a new automatic audit record was created.
     pub created: u32,

@@ -376,6 +376,14 @@ pub trait DecisionRecordRepository: Send + Sync {
         Err(DecisionRecordRepositoryError::Unavailable)
     }
 
+    /// List newest decision records across all plans for cross-plan review screens.
+    async fn list(
+        &self,
+        _query: DecisionRecordListQuery,
+    ) -> Result<Vec<DecisionRecord>, DecisionRecordRepositoryError> {
+        Err(DecisionRecordRepositoryError::Unavailable)
+    }
+
     /// List decision records for one investment plan.
     async fn list_by_plan(
         &self,
@@ -455,6 +463,18 @@ impl DecisionRecordService {
     ) -> Result<Vec<DecisionRecord>, DecisionRecordApplicationError> {
         self.list_by_plan_with_query(plan_id, DecisionRecordListQuery::default())
             .await
+    }
+
+    /// List newest decision records across all plans with a bounded query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecisionRecordApplicationError::Unavailable`] when storage is unavailable.
+    pub async fn list(
+        &self,
+        query: DecisionRecordListQuery,
+    ) -> Result<Vec<DecisionRecord>, DecisionRecordApplicationError> {
+        self.repository.list(query).await.map_err(Into::into)
     }
 
     /// List decision records for one investment plan with query options.

@@ -16,6 +16,9 @@ export default defineConfig({
       '/paper-portfolio': 'http://127.0.0.1:8080',
       '/paper-performance': 'http://127.0.0.1:8080',
       '/strategies': 'http://127.0.0.1:8080',
+      '/health': 'http://127.0.0.1:8080',
+      '/ready': 'http://127.0.0.1:8080',
+      '/runtime-status': 'http://127.0.0.1:8080',
     },
   },
   resolve: {

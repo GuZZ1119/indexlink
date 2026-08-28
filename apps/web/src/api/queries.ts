@@ -23,6 +23,9 @@ import type {
   StrategyAdmissionReport,
   StrategyValidationResponse,
   UpdateInvestmentPlanRequest,
+  HealthStatus,
+  ReadyStatus,
+  RuntimeStatus,
 } from './types'
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
@@ -74,6 +77,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /** List normalized investment plans from the Rust API. */
 export function fetchPlans(): Promise<InvestmentPlan[]> {
   return request('/investment-plans')
+}
+
+/** Read process liveness without checking optional provider dependencies. */
+export function fetchHealth(): Promise<HealthStatus> {
+  return request('/health')
+}
+
+/** Check SQLite readiness through the backend's safe readiness contract. */
+export function fetchReady(): Promise<ReadyStatus> {
+  return request('/ready')
+}
+
+/** Read configured capabilities and latest scheduler counters without triggering work. */
+export function fetchRuntimeStatus(): Promise<RuntimeStatus> {
+  return request('/runtime-status')
 }
 
 /** Create one normalized investment plan through the Rust API. */
@@ -212,6 +230,11 @@ export function fetchDecisionRecords(planId: string): Promise<DecisionRecord[]> 
   return request(`/investment-plans/${planId}/decisions?limit=50`)
 }
 
+/** List newest cross-plan decision records for review filtering and pagination. */
+export function fetchAllDecisionRecords(): Promise<DecisionRecord[]> {
+  return request('/decisions?limit=200')
+}
+
 /** Fetch one decision record for a detail route. */
 export function fetchDecisionRecord(id: string): Promise<DecisionRecord> {
   return request(`/decisions/${id}`)
@@ -228,6 +251,68 @@ export function approveDecisionPaperOrder(id: string, idempotencyKey: string) {
 /** React Query hook for live plan data. */
 export function usePlans() {
   return useQuery({ queryKey: ['plans'], queryFn: fetchPlans })
+}
+
+/** Cache the process liveness response and refresh it periodically for the status strip. */
+export function useHealth() {
+  return useQuery({ queryKey: ['health'], queryFn: fetchHealth, refetchInterval: 30_000, retry: false })
+}
+
+/** Cache SQLite readiness separately so the UI can distinguish database and process failures. */
+export function useReady() {
+  return useQuery({ queryKey: ['ready'], queryFn: fetchReady, refetchInterval: 30_000, retry: false })
+}
+
+/** Cache safe optional-dependency and scheduler state without issuing a trading or AI request. */
+export function useRuntimeStatus() {
+  return useQuery({ queryKey: ['runtime-status'], queryFn: fetchRuntimeStatus, refetchInterval: 15_000, retry: false })
+}
+
+/** Cache a selected plan's latest server-sourced market snapshot across navigation. */
+export function useMarketSignalInput(symbol: string | null) {
+  return useQuery({
+    queryKey: ['market-signal-input', symbol],
+    queryFn: () => fetchMarketSignalInput(symbol!),
+    enabled: false,
+  })
+}
+
+/** Cache the latest Qwen response across pages until the user explicitly refreshes it. */
+export function useMarketSentiment() {
+  return useQuery({ queryKey: ['market-sentiment'], queryFn: fetchMarketSentiment, enabled: false })
+}
+
+/** Cache the read-only paper-account snapshot. */
+export function usePaperPortfolio() {
+  return useQuery({ queryKey: ['paper-portfolio'], queryFn: fetchPaperPortfolio, enabled: false })
+}
+
+/** Cache a plan's local paper-performance ledger. */
+export function usePaperPerformance(planId: string | null) {
+  return useQuery({
+    queryKey: ['paper-performance', planId],
+    queryFn: () => fetchPaperPerformance(planId!),
+    enabled: false,
+  })
+}
+
+/** Cache the combined local paper trajectory. */
+export function useActualPerformance() {
+  return useQuery({ queryKey: ['actual-performance'], queryFn: fetchActualPerformance, enabled: false })
+}
+
+/** Cache the explicit one-year historical replay. */
+export function useHistoricalBacktest() {
+  return useQuery({ queryKey: ['historical-backtest'], queryFn: fetchHistoricalBacktest, enabled: false })
+}
+
+/** Cache price histories separately by requested visible range. */
+export function useHoldingPriceHistory(period: '3m' | '6m' | '1y' | '3y') {
+  return useQuery({
+    queryKey: ['holding-price-history', period],
+    queryFn: () => fetchHoldingPriceHistory(period),
+    enabled: false,
+  })
 }
 
 /** React Query hook for Strategy Studio discovery data. */
@@ -303,6 +388,11 @@ export function useDecisionRecords(planId: string | null) {
     queryFn: () => fetchDecisionRecords(planId!),
     enabled: planId !== null,
   })
+}
+
+/** Cache the bounded cross-plan decision history used by the review page. */
+export function useAllDecisionRecords() {
+  return useQuery({ queryKey: ['decision-records', 'all'], queryFn: fetchAllDecisionRecords })
 }
 
 /** React Query hook for a single decision-record detail. */

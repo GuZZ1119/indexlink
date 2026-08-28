@@ -168,6 +168,38 @@ async fn ready_hides_internal_error_when_database_is_unavailable() {
 }
 
 #[tokio::test]
+async fn runtime_status_distinguishes_ready_database_from_optional_unconfigured_dependencies() {
+    let response = app(true)
+        .oneshot(
+            Request::builder()
+                .uri("/runtime-status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await,
+        json!({
+            "service": "running",
+            "database": "ready",
+            "market_data": "not_configured",
+            "qwen": "not_configured",
+            "paper_broker": "not_configured",
+            "scheduler": {
+                "enabled": false,
+                "tick_interval_seconds": 0,
+                "last_tick_at": null,
+                "last_summary": null,
+                "last_error_at": null
+            }
+        })
+    );
+}
+
+#[tokio::test]
 async fn configured_cors_origin_is_returned_for_preflight_request() {
     let app = build_router_with_cors(
         ApiState::with_readiness(Arc::new(FakeReadiness { available: true }), "0.1.0"),

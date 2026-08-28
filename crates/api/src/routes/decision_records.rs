@@ -47,6 +47,7 @@ impl DecisionRecordListRequest {
 /// Build decision-record history routes.
 pub(crate) fn router() -> Router<ApiState> {
     Router::new()
+        .route("/decisions", get(list_all_decision_records))
         .route(
             "/investment-plans/:id/decisions",
             get(list_decision_records),
@@ -56,6 +57,17 @@ pub(crate) fn router() -> Router<ApiState> {
             "/decisions/:id/approve-paper-order",
             post(approve_paper_order),
         )
+}
+
+/// List the newest decision records across all plans for client-side review filtering.
+async fn list_all_decision_records(
+    State(state): State<ApiState>,
+    query: Result<Query<DecisionRecordListRequest>, QueryRejection>,
+) -> Result<Json<Vec<DecisionRecord>>, ApiError> {
+    let Query(query) = query.map_err(|_| ApiError::BadRequest)?;
+    Ok(Json(
+        state.decision_records().list(query.into_domain()?).await?,
+    ))
 }
 
 /// List the newest persisted decision records for one existing investment plan.

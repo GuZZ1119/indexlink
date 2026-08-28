@@ -261,6 +261,43 @@ export interface HistoricalBacktest {
   points: HistoricalBacktestPoint[]
 }
 
+/** Read-only service liveness response. */
+export interface HealthStatus {
+  status: 'ok'
+  service: string
+  version: string
+}
+
+/** Readiness response from the SQLite-backed backend. */
+export interface ReadyStatus {
+  status: 'ready'
+  database: 'ok'
+}
+
+/** Last safe counters emitted by the server-owned scheduler. */
+export interface SchedulerStatus {
+  enabled: boolean
+  tick_interval_seconds: number
+  last_tick_at?: string
+  last_summary?: {
+    created: number
+    catch_up_created: number
+    already_claimed: number
+    unavailable: number
+  }
+  last_error_at?: string
+}
+
+/** Safe capability and scheduler snapshot; no account or provider credentials are present. */
+export interface RuntimeStatus {
+  service: 'running'
+  database: 'ready' | 'unavailable'
+  market_data: 'configured' | 'not_configured'
+  qwen: 'configured' | 'not_configured'
+  paper_broker: 'configured' | 'not_configured'
+  scheduler: SchedulerStatus
+}
+
 /** Request accepted by the composed Decision Preview endpoint. */
 export interface DecisionPreviewRequest {
   day_of_month: number

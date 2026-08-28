@@ -4,6 +4,7 @@ import { Outlet } from 'react-router'
 import { AppHeader } from './app-header'
 import { AppSidebar } from './app-sidebar'
 import { NewsTicker } from './news-ticker'
+import { RuntimeStatus } from './runtime-status'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 
 export function AppLayout() {
@@ -14,6 +15,7 @@ export function AppLayout() {
     >
       <NewsTicker />
       <AppHeader />
+      <RuntimeStatus />
       <div className="flex min-h-0 flex-1">
         <AppSidebar />
         <SidebarInset className="min-h-0 overflow-y-auto">

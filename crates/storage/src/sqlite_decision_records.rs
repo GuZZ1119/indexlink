@@ -34,6 +34,13 @@ const LIST_RECORDS_BY_PLAN_SQL: &str = concat!(
     "broker_order_request, broker_order_ack, summary, created_at ",
     "FROM decision_records WHERE plan_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2"
 );
+const LIST_RECORDS_SQL: &str = concat!(
+    "SELECT id, plan_id, symbol, currency, execution_status, planned_contribution, ",
+    "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
+    "decision_snapshot, policy_id, policy_version, recommendation_snapshot, ",
+    "broker_order_request, broker_order_ack, summary, created_at ",
+    "FROM decision_records ORDER BY created_at DESC, id DESC LIMIT ?1"
+);
 const GET_RECORD_SQL: &str = concat!(
     "SELECT id, plan_id, symbol, currency, execution_status, planned_contribution, ",
     "execution_snapshot, fundamental_snapshot, trend_snapshot, sentiment_snapshot, ",
@@ -164,6 +171,19 @@ impl DecisionRecordRepository for SqliteDecisionRecordRepository {
             .ok_or(DecisionRecordRepositoryError::NotFound)?;
 
         record_from_row(row)
+    }
+
+    /// List newest decision records across plans with the same bounded stable ordering.
+    async fn list(
+        &self,
+        query: DecisionRecordListQuery,
+    ) -> Result<Vec<DecisionRecord>, DecisionRecordRepositoryError> {
+        let rows = sqlx::query(LIST_RECORDS_SQL)
+            .bind(i64::from(query.limit()))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        rows.into_iter().map(record_from_row).collect()
     }
 
     /// List decision records for one plan with newest records first.
@@ -648,6 +668,7 @@ mod tests {
         for query in [
             INSERT_RECORD_SQL,
             LIST_RECORDS_BY_PLAN_SQL,
+            LIST_RECORDS_SQL,
             GET_RECORD_SQL,
             COMPLETE_BROKER_ORDER_SQL,
             ATTACH_BROKER_ORDER_REQUEST_SQL,

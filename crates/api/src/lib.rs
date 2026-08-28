@@ -15,7 +15,7 @@ use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLaye
 
 pub use error::{ApiError, ErrorBody, ErrorEnvelope};
 pub use routes::decision_preview::ScheduledDecisionRunSummary;
-pub use state::{ApiState, ReadinessCheck, ReadinessError};
+pub use state::{ApiState, ReadinessCheck, ReadinessError, SchedulerStatus, SchedulerStatusHandle};
 
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 

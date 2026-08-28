@@ -3,21 +3,20 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { BarChart3, Bot, ClipboardCheck, RefreshCw, Send } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Link } from 'react-router'
 import { useSnapshot } from 'valtio'
 
 import {
   ApiRequestError,
-  fetchActualPerformance,
-  fetchHistoricalBacktest,
-  fetchHoldingPriceHistory,
-  fetchMarketSentiment,
-  fetchMarketSignalInput,
-  fetchPaperPerformance,
-  fetchPaperPortfolio,
   previewAutomaticDecision,
   setPaperOpeningBalance,
+  useActualPerformance,
   useDecisionRecords,
+  useHistoricalBacktest,
+  useHoldingPriceHistory,
+  useMarketSentiment,
+  useMarketSignalInput,
+  usePaperPerformance,
+  usePaperPortfolio,
   usePlans,
 } from '@/api/queries'
 import type {
@@ -66,8 +65,6 @@ export default function DashboardPage() {
   const [submitPaperOrder, setSubmitPaperOrder] = useState(false)
   const [quantity, setQuantity] = useState('1.00')
   const [result, setResult] = useState<DecisionPreviewResponse | null>(null)
-  const [marketRefresh, setMarketRefresh] = useState<MarketSignalInput | null>(null)
-  const [marketSentiment, setMarketSentiment] = useState<MarketSentimentEvidence | null>(null)
   const [pricePeriod, setPricePeriod] = useState<'3m' | '6m' | '1y' | '3y'>('1y')
 
   useEffect(() => {
@@ -82,6 +79,13 @@ export default function DashboardPage() {
   )
   const isApprovalPlan = selectedPlan?.execution_configuration.risk_mode === 'approval'
   const { data: decisionRecords = [], error: decisionRecordsError } = useDecisionRecords(selectedPlan?.id ?? null)
+  const marketSignalQuery = useMarketSignalInput(selectedPlan?.symbol ?? null)
+  const marketSentimentQuery = useMarketSentiment()
+  const paperPortfolioQuery = usePaperPortfolio()
+  const paperPerformanceQuery = usePaperPerformance(selectedPlan?.id ?? null)
+  const actualPerformanceQuery = useActualPerformance()
+  const historicalBacktestQuery = useHistoricalBacktest()
+  const priceHistoryQuery = useHoldingPriceHistory(pricePeriod)
 
   const decisionMutation = useMutation({
     mutationFn: async () => {
@@ -105,33 +109,7 @@ export default function DashboardPage() {
     onSuccess: async (preview) => {
       setResult(preview)
       await queryClient.invalidateQueries({ queryKey: ['decision-records', selectedPlanId] })
-    },
-  })
-  const marketRefreshMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedPlan) {
-        throw new ApiRequestError('select a plan before refreshing market signals')
-      }
-      return fetchMarketSignalInput(selectedPlan.symbol)
-    },
-    onSuccess: (input) => {
-      setMarketRefresh(input)
-      setResult(null)
-    },
-  })
-  const marketSentimentMutation = useMutation({
-    mutationFn: fetchMarketSentiment,
-    onSuccess: (sentiment) => setMarketSentiment(sentiment),
-  })
-  const paperPortfolioMutation = useMutation({
-    mutationFn: fetchPaperPortfolio,
-  })
-  const paperPerformanceMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedPlan) {
-        throw new ApiRequestError('select a plan before refreshing performance')
-      }
-      return fetchPaperPerformance(selectedPlan.id)
+      await queryClient.invalidateQueries({ queryKey: ['decision-records', 'all'] })
     },
   })
   const openingBalanceMutation = useMutation({
@@ -140,28 +118,22 @@ export default function DashboardPage() {
         throw new ApiRequestError('select a plan before setting an opening balance')
       }
       await setPaperOpeningBalance(selectedPlan.id, input)
-      return fetchPaperPerformance(selectedPlan.id)
     },
-    onSuccess: () => paperPerformanceMutation.mutate(),
-  })
-  const actualPerformanceMutation = useMutation({ mutationFn: fetchActualPerformance })
-  const historicalBacktestMutation = useMutation({ mutationFn: fetchHistoricalBacktest })
-  const priceHistoryMutation = useMutation({
-    mutationFn: () => fetchHoldingPriceHistory(pricePeriod),
+    onSuccess: async () => { await paperPerformanceQuery.refetch() },
   })
 
-  const error = marketRefreshMutation.error
+  const error = marketSignalQuery.error
     ?? decisionMutation.error
-    ?? marketSentimentMutation.error
-    ?? paperPortfolioMutation.error
-    ?? paperPerformanceMutation.error
+    ?? marketSentimentQuery.error
+    ?? paperPortfolioQuery.error
+    ?? paperPerformanceQuery.error
     ?? openingBalanceMutation.error
-    ?? actualPerformanceMutation.error
-    ?? historicalBacktestMutation.error
-    ?? priceHistoryMutation.error
+    ?? actualPerformanceQuery.error
+    ?? historicalBacktestQuery.error
+    ?? priceHistoryQuery.error
     ?? plansError
     ?? decisionRecordsError
-  const hasSignalInput = marketRefresh !== null || result !== null
+  const hasSignalInput = marketSignalQuery.data !== undefined || result !== null
   const overviewDecision = useMemo(
     () => latestOverviewDecision(result, decisionRecords[0]),
     [decisionRecords, result],
@@ -172,27 +144,27 @@ export default function DashboardPage() {
       <DashboardOverview
         plan={selectedPlan}
         decision={overviewDecision}
-        marketRefresh={marketRefresh}
-        portfolio={paperPortfolioMutation.data ?? null}
-        portfolioRefreshing={paperPortfolioMutation.isPending}
-        onRefreshPortfolio={() => paperPortfolioMutation.mutate()}
-        performance={paperPerformanceMutation.data ?? null}
-        performanceRefreshing={paperPerformanceMutation.isPending || openingBalanceMutation.isPending}
-        onRefreshPerformance={() => paperPerformanceMutation.mutate()}
+        marketRefresh={marketSignalQuery.data ?? null}
+        portfolio={paperPortfolioQuery.data ?? null}
+        portfolioRefreshing={paperPortfolioQuery.isFetching}
+        onRefreshPortfolio={() => void paperPortfolioQuery.refetch()}
+        performance={paperPerformanceQuery.data ?? null}
+        performanceRefreshing={paperPerformanceQuery.isFetching || openingBalanceMutation.isPending}
+        onRefreshPerformance={() => void paperPerformanceQuery.refetch()}
         onSetOpeningBalance={(input) => openingBalanceMutation.mutate(input)}
-        actualPerformance={actualPerformanceMutation.data ?? null}
-        actualRefreshing={actualPerformanceMutation.isPending}
-        onRefreshActual={() => actualPerformanceMutation.mutate()}
-        historicalBacktest={historicalBacktestMutation.data ?? null}
-        historicalRefreshing={historicalBacktestMutation.isPending}
-        historicalError={historicalBacktestMutation.error}
-        onRefreshHistorical={() => historicalBacktestMutation.mutate()}
-        priceHistory={priceHistoryMutation.data ?? null}
-        priceRefreshing={priceHistoryMutation.isPending}
-        priceHistoryError={priceHistoryMutation.error}
+        actualPerformance={actualPerformanceQuery.data ?? null}
+        actualRefreshing={actualPerformanceQuery.isFetching}
+        onRefreshActual={() => void actualPerformanceQuery.refetch()}
+        historicalBacktest={historicalBacktestQuery.data ?? null}
+        historicalRefreshing={historicalBacktestQuery.isFetching}
+        historicalError={historicalBacktestQuery.error}
+        onRefreshHistorical={() => void historicalBacktestQuery.refetch()}
+        priceHistory={priceHistoryQuery.data ?? null}
+        priceRefreshing={priceHistoryQuery.isFetching}
+        priceHistoryError={priceHistoryQuery.error}
         pricePeriod={pricePeriod}
         onPricePeriodChange={setPricePeriod}
-        onRefreshPrices={() => priceHistoryMutation.mutate()}
+        onRefreshPrices={() => void priceHistoryQuery.refetch()}
       />
 
       <Card>
@@ -234,7 +206,7 @@ export default function DashboardPage() {
 
           {plans.length === 0 && (
             <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
-              请先在 <Link className="font-medium text-primary underline-offset-4 hover:underline" to="/plans">定投标的</Link> 页面创建计划，再回到这里生成决策存证。
+              {t('dashboard.extra.createPlanPrompt', { plans: t('dashboard.extra.plans') })}
             </p>
           )}
 
@@ -250,13 +222,13 @@ export default function DashboardPage() {
           </div>
         </CardHeader>
         <CardContent className="flex flex-col items-center gap-3">
-          <Button className="w-full max-w-xl" size="lg" disabled={!selectedPlan || marketRefreshMutation.isPending} onClick={() => marketRefreshMutation.mutate()}>
-            <RefreshCw className={cn('size-4', marketRefreshMutation.isPending && 'animate-spin')} />
-            {marketRefreshMutation.isPending ? t('live.decision.marketRefreshing') : t('live.decision.marketRefresh')}
+          <Button className="w-full max-w-xl" size="lg" disabled={!selectedPlan || marketSignalQuery.isFetching} onClick={() => { setResult(null); void marketSignalQuery.refetch() }}>
+            <RefreshCw className={cn('size-4', marketSignalQuery.isFetching && 'animate-spin')} />
+            {marketSignalQuery.isFetching ? t('live.decision.marketRefreshing') : t('live.decision.marketRefresh')}
           </Button>
-          {marketRefresh && (
+          {marketSignalQuery.data && (
             <p className="text-center text-sm text-muted-foreground">
-            {t('live.decision.marketRefreshed', { symbol: marketRefresh.symbol, date: marketRefresh.as_of })}
+            {t('live.decision.marketRefreshed', { symbol: marketSignalQuery.data.symbol, date: marketSignalQuery.data.as_of })}
             </p>
           )}
         </CardContent>
@@ -265,18 +237,18 @@ export default function DashboardPage() {
       <Card className="border-violet-500/35 bg-violet-500/5">
         <CardHeader>
           <div>
-            <CardTitle className="flex items-center gap-2"><Bot className="size-5 text-violet-700" />AI 市场情绪</CardTitle>
-            <CardDescription>单独调用 Qwen 读取当前新闻，展示情绪依据、新闻来源与风险提示；生成决策时也会自动使用同一类证据。</CardDescription>
+            <CardTitle className="flex items-center gap-2"><Bot className="size-5 text-violet-700" />{t('dashboard.extra.aiTitle')}</CardTitle>
+            <CardDescription>{t('dashboard.extra.aiDescription')}</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex justify-center">
-            <Button className="w-full max-w-xl" variant="outline" disabled={marketSentimentMutation.isPending} onClick={() => marketSentimentMutation.mutate()}>
-              <Bot className={cn('size-4', marketSentimentMutation.isPending && 'animate-pulse')} />
-              {marketSentimentMutation.isPending ? '正在分析新闻…' : '获取 Qwen 情绪分析'}
+            <Button className="w-full max-w-xl" variant="outline" disabled={marketSentimentQuery.isFetching} onClick={() => void marketSentimentQuery.refetch()}>
+              <Bot className={cn('size-4', marketSentimentQuery.isFetching && 'animate-pulse')} />
+              {marketSentimentQuery.isFetching ? t('dashboard.extra.aiLoading') : t('dashboard.extra.aiFetch')}
             </Button>
           </div>
-          {marketSentiment && <MarketSentimentCard sentiment={marketSentiment} />}
+          {marketSentimentQuery.data && <MarketSentimentCard sentiment={marketSentimentQuery.data} />}
         </CardContent>
       </Card>
 
@@ -292,7 +264,7 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-4">
           {isApprovalPlan ? (
-            <p className="max-w-xl text-sm text-muted-foreground">当前计划为人工审批模式：这里仅生成决策存证。请到“决策历史”打开对应记录并确认模拟下单，以确保订单与同一份审计存证一一对应。</p>
+            <p className="max-w-xl text-sm text-muted-foreground">{t('dashboard.extra.approvalOnly')}</p>
           ) : (
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -360,13 +332,14 @@ function latestOverviewDecision(
 
 /** Display the persisted plan configuration that the server will actually execute. */
 function PlanExecutionConfig({ plan }: { plan: InvestmentPlan }) {
+  const { t } = useTranslation()
   const config = plan.execution_configuration
   return (
     <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-      <OverviewFact label="核心桶" value={`${config.bucket_allocation.core_ratio}（固定）`} />
-      <OverviewFact label="机会桶" value={`${config.bucket_allocation.opportunity_ratio}（策略调整）`} />
-      <OverviewFact label="执行模式" value={config.risk_mode === 'approval' ? '人工审批' : config.risk_mode === 'autopilot' ? '自动执行' : '固定定投'} />
-      <OverviewFact label="机会现金" value={config.opportunity_cash_policy} />
+      <OverviewFact label={t('dashboard.extra.coreBucket')} value={`${config.bucket_allocation.core_ratio} (${t('dashboard.extra.fixed')})`} />
+      <OverviewFact label={t('dashboard.extra.opportunityBucket')} value={`${config.bucket_allocation.opportunity_ratio} (${t('dashboard.extra.strategyAdjusted')})`} />
+      <OverviewFact label={t('dashboard.extra.executionMode')} value={config.risk_mode === 'approval' ? t('dashboard.extra.approval') : config.risk_mode === 'autopilot' ? t('dashboard.extra.autopilot') : t('dashboard.extra.fixedDca')} />
+      <OverviewFact label={t('dashboard.extra.opportunityCash')} value={config.opportunity_cash_policy} />
     </div>
   )
 }
@@ -389,19 +362,20 @@ function evidenceFromSnapshot(
 
 /** Render a standalone Qwen result before a decision record has been generated. */
 function MarketSentimentCard({ sentiment }: { sentiment: MarketSentimentEvidence }) {
-  const label = sentiment.label === 'positive' ? '偏积极' : sentiment.label === 'negative' ? '偏谨慎' : '中性'
+  const { t } = useTranslation()
+  const label = sentiment.label === 'positive' ? t('dashboard.extra.sentimentPositive') : sentiment.label === 'negative' ? t('dashboard.extra.sentimentNegative') : t('dashboard.extra.sentimentNeutral')
   return (
     <div className="space-y-3 rounded-lg border bg-background/70 p-4 text-sm">
       <div className="flex items-center justify-between gap-3">
-        <span className="font-semibold">Qwen 情绪：{label}</span>
+        <span className="font-semibold">{t('dashboard.extra.sentiment')}: {label}</span>
         <Badge variant="outline">{sentiment.score.toFixed(2)}</Badge>
       </div>
-      <div><p className="font-medium">分析依据</p><p className="mt-1 leading-relaxed text-muted-foreground">{sentiment.rationale}</p></div>
+      <div><p className="font-medium">{t('dashboard.extra.rationale')}</p><p className="mt-1 leading-relaxed text-muted-foreground">{sentiment.rationale}</p></div>
       {sentiment.warnings.length > 0 && (
-        <div><p className="font-medium">风险提示</p><ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">{sentiment.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>
+        <div><p className="font-medium">{t('dashboard.extra.warnings')}</p><ul className="mt-1 list-disc space-y-1 pl-5 text-muted-foreground">{sentiment.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>
       )}
       <div>
-        <p className="font-medium">新闻来源</p>
+        <p className="font-medium">{t('dashboard.extra.headlines')}</p>
         <ul className="mt-1 space-y-1 text-muted-foreground">
           {sentiment.headlines.map((headline) => (
             <li key={`${headline.published_at}-${headline.title}`}>
@@ -711,31 +685,31 @@ function DashboardOverview({
 
       <Card className="border-sky-200/80 bg-sky-50/45">
         <CardHeader>
-          <div><CardTitle>真实组合收益轨迹</CardTitle><CardDescription>从本机 SQLite 的已观察模拟成交开始，显示每个定投标的与总和；刷新只读 OpenD。</CardDescription></div>
+          <div><CardTitle>{t('dashboard.extra.actualTitle')}</CardTitle><CardDescription>{t('dashboard.extra.actualDescription')}</CardDescription></div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex justify-center"><Button className="w-full max-w-md" variant="outline" disabled={actualRefreshing} onClick={onRefreshActual}><RefreshCw className={cn('size-4', actualRefreshing && 'animate-spin')} />刷新真实轨迹</Button></div>
-          {actualPerformance?.total_points.length ? <ActualPerformanceChart performance={actualPerformance} /> : <EmptyState text="等待首次成交 / 暂无数据。先为定投标的设置起始资金并完成模拟成交，再刷新真实轨迹。" />}
+          <div className="flex justify-center"><Button className="w-full max-w-md" variant="outline" disabled={actualRefreshing} onClick={onRefreshActual}><RefreshCw className={cn('size-4', actualRefreshing && 'animate-spin')} />{t('dashboard.extra.actualRefresh')}</Button></div>
+          {actualPerformance?.total_points.length ? <ActualPerformanceChart performance={actualPerformance} /> : <EmptyState text={t('dashboard.extra.actualEmpty')} />}
         </CardContent>
       </Card>
 
       <Card className="border-blue-200/80 bg-blue-50/45">
         <CardHeader>
-          <div><CardTitle>定投标的历史走势与成交点</CardTitle><CardDescription>实际 OpenD 日线。多标的会归一化到 100，便于在同一张图比较；圆点仅代表本地已确认的模拟买卖成交。</CardDescription></div>
+          <div><CardTitle>{t('dashboard.extra.pricesTitle')}</CardTitle><CardDescription>{t('dashboard.extra.pricesDescription')}</CardDescription></div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap justify-center gap-2"><select className="h-9 rounded-md border bg-background px-2 text-sm" value={pricePeriod} onChange={(event) => onPricePeriodChange(event.target.value as '3m' | '6m' | '1y' | '3y')}><option value="3m">近 3 个月</option><option value="6m">近 6 个月</option><option value="1y">近 1 年</option><option value="3y">近 3 年</option></select><Button className="min-w-32" variant="outline" disabled={priceRefreshing} onClick={onRefreshPrices}><RefreshCw className={cn('size-4', priceRefreshing && 'animate-spin')} />拉取走势</Button></div>
-          {priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text={priceHistoryError ? requestErrorMessage(priceHistoryError, false) : '选择定投标的后，点击“拉取走势”。不会生成虚构的历史价格。'} />}
+          <div className="flex flex-wrap justify-center gap-2"><select className="h-9 rounded-md border bg-background px-2 text-sm" value={pricePeriod} onChange={(event) => onPricePeriodChange(event.target.value as '3m' | '6m' | '1y' | '3y')}><option value="3m">{t('dashboard.extra.period3m')}</option><option value="6m">{t('dashboard.extra.period6m')}</option><option value="1y">{t('dashboard.extra.period1y')}</option><option value="3y">{t('dashboard.extra.period3y')}</option></select><Button className="min-w-32" variant="outline" disabled={priceRefreshing} onClick={onRefreshPrices}><RefreshCw className={cn('size-4', priceRefreshing && 'animate-spin')} />{t('dashboard.extra.pricesRefresh')}</Button></div>
+          {priceHistory?.some((item) => item.prices.length) ? <HoldingPriceChart holdings={priceHistory} /> : <EmptyState text={priceHistoryError ? requestErrorMessage(priceHistoryError, false) : t('dashboard.extra.pricesEmpty')} />}
         </CardContent>
       </Card>
 
       <Card className="border-indigo-200/80 bg-indigo-50/45">
         <CardHeader>
-          <div><CardTitle>一年历史模拟对比</CardTitle><CardDescription>将所有启用的定投标的聚合为两条曲线。该回放使用真实日线，不把历史 AI 或宏观信号伪造成已知事实。</CardDescription></div>
+          <div><CardTitle>{t('dashboard.extra.replayTitle')}</CardTitle><CardDescription>{t('dashboard.extra.replayDescription')}</CardDescription></div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex justify-center"><Button className="w-full max-w-md" variant="outline" disabled={historicalRefreshing} onClick={onRefreshHistorical}><RefreshCw className={cn('size-4', historicalRefreshing && 'animate-spin')} />运行一年回放</Button></div>
-          {historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text={historicalError ? requestErrorMessage(historicalError, false) : '需要至少一只启用的定投标的以及足够的 OpenD 历史日线，才能运行一年历史回放。'} />}
+          <div className="flex justify-center"><Button className="w-full max-w-md" variant="outline" disabled={historicalRefreshing} onClick={onRefreshHistorical}><RefreshCw className={cn('size-4', historicalRefreshing && 'animate-spin')} />{t('dashboard.extra.replayRun')}</Button></div>
+          {historicalBacktest?.points.length ? <HistoricalBacktestChart backtest={historicalBacktest} /> : <EmptyState text={historicalError ? requestErrorMessage(historicalError, false) : t('dashboard.extra.replayEmpty')} />}
         </CardContent>
       </Card>
     </section>
@@ -768,6 +742,7 @@ function PerformanceChart({ performance }: { performance: PaperPerformance }) {
 
 /** Render every locally tracked holding and the explicit total on one real paper-performance chart. */
 function ActualPerformanceChart({ performance }: { performance: ActualPerformance }) {
+  const { t } = useTranslation()
   const data = useMemo(() => {
     const rows = new Map<string, Record<string, string | number>>()
     for (const point of performance.total_points) {
@@ -783,11 +758,12 @@ function ActualPerformanceChart({ performance }: { performance: ActualPerformanc
     }
     return [...rows.values()]
   }, [performance])
-  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} /><YAxis tickLine={false} axisLine={false} width={72} /><Tooltip formatter={(value) => typeof value === 'number' ? formatCurrency(value, performance.currency) : '—'} /><Line type="monotone" dataKey="total" name="全部定投标的总和" stroke="#111827" strokeWidth={3} dot={false} />{performance.series.map((series, index) => <Line key={series.plan_id} type="monotone" dataKey={series.plan_id} name={`${series.name} · ${series.symbol}`} stroke={chartColor(index)} strokeWidth={2} dot={false} connectNulls />)}</LineChart></ResponsiveContainer><p className="mt-2 text-xs text-muted-foreground">黑线为总和；其余线仅显示已在本机 SQLite 留下快照的定投标的。</p></div>
+  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} /><YAxis tickLine={false} axisLine={false} width={72} /><Tooltip formatter={(value) => typeof value === 'number' ? formatCurrency(value, performance.currency) : '—'} /><Line type="monotone" dataKey="total" name={t('dashboard.extra.totalHoldings')} stroke="#111827" strokeWidth={3} dot={false} />{performance.series.map((series, index) => <Line key={series.plan_id} type="monotone" dataKey={series.plan_id} name={`${series.name} · ${series.symbol}`} stroke={chartColor(index)} strokeWidth={2} dot={false} connectNulls />)}</LineChart></ResponsiveContainer><p className="mt-2 text-xs text-muted-foreground">{t('dashboard.extra.totalLine')}</p></div>
 }
 
 /** Render one normalized multi-symbol OpenD price chart and place only locally verified fills. */
 function HoldingPriceChart({ holdings }: { holdings: HoldingPriceHistory[] }) {
+  const { t } = useTranslation()
   const { data, keys, markers } = useMemo(() => {
     const rows = new Map<string, Record<string, string | number>>()
     const markers: Array<{ key: string; date: string; value: number; side: 'buy' | 'sell' }> = []
@@ -807,13 +783,14 @@ function HoldingPriceChart({ holdings }: { holdings: HoldingPriceHistory[] }) {
     }
     return { data: [...rows.values()], keys, markers }
   }, [holdings])
-  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={42} /><YAxis domain={['auto', 'auto']} tickLine={false} axisLine={false} width={56} tickFormatter={(value) => `${Number(value).toFixed(0)}`} /><Tooltip formatter={(value) => typeof value === 'number' ? `${value.toFixed(2)} (起点=100)` : '—'} />{keys.map((key, index) => { const holding = holdings.find((item) => item.plan_id === key); return <Line key={key} type="monotone" dataKey={key} name={`${holding?.symbol ?? key} 指数化走势`} stroke={chartColor(index)} strokeWidth={2} dot={false} connectNulls /> })}{markers.map((marker, index) => <ReferenceDot key={`${marker.key}-${marker.date}-${index}`} x={marker.date} y={marker.value} r={5} fill={marker.side === 'buy' ? '#16a34a' : '#dc2626'} stroke="white" />)}</LineChart></ResponsiveContainer><p className="mt-2 text-xs text-muted-foreground">所有价格以区间首日=100 归一化；绿色点为本地确认买入，红色点为本地确认卖出。</p></div>
+  return <div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={42} /><YAxis domain={['auto', 'auto']} tickLine={false} axisLine={false} width={56} tickFormatter={(value) => `${Number(value).toFixed(0)}`} /><Tooltip formatter={(value) => typeof value === 'number' ? `${value.toFixed(2)} (${t('dashboard.extra.startAt100')})` : '—'} />{keys.map((key, index) => { const holding = holdings.find((item) => item.plan_id === key); return <Line key={key} type="monotone" dataKey={key} name={`${holding?.symbol ?? key} ${t('dashboard.extra.normalized')}`} stroke={chartColor(index)} strokeWidth={2} dot={false} connectNulls /> })}{markers.map((marker, index) => <ReferenceDot key={`${marker.key}-${marker.date}-${index}`} x={marker.date} y={marker.value} r={5} fill={marker.side === 'buy' ? '#16a34a' : '#dc2626'} stroke="white" />)}</LineChart></ResponsiveContainer><p className="mt-2 text-xs text-muted-foreground">{t('dashboard.extra.normalizedHint')}</p></div>
 }
 
 /** Render the clearly scoped one-year plain-versus-adaptive historical replay. */
 function HistoricalBacktestChart({ backtest }: { backtest: HistoricalBacktest }) {
+  const { t } = useTranslation()
   const data = backtest.points.map((point) => ({ date: point.date, plain: point.plain_dca_value, adaptive: point.adaptive_value }))
-  return <div className="space-y-3"><div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} /><YAxis tickLine={false} axisLine={false} width={72} /><Tooltip formatter={(value) => typeof value === 'number' ? formatCurrency(value, backtest.currency) : '—'} /><Line type="monotone" dataKey="plain" name="普通定投" stroke="#64748b" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="adaptive" name="自适应定投" stroke="#16a34a" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div><p className="rounded-lg border border-dashed bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">{backtest.methodology}</p></div>
+  return <div className="space-y-3"><div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={32} /><YAxis tickLine={false} axisLine={false} width={72} /><Tooltip formatter={(value) => typeof value === 'number' ? formatCurrency(value, backtest.currency) : '—'} /><Line type="monotone" dataKey="plain" name={t('dashboard.performance.plain')} stroke="#64748b" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="adaptive" name={t('dashboard.performance.adaptive')} stroke="#16a34a" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></div><p className="rounded-lg border border-dashed bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">{backtest.methodology}</p></div>
 }
 
 /** Return a stable contrast-friendly series colour without persisting UI state. */
@@ -886,13 +863,13 @@ function DecisionExplanation({
           label={t('dashboard.decisionExplanation.fundamental')}
           value={typeof decision.fundamental_score === 'number'
             ? t('dashboard.decisionExplanation.scoreBand', { score: decision.fundamental_score.toFixed(2), band: scoreBand(t, decision.fundamental_score) })
-            : '固定定投：未使用市场信号'}
+            : t('dashboard.extra.fixedSignalUnused')}
         />
         <ExplanationItem
           label={t('dashboard.decisionExplanation.trend')}
           value={typeof decision.trend_score === 'number'
             ? t('dashboard.decisionExplanation.scoreBand', { score: decision.trend_score.toFixed(2), band: scoreBand(t, decision.trend_score) })
-            : '固定定投：未使用市场信号'}
+            : t('dashboard.extra.fixedSignalUnused')}
         />
         <ExplanationItem
           label={t('dashboard.decisionExplanation.ai')}
@@ -1170,14 +1147,14 @@ function DecisionResultCard({
         </div>
         {result.execution.bucket_split && (
           <div className="grid gap-3 rounded-lg border bg-muted/30 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="核心桶（固定）" value={formatCurrency(Number(result.execution.bucket_split.core_contribution), result.execution.currency)} />
-            <Metric label="机会桶建议" value={formatCurrency(Number(result.execution.bucket_split.opportunity_contribution), result.execution.currency)} />
-            <Metric label="机会桶倍率" value={`${result.execution.bucket_split.opportunity_multiplier}x`} />
-            <Metric label="本次建议总额" value={formatCurrency(Number(result.execution.bucket_split.recommended_contribution), result.execution.currency)} />
-            <Metric label="待处理机会现金" value={formatCurrency(Number(result.execution.bucket_split.carried_opportunity_cash), result.execution.currency)} />
-            <Metric label="本期未投入机会额" value={formatCurrency(Number(result.execution.bucket_split.unallocated_opportunity_contribution), result.execution.currency)} />
-            <Metric label="现金策略" value={result.execution.bucket_split.opportunity_cash_policy} />
-            <Metric label="执行授权" value={result.execution.bucket_split.requires_approval ? '等待人工审批' : '可自动提交'} />
+            <Metric label={t('dashboard.extra.coreFixed')} value={formatCurrency(Number(result.execution.bucket_split.core_contribution), result.execution.currency)} />
+            <Metric label={t('dashboard.extra.opportunitySuggested')} value={formatCurrency(Number(result.execution.bucket_split.opportunity_contribution), result.execution.currency)} />
+            <Metric label={t('dashboard.extra.opportunityMultiplier')} value={`${result.execution.bucket_split.opportunity_multiplier}x`} />
+            <Metric label={t('dashboard.extra.recommendedTotal')} value={formatCurrency(Number(result.execution.bucket_split.recommended_contribution), result.execution.currency)} />
+            <Metric label={t('dashboard.extra.carriedCash')} value={formatCurrency(Number(result.execution.bucket_split.carried_opportunity_cash), result.execution.currency)} />
+            <Metric label={t('dashboard.extra.unallocatedCash')} value={formatCurrency(Number(result.execution.bucket_split.unallocated_opportunity_contribution), result.execution.currency)} />
+            <Metric label={t('dashboard.extra.cashPolicy')} value={result.execution.bucket_split.opportunity_cash_policy} />
+            <Metric label={t('dashboard.extra.authorization')} value={result.execution.bucket_split.requires_approval ? t('dashboard.extra.pendingApproval') : t('dashboard.extra.automaticSubmit')} />
           </div>
         )}
         <DecisionExplanation decision={result.decision} marketSentiment={result.market_sentiment} />

@@ -1,66 +1,44 @@
-# 前端规划
+# IndexLink Web Plan / 前端计划
 
-## 项目一句话
+## 当前状态 / Current state
 
-目前期望进行最小MVP的构建，暂时不需要连接到后端，目的是进行前端页面布局规划、优化，并确认最终形态。
+Web 已连接 Rust API，而不是静态演示页。所有长期服务端数据均由 React Query 获取、缓存与失效；Valtio 只保存当前选中标的、图表范围与局部交互状态。
 
-## 布局划分
+The web client is connected to the Rust API, not a static demo. React Query owns server data, cache and invalidation; Valtio is limited to selected holding, chart range and transient UI state.
 
-- header左上角显示logo，右上角显示当前账户信息（暂时mock）和切换语言的标志
-- header下方有滚动条显示产品相关的实时新闻
-- 左侧sidebar显示页面列表，可收放
-- 其余部分做页面显示
+## 页面与契约 / Pages and contracts
 
-## 页面划分
+| 页面 / Page | 已实现 / Implemented | 主要 API / Main API |
+| --- | --- | --- |
+| 仪表盘 / Dashboard | 自动市场输入、Qwen 情绪、Decision Preview、双桶结果、模拟账户、收益与回放图 | `/signals/*`, `/market-sentiment/preview`, `/investment-plans/:id/*`, `/paper-*` |
+| 定投标的 / Holdings | V1.1 周期、多个执行日、桶比例、风险模式、滚存、策略版本创建与编辑 | `/investment-plans` |
+| 决策 / Decisions | 跨标的记录、计划/动作/日期筛选、分页、审计详情与审批模式 paper order 确认 | `/decisions`, `/investment-plans/:id/decisions` |
+| 策略 Studio / Strategy Studio | 受限 DSL、验证、准入回测、版本激活 | `/strategies`, `/investment-plans/:id/activate-policy` |
 
-### Dashboard `/`
+## 运行可观测性 / Runtime observability
 
-- 当前产品市场估值、建议动作
-- 基本面、趋势面、AI情绪得分、综合得分
-- 最近一次决策、决策摘要
-- 风险提示
+顶栏读取 `/health`、`/ready` 与 `/runtime-status`，清楚区分 API 离线、SQLite 未就绪、OpenD/Qwen/市场数据未配置，以及 scheduler 最近一次安全计数。状态展示绝不调用 Qwen 或提交订单。
 
-- 总收益
-- 持仓收益
-- 确定收益
-- 等等
-- 图表显示相比普通定投的收益比较，普通定投 vs 自适应定投曲线
+The top status strip reads `/health`, `/ready` and `/runtime-status`. It distinguishes an offline API, unavailable SQLite, optional OpenD/Qwen/market-data configuration, and safe scheduler counters without invoking Qwen or placing an order.
 
-### Decision Detail `/decisions/:id`
+## 前端约束 / Frontend rules
 
-由一个副sidebar和页面显示组成，副sidebar是一个列表，可以进行搜索、排序等，列表里的每一项都具有简单信息摘要：
+- React Router 路由页面按需加载，并设置可恢复的 `errorElement`；不得向用户展示框架默认异常页。
+- 中英文翻译键必须完全对齐；Vitest 会验证两套 locale 的键集合与非空值。
+- 服务端数据必须通过 React Query；手动刷新使用 `refetch`，仍写入同一 query cache。
+- 不开放自由策略代码编辑器；策略 Studio 只提交后端白名单 DSL。
+- 所有交易交互保持 paper-only；审批模式必须确认已有决策存证，不能重新计算后下单。
 
-- 产品代码
-- 最终动作：Overweight / Standard / Delay / Underweight / Skip
-- 金额
-- 倍率
-- 时间
+## 验证 / Verification
 
-点开后，右边可以显示详情：
+```bash
+pnpm --dir apps/web lint
+pnpm --dir apps/web test
+pnpm --dir apps/web build
+```
 
-- 最终动作：Overweight / Standard / Delay / Underweight / Skip
-- 倍率：例如 0.75x / 1.30x
-- 70/20/10 分解
-- CAPE 分位
-- ERP 分位
-- MA200 距离分位
-- RSI 分位
-- VIX 分位
-- AI 情绪偏移
-- 自然语言解释
-- 输入快照
-- 审计记录
+## 后续 / Next
 
-### Plans `/plans/:id`
-
-类似Decision Detail的副sidebar和页面显示形式，展示用户有哪些定投计划。
-
-- 计划名称
-- 标的
-- 基准金额
-- 周期
-- 最大倍率
-- 是否需要人工确认
-- 状态：启用 / 暂停
-
-后续再加 /plans/:id 或编辑弹窗。
+1. 在有真实多账户与真实填单数据时，增加账户维度筛选和服务端游标分页。
+2. 为 Dashboard 图表单独拆分 Recharts vendor chunk，并按性能测量再调整。
+3. 用 Playwright 覆盖浏览器级关键路径：后端离线、Qwen 未配置、审批下单与语言切换。

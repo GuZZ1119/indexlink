@@ -12,7 +12,7 @@ use broker::{
     OpenDSessionError,
 };
 use config::{Config, SchedulerConfig};
-use indexlink_api::{build_router_with_cors, ApiState};
+use indexlink_api::{build_router_with_cors, ApiState, SchedulerStatusHandle};
 use indexlink_storage::SqliteStorage;
 use market_data::OpenDMarketSignalProvider;
 use std::{future::Future, sync::Arc};
@@ -34,9 +34,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("SQLite migrations applied");
     let market_sentiment_configured = config.qwen.is_some();
     let paper_broker_configured = config.opend.is_some();
-    let state =
-        build_api_state(storage, config.qwen, config.opend, build_opend_paper_broker).await?;
-    start_automatic_scheduler(state.clone(), config.scheduler);
+    let scheduler_status = SchedulerStatusHandle::new(
+        config.scheduler.enabled,
+        config.scheduler.tick_interval.as_secs(),
+    );
+    let state = build_api_state(
+        storage,
+        config.qwen,
+        config.opend,
+        scheduler_status.clone(),
+        build_opend_paper_broker,
+    )
+    .await?;
+    start_automatic_scheduler(state.clone(), config.scheduler, scheduler_status);
     let app = build_router_with_cors(state, config.cors_allowed_origins);
     let listener = tokio::net::TcpListener::bind(config.address).await?;
 
@@ -60,7 +70,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// The task reads each plan's monthly/weekly fixed-day set and creates at most one
 /// server-sourced decision record per active plan and UTC day.
 /// It never submits a broker order; an operator must still explicitly request paper submission.
-fn start_automatic_scheduler(state: ApiState, config: SchedulerConfig) {
+fn start_automatic_scheduler(
+    state: ApiState,
+    config: SchedulerConfig,
+    scheduler_status: SchedulerStatusHandle,
+) {
     if !config.enabled {
         tracing::info!("automatic decision scheduler is disabled");
         return;
@@ -71,13 +85,17 @@ fn start_automatic_scheduler(state: ApiState, config: SchedulerConfig) {
         loop {
             interval.tick().await;
             match indexlink_api::run_due_decisions(&state).await {
-                Ok(summary) => tracing::info!(
-                    created = summary.created,
-                    already_claimed = summary.already_claimed,
-                    unavailable = summary.unavailable,
-                    "automatic decision scheduler tick completed"
-                ),
+                Ok(summary) => {
+                    scheduler_status.record_success(summary);
+                    tracing::info!(
+                        created = summary.created,
+                        already_claimed = summary.already_claimed,
+                        unavailable = summary.unavailable,
+                        "automatic decision scheduler tick completed"
+                    );
+                }
                 Err(error) => {
+                    scheduler_status.record_failure();
                     tracing::error!(error = %error, "automatic decision scheduler tick failed")
                 }
             }
@@ -93,13 +111,15 @@ async fn build_api_state<F, Fut>(
     storage: SqliteStorage,
     qwen: Option<ai_client::AiConfig>,
     opend: Option<OpenDConnectionConfig>,
+    scheduler_status: SchedulerStatusHandle,
     build_broker: F,
 ) -> Result<ApiState, BrokerSetupError>
 where
     F: FnOnce(OpenDConnectionConfig) -> Fut,
     Fut: Future<Output = Result<Arc<dyn BrokerClient>, BrokerSetupError>>,
 {
-    let state = ApiState::new(storage, env!("CARGO_PKG_VERSION"));
+    let state =
+        ApiState::new(storage, env!("CARGO_PKG_VERSION")).with_scheduler_status(scheduler_status);
     let state = match qwen {
         Some(qwen_config) => state.with_market_sentiment(
             Arc::new(RssNewsSource::new()),
@@ -179,12 +199,23 @@ mod tests {
             .expect("in-memory SQLite storage should connect")
     }
 
+    /// Build a disabled status holder for composition tests that do not run a scheduler task.
+    fn scheduler_status() -> SchedulerStatusHandle {
+        SchedulerStatusHandle::new(false, 60)
+    }
+
     /// Verify the production composition root leaves sentiment unavailable without Qwen config.
     #[tokio::test]
     async fn build_api_state_leaves_market_sentiment_unconfigured_without_qwen() {
-        let state = build_api_state(storage().await, None, None, build_opend_paper_broker)
-            .await
-            .expect("mock broker composition should be infallible");
+        let state = build_api_state(
+            storage().await,
+            None,
+            None,
+            scheduler_status(),
+            build_opend_paper_broker,
+        )
+        .await
+        .expect("mock broker composition should be infallible");
 
         assert!(format!("{state:?}").contains("market_sentiment: None"));
     }
@@ -199,6 +230,7 @@ mod tests {
                 ..Default::default()
             }),
             None,
+            scheduler_status(),
             build_opend_paper_broker,
         )
         .await
@@ -303,11 +335,17 @@ mod tests {
     /// Verify a configured OpenD factory failure prevents server composition.
     #[tokio::test]
     async fn build_api_state_returns_session_error_when_opend_factory_fails() {
-        let error = build_api_state(storage().await, None, Some(paper_config()), |_| async {
-            Err::<Arc<dyn BrokerClient>, _>(BrokerSetupError::Session(
-                OpenDSessionError::Unavailable,
-            ))
-        })
+        let error = build_api_state(
+            storage().await,
+            None,
+            Some(paper_config()),
+            scheduler_status(),
+            |_| async {
+                Err::<Arc<dyn BrokerClient>, _>(BrokerSetupError::Session(
+                    OpenDSessionError::Unavailable,
+                ))
+            },
+        )
         .await
         .expect_err("failed OpenD factory must prevent startup");
 
@@ -325,9 +363,15 @@ mod tests {
             .migrate()
             .await
             .expect("in-memory SQLite migrations should apply");
-        let state = build_api_state(storage, None, Some(paper_config()), |_| async {
-            Ok::<Arc<dyn BrokerClient>, BrokerSetupError>(Arc::new(UnavailableBroker))
-        })
+        let state = build_api_state(
+            storage,
+            None,
+            Some(paper_config()),
+            scheduler_status(),
+            |_| async {
+                Ok::<Arc<dyn BrokerClient>, BrokerSetupError>(Arc::new(UnavailableBroker))
+            },
+        )
         .await
         .expect("configured factory should compose");
         let response = submit_decision_preview(
@@ -385,9 +429,15 @@ mod tests {
             .await
             .expect("in-memory SQLite migrations should apply");
         let app = build_router_with_cors(
-            build_api_state(storage, None, Some(opend), build_opend_paper_broker)
-                .await
-                .expect("local OpenD paper broker should initialize"),
+            build_api_state(
+                storage,
+                None,
+                Some(opend),
+                scheduler_status(),
+                build_opend_paper_broker,
+            )
+            .await
+            .expect("local OpenD paper broker should initialize"),
             Vec::new(),
         );
         let response = submit_decision_preview(app, &symbol, &quantity, &idempotency_key).await;

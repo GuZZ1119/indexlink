@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-28 CST — 前端服务端状态治理、运行可观测性与双语契约
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：前后端可观测性、React Query 缓存治理、决策历史检索、路由可靠性与前端测试。
+- 涉及文件：`apps/server/src/main.rs`、`crates/api/src/{state.rs,lib.rs,routes/{mod.rs,runtime_status.rs,decision_preview.rs,decision_records.rs},tests/health.rs}`、`crates/decision-records/src/lib.rs`、`crates/storage/src/sqlite_decision_records.rs`、`apps/web/{PLAN.md,package.json,vite.config.ts,vitest.config.ts,src/{App.tsx,api/{queries.ts,types.ts},components/layout/{app-layout.tsx,runtime-status.tsx},pages/{dashboard,decisions,route-error}.tsx,i18n/{locales/{en.ts,zh.ts},locales.test.ts}}`、`CHANGE_LOG.md`。
+- 变更内容：新增只读 `/runtime-status`，安全返回 SQLite、市场数据、Qwen、真实 paper broker 的装配状态以及 scheduler 的启用状态、最近成功计数与失败时间；服务端 scheduler 将成功/失败安全地写入该状态。前端顶栏分别读取 `/health`、`/ready`、`/runtime-status`，明确区分 API 离线、SQLite 未就绪、可选依赖未配置和 scheduler 状态，且不会触发 Qwen 或订单。行情、Qwen、组合、收益账本、真实轨迹、历史回放与价格历史已改由 React Query query cache 管理，手动刷新使用同一缓存；决策创建/审批会失效跨标的记录与相关账本缓存。新增跨计划 `GET /decisions`，决策页支持计划、动作、日期筛选与客户端分页，并保留详情/审批下单入口。路由按页面懒加载并使用自定义可恢复错误页；主入口 bundle 降至约 485KB。新增 Vitest，覆盖筛选纯函数与中英文 locale 键一致性/非空约束；补充 Dashboard 新增可见内容的双语翻译，并更新前端计划为真实 API 现状。
+- 验证：`pnpm --dir apps/web lint`、`pnpm --dir apps/web test`（4 项通过）、`pnpm --dir apps/web build`、`cargo fmt --all -- --check`、`cargo test -p core-domain -p indexlink-api -p indexlink-server` 均通过。
+
 ### 2026-08-28 CST — V1.1 计划配置、双桶展示与审批下单闭环
 
 - 执行模型：GPT-5 Codex。

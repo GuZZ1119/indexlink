@@ -1,4 +1,7 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use ai_client::{fetch_market_sentiment_report, AiProvider, MarketSentimentReport, NewsSource};
 use async_trait::async_trait;
@@ -30,6 +33,91 @@ use std::collections::BTreeMap;
 use strategy_dsl::StrategySpec;
 
 use crate::ApiError;
+
+/// Shared, display-safe state for the in-process automatic decision scheduler.
+///
+/// The status intentionally records counters and timestamps only; it never contains plan input,
+/// account IDs, provider credentials, or market payloads.
+#[derive(Debug, Clone, Serialize)]
+pub struct SchedulerStatus {
+    /// Whether the server was configured to run periodic automatic decisions.
+    pub enabled: bool,
+    /// Configured tick interval in whole seconds.
+    pub tick_interval_seconds: u64,
+    /// UTC timestamp of the most recent completed scheduler tick.
+    pub last_tick_at: Option<String>,
+    /// Safe counters from the most recent successful tick.
+    pub last_summary: Option<crate::ScheduledDecisionRunSummary>,
+    /// UTC timestamp of the most recent failed scheduler tick.
+    pub last_error_at: Option<String>,
+}
+
+impl SchedulerStatus {
+    /// Build an initial status snapshot before the first scheduler tick.
+    #[must_use]
+    pub fn new(enabled: bool, tick_interval_seconds: u64) -> Self {
+        Self {
+            enabled,
+            tick_interval_seconds,
+            last_tick_at: None,
+            last_summary: None,
+            last_error_at: None,
+        }
+    }
+}
+
+/// Cloneable writer/reader for scheduler status shared between the server task and HTTP API.
+#[derive(Clone, Debug)]
+pub struct SchedulerStatusHandle(Arc<Mutex<SchedulerStatus>>);
+
+impl SchedulerStatusHandle {
+    /// Create one shared status holder with its configured scheduler settings.
+    #[must_use]
+    pub fn new(enabled: bool, tick_interval_seconds: u64) -> Self {
+        Self(Arc::new(Mutex::new(SchedulerStatus::new(
+            enabled,
+            tick_interval_seconds,
+        ))))
+    }
+
+    /// Capture a completed scheduler tick without retaining decision payloads.
+    pub fn record_success(&self, summary: crate::ScheduledDecisionRunSummary) {
+        if let Ok(mut status) = self.0.lock() {
+            status.last_tick_at = Some(time::OffsetDateTime::now_utc().to_string());
+            status.last_summary = Some(summary);
+            status.last_error_at = None;
+        }
+    }
+
+    /// Capture a failed scheduler tick without serializing its internal error detail.
+    pub fn record_failure(&self) {
+        if let Ok(mut status) = self.0.lock() {
+            status.last_error_at = Some(time::OffsetDateTime::now_utc().to_string());
+        }
+    }
+
+    /// Return a consistent display snapshot for the runtime-status API.
+    #[must_use]
+    pub fn snapshot(&self) -> SchedulerStatus {
+        self.0
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_else(|_| SchedulerStatus::new(false, 0))
+    }
+}
+
+/// Display-safe configured dependency capabilities for the web runtime status page.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RuntimeCapabilities {
+    /// Whether automatic market-data input has been composed from OpenD.
+    pub market_data_configured: bool,
+    /// Whether a Qwen/news provider has been composed from local configuration.
+    pub qwen_configured: bool,
+    /// Whether the production OpenD paper broker replaced the local mock broker.
+    pub paper_broker_configured: bool,
+    /// Current in-process scheduler counters and timestamps.
+    pub scheduler: SchedulerStatus,
+}
 
 enum ReadinessBackend {
     SqliteStorage(SqliteStorage),
@@ -131,6 +219,8 @@ pub struct ApiState {
     opportunity_cash: Option<SqliteOpportunityCashRepository>,
     period_execution: Option<SqlitePeriodExecutionRepository>,
     strategy_specs: Option<SqliteStrategySpecRepository>,
+    scheduler_status: SchedulerStatusHandle,
+    paper_broker_configured: bool,
     policy_resolver: Arc<BuiltinPolicyResolver>,
     version: Arc<str>,
 }
@@ -178,6 +268,8 @@ impl ApiState {
             opportunity_cash: Some(opportunity_cash),
             period_execution: Some(period_execution),
             strategy_specs: Some(strategy_specs),
+            scheduler_status: SchedulerStatusHandle::new(false, 0),
+            paper_broker_configured: false,
             policy_resolver: Arc::new(BuiltinPolicyResolver::default()),
             version: version.into(),
         }
@@ -249,6 +341,8 @@ impl ApiState {
             opportunity_cash: None,
             period_execution: None,
             strategy_specs: None,
+            scheduler_status: SchedulerStatusHandle::new(false, 0),
+            paper_broker_configured: false,
             policy_resolver: Arc::new(BuiltinPolicyResolver::default()),
             version: version.into(),
         }
@@ -286,7 +380,26 @@ impl ApiState {
     #[must_use]
     pub fn with_broker(mut self, broker: Arc<dyn BrokerClient>) -> Self {
         self.broker = broker;
+        self.paper_broker_configured = true;
         self
+    }
+
+    /// Inject the server-owned scheduler status holder used by the runtime-status endpoint.
+    #[must_use]
+    pub fn with_scheduler_status(mut self, scheduler_status: SchedulerStatusHandle) -> Self {
+        self.scheduler_status = scheduler_status;
+        self
+    }
+
+    /// Return a display-safe runtime capability snapshot without probing paid or trading APIs.
+    #[must_use]
+    pub(crate) fn runtime_capabilities(&self) -> RuntimeCapabilities {
+        RuntimeCapabilities {
+            market_data_configured: self.market_data.is_some(),
+            qwen_configured: self.market_sentiment.is_some(),
+            paper_broker_configured: self.paper_broker_configured,
+            scheduler: self.scheduler_status.snapshot(),
+        }
     }
 
     /// 检查 API 依赖是否可用。
