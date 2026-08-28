@@ -7,8 +7,8 @@
 - 执行模型：GPT-5 Codex。
 - 变更类型：测试覆盖率与可测试性改进；不改变生产业务规则。
 - 涉及文件：`crates/market-data/src/lib.rs`、`crates/api/src/state.rs`、`apps/server/src/shutdown.rs`、`CHANGE_LOG.md`。
-- 变更内容：为本机 OpenD 日线 adapter 增加独立帧完整性、回环地址、宏观解析、历史长度与成功读取测试；为 `ApiState` 增加缺失依赖安全映射、可替换 market-data、SQLite 计划/调度/账本以及价格图表/历史回放组合测试；将 shutdown 的信号等待拆为无真实 OS 信号依赖的内部入口，并覆盖 Ctrl+C 与 SIGTERM 两个完成分支。
-- 验证：`cargo test -p indexlink-api -p indexlink-server -p market-data --locked`、`cargo llvm-cov --workspace --locked --summary-only` 均通过；全工作区 LLVM 行覆盖率为 **90.63%**（`market-data` 90.70%、`ApiState` 84.13%、`shutdown.rs` 53.85%，其余 shutdown 行为是实际 OS 信号注册路径）。
+- 变更内容：为本机 OpenD 日线 adapter 增加独立帧完整性、回环地址、宏观解析、历史长度与成功读取测试；为 `ApiState` 增加缺失依赖安全映射、可替换 market-data、SQLite 计划/调度/账本以及价格图表/历史回放组合测试；将 shutdown 的信号等待拆为可控内部入口，覆盖 Ctrl+C、SIGTERM 完成分支与真实 Unix SIGTERM 注册路径。真实信号测试在 handler 安装完成后才向当前测试进程发送 SIGTERM，避免启动竞态。
+- 验证：`cargo test -p indexlink-api -p indexlink-server -p market-data --locked`、`cargo llvm-cov --workspace --locked --summary-only` 均通过；全工作区 LLVM 行覆盖率为 **90.73%**（`market-data` 90.70%、`ApiState` 84.13%、`shutdown.rs` **91.04%**）。
 
 ### 2026-08-27 CST — Strategy Studio 本地开发代理修正
 
