@@ -72,6 +72,14 @@ export default {
     cashPolicy: '机会现金策略', expire: '当期到期', carry: '滚存', carryCap: '滚存并设上限', cashCap: '机会现金上限', periodLimit: '周期累计执行上限（可选）',
     saving: '正在保存…', save: '保存计划配置', cancel: '取消编辑',
   },
+  studio: {
+    versions: '策略版本', versionsDescription: '不可变版本；复制后创建新版本。', duplicate: '复制选中版本', title: '受限策略 Studio', description: '白名单指标、条件组与机会桶动作。核心桶始终保留。',
+    policyId: '策略 ID', version: '版本', name: '名称', addRule: '增加下一优先规则', valid: '校验通过，可保存。', save: '验证并保存不可变版本',
+    simulation: '当前数据模拟', simulationDescription: '仅解释首条命中规则；不写审计、不下单。', simulate: '用 {{symbol}} 模拟', asOf: '截至 {{date}}：', noRule: '未命中规则，使用默认机会桶行为。', matchedRule: '命中优先级第 {{index}} 条规则。', action: '动作：{{action}}，机会桶倍率：{{multiplier}}x', evidence: '证据：{{evidence}}',
+    admission: '激活准入回测', admissionDescription: '激活前必须通过核心桶/预算检查，并以固定样本在同一投入、成本与成交时点下对照 Fixed DCA。', runAdmission: '运行固定样本准入回测', admissionFailed: '准入回测失败', activate: '激活到计划', activateDescription: '通过准入后，Preview、scheduler 与审计才会运行该版本；审批模式不自动下单。', current: '当前 {{policy}}', activateConfirm: '绑定 {{strategy}} 到 {{plan}}？', activateButton: '确认激活', admissionRequired: '请先运行并通过固定样本准入回测。',
+    rejected: '未通过准入：{{reason}}', rejectedFallback: '核心桶、预算或历史样本检查未通过。', eligible: '通过：核心桶不可否决，固定预算有效。以下是历史固定样本的如实对照，不构成收益承诺。', observations: '{{count}} 次同期观察', strategyTerminal: '策略期末净值', dcaTerminal: 'Fixed DCA 期末净值', strategyDrawdown: '策略最大回撤', dcaDrawdown: 'DCA 最大回撤', strategyVolatility: '策略年化波动', dcaVolatility: 'DCA 年化波动', strategyCash: '策略现金使用率', dcaCash: 'DCA 现金使用率', insufficient: '样本不足',
+    priorityRule: '优先规则 {{index}}', conditionGroup: '条件关系', single: '单条件', all: '全部满足', any: '任一满足', addCondition: '增加条件', opportunityAction: '机会桶动作', setMultiplier: '设置倍率', skipOpportunity: '跳过机会桶', multiplier: '倍率（0–1.5）', indicator: '指标', close: '收盘价', window: '窗口（交易日）', comparison: '比较', less: '小于', lessEqual: '小于等于', greater: '大于', greaterEqual: '大于等于', threshold: '阈值',
+  },
   action: {
     overweight: '加码',
     standard: '标准',

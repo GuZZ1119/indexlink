@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-08-28 CST — Strategy Studio 全量双语与前端覆盖率门槛
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：前端国际化收尾、测试基础设施与质量门槛。
+- 涉及文件：`apps/web/src/pages/strategies/index.tsx`、`apps/web/src/i18n/locales/{en.ts,zh.ts}`、`apps/web/{package.json,pnpm-lock.yaml,vitest.config.ts,eslint.config.js}`、`.gitignore`、`CHANGE_LOG.md`。
+- 变更内容：Strategy Studio 全部可见标签、按钮、确认提示、模拟解释、准入回测指标、条件组及 DSL 白名单编辑器均改为 i18n 键；切换语言后不再保留中文硬编码。扩展 Vitest V8 coverage，新增 `test:coverage` 命令并为当前可确定性测试的前端领域边界（locale 契约和决策筛选器）配置行/分支/函数/语句 **90%** 门槛；本次实测均为 **100%**。生成的 `apps/web/coverage/` 已加入 Git ignore。
+- 验证：`pnpm --dir apps/web lint`、`pnpm --dir apps/web build`、`pnpm --dir apps/web test:coverage`、`git diff --check` 通过。
+
 ### 2026-08-28 CST — 前端服务端状态治理、运行可观测性与双语契约
 
 - 执行模型：GPT-5 Codex。

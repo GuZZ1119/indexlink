@@ -11,3 +11,4 @@ indexlink.db-wal
 # 本地录制与截图素材；仅用于演示，不随源码提交。
 apps/web/public/demo-screenshots/
 apps/web/public/demo-videos/
+apps/web/coverage/
