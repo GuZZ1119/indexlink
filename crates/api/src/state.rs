@@ -1038,10 +1038,15 @@ impl ReadinessError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use async_trait::async_trait;
     use broker::{BrokerEnvironment, BrokerError, BrokerOrderRequest, BrokerOrderSide};
+    use investment_plans::{
+        BucketAllocationRatio, CreateInvestmentPlan, OpportunityCashPolicy,
+        PlanExecutionConfiguration, PlanRiskMode, ScheduleKind, TwoBucketAllocationConfig,
+    };
+    use market_data::{MarketDataError, MarketPricePoint, MarketSignalInput, MarketSignalProvider};
     use rust_decimal::Decimal;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
@@ -1054,6 +1059,39 @@ mod tests {
     /// Broker double that proves composition can replace the default mock safely.
     #[derive(Debug)]
     struct UnavailableBroker;
+
+    /// Deterministic market-data adapter for state composition tests.
+    struct StaticMarketData {
+        failure: Option<StaticMarketFailure>,
+        prices: Vec<MarketPricePoint>,
+    }
+
+    /// Public market-data error variants exercised by the test adapter.
+    #[derive(Clone, Copy)]
+    enum StaticMarketFailure {
+        /// Simulate caller-supplied invalid symbols.
+        InvalidSymbol,
+        /// Simulate an unavailable local OpenD market-data dependency.
+        Unavailable,
+    }
+
+    impl StaticMarketData {
+        /// Build a deterministic successful adapter with an arbitrary price sequence.
+        fn available(prices: Vec<MarketPricePoint>) -> Self {
+            Self {
+                failure: None,
+                prices,
+            }
+        }
+
+        /// Build an adapter that fails through the requested public error mapping.
+        fn failing(error: StaticMarketFailure) -> Self {
+            Self {
+                failure: Some(error),
+                prices: Vec::new(),
+            }
+        }
+    }
 
     #[async_trait]
     impl ReadinessCheck for SecretChecker {
@@ -1070,6 +1108,82 @@ mod tests {
         ) -> Result<broker::BrokerOrderAck, BrokerError> {
             Err(BrokerError::Unavailable)
         }
+    }
+
+    #[async_trait]
+    impl MarketSignalProvider for StaticMarketData {
+        async fn fetch(&self, symbol: &str) -> Result<MarketSignalInput, MarketDataError> {
+            if let Some(error) = self.failure {
+                return Err(match error {
+                    StaticMarketFailure::InvalidSymbol => MarketDataError::InvalidSymbol,
+                    StaticMarketFailure::Unavailable => MarketDataError::OpenDUnavailable,
+                });
+            }
+            let values = vec![1.0; 60];
+            Ok(MarketSignalInput {
+                symbol: symbol.to_ascii_uppercase(),
+                as_of: "2026-08-27".to_owned(),
+                cape_history: values.clone(),
+                cape_current: 1.0,
+                erp_history: values.clone(),
+                erp_current: 1.0,
+                ma_distance_history: values.clone(),
+                ma_distance_current: 0.0,
+                rsi_history: values.clone(),
+                rsi_current: 50.0,
+                vix_history: values,
+                vix_current: 20.0,
+            })
+        }
+
+        async fn fetch_price_history(
+            &self,
+            _symbol: &str,
+            _lookback_days: i64,
+        ) -> Result<Vec<MarketPricePoint>, MarketDataError> {
+            if let Some(error) = self.failure {
+                return Err(match error {
+                    StaticMarketFailure::InvalidSymbol => MarketDataError::InvalidSymbol,
+                    StaticMarketFailure::Unavailable => MarketDataError::OpenDUnavailable,
+                });
+            }
+            Ok(self.prices.clone())
+        }
+    }
+
+    /// Build a valid plan input for migrated-state tests.
+    fn plan_input() -> CreateInvestmentPlan {
+        CreateInvestmentPlan {
+            name: "State coverage ETF".to_owned(),
+            symbol: "VOO".to_owned(),
+            base_contribution: Decimal::new(100, 0),
+            currency: "USD".to_owned(),
+            schedule_kind: ScheduleKind::Monthly,
+            schedule_day: 15,
+            schedule_days: vec![15],
+            policy: None,
+            execution_configuration: PlanExecutionConfiguration::new_with_cash_policy(
+                TwoBucketAllocationConfig::new(
+                    BucketAllocationRatio::new(Decimal::new(80, 2)).unwrap(),
+                    BucketAllocationRatio::new(Decimal::new(20, 2)).unwrap(),
+                )
+                .unwrap(),
+                PlanRiskMode::Autopilot,
+                OpportunityCashPolicy::CarryForward,
+            )
+            .unwrap(),
+            max_single_execution: Decimal::new(150, 0),
+        }
+    }
+
+    /// Create a migrated in-memory production state for repository composition tests.
+    async fn migrated_state() -> ApiState {
+        let storage =
+            SqliteStorage::connect_with_options("sqlite::memory:", 1, Duration::from_secs(1))
+                .await
+                .unwrap();
+        storage.migrate().await.unwrap();
+        ApiState::new(storage, "coverage")
     }
 
     #[test]
@@ -1133,5 +1247,187 @@ mod tests {
             state.broker().submit_order(request).await,
             Err(BrokerError::Unavailable)
         );
+    }
+
+    /// Verify absent optional adapters fail safely while local no-op ledgers remain deterministic.
+    #[tokio::test]
+    async fn isolated_state_maps_missing_optional_dependencies_safely() {
+        let state = ApiState::with_readiness(Arc::new(SecretChecker { secret: "ready" }), "0.1.0");
+        let plan_id = uuid::Uuid::new_v4();
+        let record_id = uuid::Uuid::new_v4();
+
+        assert!(state.check_readiness().await.is_err());
+        assert_eq!(state.version(), "0.1.0");
+        assert!(matches!(
+            state.list_strategy_specs().await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+        assert!(matches!(
+            state.market_sentiment().await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+        assert!(matches!(
+            state.market_signal_input("VOO").await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+        assert!(matches!(
+            state.market_price_history("VOO", 30).await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+        assert!(matches!(
+            state.latest_market_price("VOO").await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+        assert!(matches!(
+            state.paper_performance(plan_id).await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+        assert_eq!(
+            state.opportunity_cash_balance(plan_id).await.unwrap(),
+            Decimal::ZERO
+        );
+        assert!(state
+            .reserve_period_execution(
+                plan_id,
+                record_id,
+                "2026-08",
+                Decimal::new(100, 0),
+                Decimal::new(10, 0),
+            )
+            .await
+            .unwrap());
+        state
+            .release_scheduled_decision(plan_id, "2026-08-27")
+            .await;
+        state.release_period_execution(record_id).await;
+    }
+
+    /// Verify market-data success and error mappings remain independent of HTTP routes.
+    #[tokio::test]
+    async fn market_data_injection_returns_prices_and_maps_provider_errors() {
+        let prices = vec![
+            MarketPricePoint {
+                date: "2026-08-25".to_owned(),
+                close: 99.5,
+            },
+            MarketPricePoint {
+                date: "2026-08-26".to_owned(),
+                close: 101.25,
+            },
+        ];
+        let available =
+            ApiState::with_readiness(Arc::new(SecretChecker { secret: "ready" }), "0.1.0")
+                .with_market_data(Arc::new(StaticMarketData::available(prices.clone())));
+
+        assert_eq!(
+            available.market_signal_input("voo").await.unwrap().symbol,
+            "VOO"
+        );
+        assert_eq!(
+            available.market_price_history("VOO", 30).await.unwrap(),
+            prices
+        );
+        assert_eq!(
+            available.latest_market_price("VOO").await.unwrap(),
+            Decimal::new(10125, 2)
+        );
+
+        let invalid =
+            ApiState::with_readiness(Arc::new(SecretChecker { secret: "ready" }), "0.1.0")
+                .with_market_data(Arc::new(StaticMarketData::failing(
+                    StaticMarketFailure::InvalidSymbol,
+                )));
+        assert!(matches!(
+            invalid.market_signal_input("bad symbol").await,
+            Err(ApiError::BadRequest)
+        ));
+        assert!(matches!(
+            invalid.market_price_history("VOO", 30).await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+
+        let unavailable =
+            ApiState::with_readiness(Arc::new(SecretChecker { secret: "ready" }), "0.1.0")
+                .with_market_data(Arc::new(StaticMarketData::failing(
+                    StaticMarketFailure::Unavailable,
+                )));
+        assert!(matches!(
+            unavailable.market_signal_input("VOO").await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+    }
+
+    /// Verify migrated production wiring supports plans, ledgers and empty portfolio views.
+    #[tokio::test]
+    async fn migrated_state_composes_local_plan_and_execution_ledgers() {
+        let state = migrated_state().await;
+        let plan = state.plans().create(plan_input()).await.unwrap();
+        let record_id = uuid::Uuid::new_v4();
+
+        state.check_readiness().await.unwrap();
+        assert!(state.supports_plan_policy(&plan.policy).await.unwrap());
+        assert!(state
+            .is_plan_policy_eligible_for_activation(&plan.policy)
+            .await
+            .unwrap());
+        assert!(state
+            .claim_scheduled_decision(plan.id, "2026-08-27")
+            .await
+            .unwrap());
+        assert!(!state
+            .claim_scheduled_decision(plan.id, "2026-08-27")
+            .await
+            .unwrap());
+        state
+            .release_scheduled_decision(plan.id, "2026-08-27")
+            .await;
+        assert!(state
+            .claim_scheduled_decision(plan.id, "2026-08-27")
+            .await
+            .unwrap());
+
+        state.accept_period_execution(record_id).await.unwrap();
+        state.release_period_execution(record_id).await;
+        assert_eq!(
+            state.opportunity_cash_balance(plan.id).await.unwrap(),
+            Decimal::ZERO
+        );
+        assert!(matches!(
+            state.actual_performance().await,
+            Err(ApiError::ServiceUnavailable)
+        ));
+    }
+
+    /// Verify local price history and the transparent replay use the injected read-only source.
+    #[tokio::test]
+    async fn migrated_state_builds_holding_chart_and_historical_replay() {
+        let prices = (0..460)
+            .map(|offset| {
+                let date = chrono::Utc::now().date_naive() - chrono::Duration::days(459 - offset);
+                MarketPricePoint {
+                    date: date.format("%Y-%m-%d").to_string(),
+                    close: 100.0 + offset as f64 * 0.1,
+                }
+            })
+            .collect();
+        let state = migrated_state()
+            .await
+            .with_market_data(Arc::new(StaticMarketData::available(prices)));
+        let plan = state.plans().create(plan_input()).await.unwrap();
+
+        let holding = state.holding_price_history(365).await.unwrap();
+        assert_eq!(holding.len(), 1);
+        assert_eq!(holding[0].plan_id, plan.id);
+        assert_eq!(holding[0].symbol, "VOO");
+        assert!(holding[0].prices.len() >= 365);
+        assert!(holding[0].trades.is_empty());
+
+        let replay = state.historical_backtest().await.unwrap();
+        assert_eq!(replay.currency, "USD");
+        assert!(!replay.points.is_empty());
+        assert!(replay
+            .points
+            .iter()
+            .all(|point| point.plain_dca_value > 0.0 && point.adaptive_value > 0.0));
     }
 }

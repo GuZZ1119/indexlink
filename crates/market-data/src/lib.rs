@@ -551,7 +551,89 @@ fn last_values(values: Vec<f64>) -> Result<Vec<f64>, MarketDataError> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    /// Encode one independent OpenD JSON response frame for local protocol tests.
+    fn response_frame(protocol_id: u32, serial: u32, body: Value) -> Vec<u8> {
+        let body = serde_json::to_vec(&body).unwrap();
+        let digest = Sha1::digest(&body);
+        let mut frame = Vec::with_capacity(OPEND_HEADER_LENGTH + body.len());
+        frame.extend_from_slice(b"FT");
+        frame.extend_from_slice(&protocol_id.to_le_bytes());
+        frame.push(OPEND_JSON_FORMAT);
+        frame.push(0);
+        frame.extend_from_slice(&serial.to_le_bytes());
+        frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&digest);
+        frame.extend_from_slice(&[0; 8]);
+        frame.extend_from_slice(&body);
+        frame
+    }
+
+    /// Read only the protocol metadata required to drive a local OpenD fake.
+    async fn read_request(stream: &mut TcpStream) -> (u32, u32, Value) {
+        let mut header = [0_u8; OPEND_HEADER_LENGTH];
+        stream.read_exact(&mut header).await.unwrap();
+        assert_eq!(&header[..2], b"FT");
+        let protocol_id = u32::from_le_bytes(header[2..6].try_into().unwrap());
+        let serial = u32::from_le_bytes(header[8..12].try_into().unwrap());
+        let size = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+        let mut body = vec![0; size];
+        stream.read_exact(&mut body).await.unwrap();
+        (protocol_id, serial, serde_json::from_slice(&body).unwrap())
+    }
+
+    /// Start an isolated fake which serves the init and one day-kline request.
+    async fn spawn_history_server(closes: Vec<(NaiveDate, f64)>) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (protocol, serial, _) = read_request(&mut stream).await;
+            assert_eq!(protocol, OPEND_INIT_CONNECT);
+            stream
+                .write_all(&response_frame(protocol, serial, json!({"s2c": {}})))
+                .await
+                .unwrap();
+
+            let (protocol, serial, request) = read_request(&mut stream).await;
+            assert_eq!(protocol, OPEND_HISTORY_KLINE);
+            assert_eq!(request["c2s"]["security"]["market"], OPEND_US_MARKET);
+            assert_eq!(request["c2s"]["security"]["code"], "VOO");
+            let rows: Vec<_> = closes
+                .into_iter()
+                .map(|(date, close)| {
+                    json!({"time": date.format("%Y-%m-%d 00:00:00").to_string(), "closePrice": close})
+                })
+                .collect();
+            stream
+                .write_all(&response_frame(
+                    protocol,
+                    serial,
+                    json!({"s2c": {"klList": rows}}),
+                ))
+                .await
+                .unwrap();
+        });
+        address
+    }
+
+    /// Build enough daily history for the MA200 plus sixty-month coverage guard.
+    fn daily_history() -> Vec<(NaiveDate, f64)> {
+        let end = Utc::now().date_naive();
+        (0..270)
+            .map(|offset| {
+                let date = end - ChronoDuration::days(269 - offset);
+                (date, 100.0 + offset as f64 / 10.0)
+            })
+            .collect()
+    }
 
     /// Verify technical snapshots retain the latest sixty monthly observations.
     #[test]
@@ -577,6 +659,175 @@ mod tests {
         assert_eq!(normalize_symbol(" voo ").unwrap(), "VOO");
         assert_eq!(normalize_symbol("VOO\n").unwrap(), "VOO");
         assert!(normalize_symbol("VOO/../../").is_err());
+    }
+
+    /// Verify the production constructor accepts only literal loopback endpoints.
+    #[test]
+    fn provider_constructor_rejects_remote_or_zero_port() {
+        assert!(OpenDMarketSignalProvider::new("127.0.0.1", 11111).is_ok());
+        assert!(OpenDMarketSignalProvider::new("localhost", 11111).is_err());
+        assert!(OpenDMarketSignalProvider::new("192.0.2.1", 11111).is_err());
+        assert!(OpenDMarketSignalProvider::new("127.0.0.1", 0).is_err());
+        assert!(normalize_symbol("brk.b").is_ok());
+        assert!(normalize_symbol("ÅAPL").is_err());
+    }
+
+    /// Verify public macro parsers retain only valid bounded monthly observations.
+    #[test]
+    fn parsers_keep_valid_macro_observations_and_reject_empty_input() {
+        let cape_html = (0..60)
+            .map(|month| {
+                let date =
+                    NaiveDate::from_ymd_opt(2020 + month / 12, (month % 12 + 1) as u32, 1).unwrap();
+                format!(
+                    "<tr><td>{}</td><td>{}</td></tr>",
+                    date.format("%b %d, %Y"),
+                    20.0 + month as f64
+                )
+            })
+            .collect::<String>();
+        let cape = parse_cape_history(&cape_html).unwrap();
+        assert_eq!(cape.len(), 60);
+        assert_eq!(
+            parse_cape_history("<html></html>"),
+            Err(MarketDataError::InsufficientHistory)
+        );
+
+        let mut vix_rows = vec!["DATE,OPEN,HIGH,LOW,CLOSE".to_owned()];
+        vix_rows.extend((0..60).map(|month| {
+            let date =
+                NaiveDate::from_ymd_opt(2020 + month / 12, (month % 12 + 1) as u32, 1).unwrap();
+            format!(
+                "{},{},{},{},{}",
+                date.format("%m/%d/%Y"),
+                1,
+                2,
+                1,
+                15 + month
+            )
+        }));
+        let vix_csv = vix_rows.join("\n");
+        assert_eq!(parse_vix_csv(&vix_csv).unwrap().len(), 60);
+        assert_eq!(
+            parse_vix_csv("DATE,OPEN,HIGH,LOW,CLOSE\ninvalid"),
+            Err(MarketDataError::InsufficientHistory)
+        );
+
+        let mut treasury_rows = vec!["Date,1 Mo,10 Yr".to_owned()];
+        treasury_rows.extend((0..60).map(|month| {
+            let date =
+                NaiveDate::from_ymd_opt(2020 + month / 12, (month % 12 + 1) as u32, 1).unwrap();
+            format!("{},1.0,4.{}", date.format("%m/%d/%Y"), month % 10)
+        }));
+        let treasury_csv = treasury_rows.join("\n");
+        assert_eq!(parse_treasury_csv(&treasury_csv).unwrap().len(), 60);
+        assert_eq!(
+            parse_treasury_csv("Date,1 Mo\n01/01/2020,1.0"),
+            Err(MarketDataError::MacroUnavailable)
+        );
+    }
+
+    /// Verify indicator histories and macro intersections enforce their causal history minimum.
+    #[test]
+    fn historical_helpers_keep_latest_months_and_reject_short_series() {
+        let start = NaiveDate::from_ymd_opt(2018, 1, 1).unwrap();
+        let daily: Vec<_> = (0..(365 * 8))
+            .map(|offset| {
+                let close = 100.0 + (offset as f64 / 9.0).sin() * 3.0 + offset as f64 / 10.0;
+                (start + ChronoDuration::days(offset), close)
+            })
+            .collect();
+        let (ma, rsi) = technical_history(&daily).unwrap();
+        assert_eq!(ma.len(), MIN_HISTORY);
+        assert!(rsi.iter().all(|value| (0.0..=100.0).contains(value)));
+        assert_eq!(
+            technical_history(&daily[..MA_WINDOW]),
+            Err(MarketDataError::InsufficientHistory)
+        );
+
+        let cape: MonthlySeries = (0..60)
+            .map(|month| ((2020 + month / 12, (month % 12 + 1) as u32), 25.0))
+            .collect();
+        let treasury: MonthlySeries = (0..60)
+            .map(|month| ((2020 + month / 12, (month % 12 + 1) as u32), 4.0))
+            .collect();
+        let (cape_values, erp_values) = cape_and_erp_history(&cape, &treasury).unwrap();
+        assert_eq!(cape_values.len(), MIN_HISTORY);
+        assert_eq!(erp_values.len(), MIN_HISTORY);
+        assert_eq!(
+            last_values(vec![1.0; MIN_HISTORY]).unwrap().len(),
+            MIN_HISTORY
+        );
+        assert_eq!(
+            last_values(vec![1.0; MIN_HISTORY - 1]),
+            Err(MarketDataError::InsufficientHistory)
+        );
+    }
+
+    /// Verify the protocol adapter accepts a good independent frame and rejects bad checksums.
+    #[tokio::test]
+    async fn opend_protocol_validates_response_frame_integrity() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (protocol, serial, body) = read_request(&mut stream).await;
+            assert_eq!(protocol, OPEND_INIT_CONNECT);
+            assert_eq!(body["c2s"]["clientID"], "test");
+            stream
+                .write_all(&response_frame(
+                    protocol,
+                    serial,
+                    json!({"s2c": {"connID": "1"}}),
+                ))
+                .await
+                .unwrap();
+        });
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        assert_eq!(
+            opend_request(
+                &mut stream,
+                OPEND_INIT_CONNECT,
+                9,
+                json!({"c2s": {"clientID": "test"}})
+            )
+            .await
+            .unwrap()["s2c"]["connID"],
+            "1"
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (protocol, serial, _) = read_request(&mut stream).await;
+            let mut frame = response_frame(protocol, serial, json!({"s2c": {}}));
+            frame[16] ^= 1;
+            stream.write_all(&frame).await.unwrap();
+        });
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        assert_eq!(
+            opend_request(&mut stream, OPEND_INIT_CONNECT, 1, json!({})).await,
+            Err(MarketDataError::OpenDUnavailable)
+        );
+    }
+
+    /// Verify OpenD price retrieval uses bounded local data and does not manufacture prices.
+    #[tokio::test]
+    async fn fetch_price_history_reads_valid_local_opend_kline_data() {
+        let address = spawn_history_server(daily_history()).await;
+        let provider =
+            OpenDMarketSignalProvider::new(address.ip().to_string(), address.port()).unwrap();
+        let values = provider.fetch_price_history("voo", 7).await.unwrap();
+
+        assert!(!values.is_empty());
+        assert!(values.len() <= 8);
+        assert!(values.windows(2).all(|pair| pair[0].date < pair[1].date));
+        assert!(values.iter().all(|point| point.close > 0.0));
+        assert_eq!(
+            provider.fetch_price_history("VOO", 0).await,
+            Err(MarketDataError::InsufficientHistory)
+        );
     }
 
     /// Exercise the configured local OpenD and public read-only sources without trading.
