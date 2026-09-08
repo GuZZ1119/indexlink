@@ -410,6 +410,17 @@ export interface DecisionResult {
   trend_score?: number
   /** Absent from legacy records and `null` when Qwen is temporarily unavailable. */
   sentiment_score?: number | null
+  /** Read-only comparison with the latest earlier decision record for this plan. */
+  change_from_previous?: DecisionChange
+}
+
+/** Safe decision-delta facts; these explain a result but never authorize an order. */
+export interface DecisionChange {
+  status: 'initial' | 'unchanged' | 'changed'
+  previous_record_id?: string
+  action_changed?: boolean
+  multiplier_delta?: number
+  final_score_delta?: number
 }
 
 /** One RSS source headline retained with a Qwen market-sentiment result. */
@@ -426,15 +437,26 @@ export interface MarketSentimentEvidence {
   rationale: string
   warnings: string[]
   headlines: MarketSentimentHeadline[]
+  generated_at?: string
+  latency_ms?: number
+  prompt_version?: string
 }
 
 /** Stored sentiment snapshots remain backward compatible with score-only historical records. */
 export interface PersistedMarketSentimentSnapshot {
   source: string
-  score: number
+  score?: number
   rationale?: string
   warnings?: string[]
   headlines?: MarketSentimentHeadline[]
+  audit?: {
+    status: 'available' | 'degraded'
+    generated_at?: string
+    latency_ms?: number
+    prompt_version?: string
+    reason?: string
+    observed_at?: string
+  }
 }
 
 /** Paper-order acknowledgement returned only after a broker accepts a request. */
@@ -483,9 +505,16 @@ export interface DecisionPreviewResponse {
   execution: ExecutionPreview
   decision: DecisionResult
   market_sentiment?: MarketSentimentEvidence
+  ai_audit: AiDecisionAudit
   paper_order_ack?: BrokerOrderAck
   summary: string
 }
+
+/** Safe AI availability trace returned with every decision preview. */
+export type AiDecisionAudit =
+  | { status: 'not_used' }
+  | { status: 'available'; generated_at: string; latency_ms: number; prompt_version: string }
+  | { status: 'degraded'; reason: string; observed_at: string }
 
 /** Immutable policy identity and provider-neutral recommendation saved with new audits. */
 export interface DecisionPolicyEvidence {

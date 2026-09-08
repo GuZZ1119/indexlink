@@ -300,12 +300,13 @@ investment plan
 响应包含：
 
 - `execution`：执行预览与持久化双桶配置产生的核心金额、机会预算、实际建议金额、未分配机会预算、滚存意图和审批要求。
-- `decision`：`final_score`、`multiplier`、`action`、`weight_mode` 和分层 score。
+- `decision`：`final_score`、`multiplier`、`action`、`weight_mode`、分层 score，以及相对同一计划上一份存证的只读 `change_from_previous`（首份、未变化或变化；包含可比较的动作/倍率/分数差异）。
 - `market_sentiment`：为 HTTP 兼容保留的 AI Evidence 字段，包含无密钥 `provider` profile、`score`、受长度限制的 `rationale`、最多五条 `warnings`，以及实际送入模型的 RSS `headlines`（标题、链接、UTC 发布时间）。Provider 不负责生成来源链接。
+- `ai_audit`：本次 AI 处理的安全调用追踪。成功时包含 `generated_at`、端到端 `latency_ms` 与服务端 `prompt_version`；旧策略安全降级时只返回分类后的 `reason`（`not_configured`、`news_unavailable`、`provider_timeout`、`provider_rejected`、`provider_response_invalid` 或 `provider_unavailable`）和 `observed_at`，不返回 endpoint、凭据或底层报错。
 - `paper_order_ack`：只有 due 且 action 可执行时才出现。
 - `summary`：演示级摘要。
 
-`sentiment` 不是请求字段。后端会为旧 `CoreOpportunityV1` 自动拉取 CNBC RSS 并调用服务器默认的已部署 AI Evidence provider；成功时将分数、依据、风险提示、新闻来源和无密钥 Provider profile 写入本地 decision record。未配置 Key 或新闻/AI provider 暂时不可用时，旧引擎使用 `90/10/0` 降级权重且不提交伪造情绪快照。Fixed DCA 与 DSL 不会因 AI 不可用而改变推荐。手工 `sentiment` 字段会返回 `400 bad_request`，不能绕过该链路。
+`sentiment` 不是请求字段。后端会为旧 `CoreOpportunityV1` 自动拉取 CNBC RSS 并调用服务器默认的已部署 AI Evidence provider；成功时将分数、依据、风险提示、新闻来源、无密钥 Provider profile 与调用追踪写入本地 decision record。未配置 Key 或新闻/AI provider 暂时不可用时，旧引擎使用 `90/10/0` 降级权重，并保存不含伪造分数的安全降级原因。Fixed DCA 与 DSL 不会因 AI 不可用而改变推荐。手工 `sentiment` 字段会返回 `400 bad_request`，不能绕过该链路。
 
 `decision.action` 可选值：
 
@@ -388,6 +389,7 @@ AI Evidence 独立于策略 Registry：`CoreOpportunityV1` 才会将其 `score` 
 - `rationale`：Qwen 基于本次输入 headlines 给出的短依据；空白、过长或非结构化输出会被拒绝并触发安全降级。
 - `warnings`：最多五条短风险提示。
 - `headlines`：实际送入模型的 RSS 条目，含 `title`、HTTP(S) `url` 和 UTC `published_at`；不保存新闻正文。
+- `generated_at`、`latency_ms`、`prompt_version`：服务端接受模型输出的 UTC 时间、新闻加模型的端到端耗时与版本化提示词契约；这些字段支持审计与排障，不是交易信号。
 
 不会返回新闻正文、Key、provider URL 或模型内部错误。模型不能自行提供 URL；来源只能由 RSS 原始条目生成，避免将幻觉来源写入 API 或审计记录。
 

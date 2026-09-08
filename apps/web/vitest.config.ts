@@ -14,6 +14,7 @@ export default defineConfig({
         'src/i18n/locales/en.ts',
         'src/i18n/locales/zh.ts',
         'src/pages/decisions/filters.ts',
+        'src/pages/strategies/copilot-review.ts',
       ],
       thresholds: { lines: 90, functions: 90, statements: 90, branches: 90 },
     },

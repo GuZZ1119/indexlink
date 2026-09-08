@@ -348,7 +348,7 @@ function PlanExecutionConfig({ plan }: { plan: InvestmentPlan }) {
 function evidenceFromSnapshot(
   snapshot: PersistedMarketSentimentSnapshot | undefined,
 ): MarketSentimentEvidence | undefined {
-  if (!snapshot || typeof snapshot.rationale !== 'string' || !Array.isArray(snapshot.warnings) || !Array.isArray(snapshot.headlines)) {
+  if (!snapshot || typeof snapshot.score !== 'number' || typeof snapshot.rationale !== 'string' || !Array.isArray(snapshot.warnings) || !Array.isArray(snapshot.headlines)) {
     return undefined
   }
   return {
@@ -357,6 +357,9 @@ function evidenceFromSnapshot(
     rationale: snapshot.rationale,
     warnings: snapshot.warnings,
     headlines: snapshot.headlines,
+    generated_at: snapshot.audit?.generated_at,
+    latency_ms: snapshot.audit?.latency_ms,
+    prompt_version: snapshot.audit?.prompt_version,
   }
 }
 

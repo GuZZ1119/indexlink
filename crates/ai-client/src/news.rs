@@ -14,7 +14,7 @@
 //! # }
 //! ```
 
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -453,18 +453,24 @@ pub struct AiEvidence {
     pub analysis: SentimentAnalysis,
     /// 实际提供给模型的 RSS 新闻来源。
     pub headlines: Vec<MarketSentimentHeadline>,
+    /// UTC timestamp at which this process accepted the provider response.
+    pub generated_at: DateTime<Utc>,
+    /// End-to-end news-fetch and provider-call duration in milliseconds.
+    ///
+    /// This is observability metadata only; it never includes request content,
+    /// credentials, endpoint URLs, or provider account details.
+    pub latency_ms: u64,
+    /// Version of the server-owned market-sentiment prompt contract.
+    pub prompt_version: &'static str,
 }
+
+/// Version label persisted with audits without retaining the prompt or credentials.
+pub const MARKET_SENTIMENT_PROMPT_VERSION: &str = "market_sentiment_v1";
 
 /// Backward-compatible name for a market-news-specific [`AiEvidence`] value.
 pub type MarketSentimentReport = AiEvidence;
 
-/// 一站式获取市场情绪的便捷函数。
-///
-/// 拉取新闻 → 格式化 prompt → 调用 AI 分析 → 返回 sentiment。
-///
-/// # 错误
-///
-/// 新闻获取、AI 超时/解析等任一环节失败均返回 [`PipelineError`]。
+/// Fetch news, request bounded analysis, and return its sentiment or [`PipelineError`].
 pub async fn fetch_market_sentiment(
     source: &(impl NewsSource + ?Sized),
     provider: &(impl AiProvider + ?Sized),
@@ -475,14 +481,12 @@ pub async fn fetch_market_sentiment(
         .sentiment())
 }
 
-/// 拉取新闻并返回包含 AI 解释和来源的市场情绪报告。
-///
-/// 返回的 headlines 源自实际送入模型的 RSS 条目，而不是模型自行生成的来源。
-/// 这使 API 与决策存证能审计“模型看到了什么”，同时不会保存新闻正文。
+/// Fetch news and return auditable AI evidence with the exact supplied RSS headlines.
 pub async fn fetch_market_sentiment_report(
     source: &(impl NewsSource + ?Sized),
     provider: &(impl AiProvider + ?Sized),
 ) -> Result<AiEvidence, PipelineError> {
+    let started_at = Instant::now();
     let news = source.fetch().await?;
     debug!(count = news.len(), "fetched news for sentiment analysis");
     let prompt = format_sentiment_prompt(&news);
@@ -499,6 +503,9 @@ pub async fn fetch_market_sentiment_report(
         provider: provider.profile(),
         analysis,
         headlines,
+        generated_at: Utc::now(),
+        latency_ms: u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        prompt_version: MARKET_SENTIMENT_PROMPT_VERSION,
     })
 }
 
@@ -506,6 +513,9 @@ pub async fn fetch_market_sentiment_report(
 
 #[cfg(test)]
 mod tests {
+    use axum::{http::StatusCode, routing::get, Router};
+    use tokio::net::TcpListener;
+
     use super::*;
 
     /// 最小可解析的 RSS XML 片段（仿 CNBC 格式）。
@@ -631,6 +641,27 @@ mod tests {
         // 非法的 XML 字符引用
         let result = RssNewsSource::parse_items("<item><title>bad &invalid; entity</title></item>");
         assert!(result.is_err());
+    }
+
+    /// Verify the RSS adapter keeps an upstream HTTP status out of the strategy layer.
+    #[tokio::test]
+    async fn fetch_maps_local_non_success_status() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/feed", get(|| async { StatusCode::BAD_GATEWAY })),
+            )
+            .await
+            .unwrap();
+        });
+        let source = RssNewsSource::with_config(format!("http://{address}/feed"), 24, 10);
+
+        assert!(matches!(
+            source.fetch().await,
+            Err(NewsSourceError::HttpStatus { status: 502 })
+        ));
     }
 
     #[test]
@@ -861,6 +892,9 @@ mod tests {
         assert_eq!(report.headlines[0].title, "Markets steady");
         assert_eq!(report.headlines[0].url, "https://example.com/news");
         assert!(!report.analysis.rationale().is_empty());
+        assert_eq!(report.prompt_version, MARKET_SENTIMENT_PROMPT_VERSION);
+        assert!(report.latency_ms < 60_000);
+        assert!(report.generated_at <= Utc::now());
     }
 
     // ── truncate_at_sentence ──────────────────────────────────────────────

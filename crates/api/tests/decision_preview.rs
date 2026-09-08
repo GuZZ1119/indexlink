@@ -569,6 +569,21 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
     assert_eq!(body["decision"]["sentiment_score"], json!(0.7));
     assert_eq!(body["market_sentiment"]["score"], json!(0.4));
     assert_eq!(
+        body["market_sentiment"]["prompt_version"],
+        json!("market_sentiment_v1")
+    );
+    assert!(body["market_sentiment"]["latency_ms"].is_u64());
+    assert!(body["market_sentiment"]["generated_at"].is_string());
+    assert_eq!(body["ai_audit"]["status"], json!("available"));
+    assert_eq!(
+        body["ai_audit"]["prompt_version"],
+        json!("market_sentiment_v1")
+    );
+    assert_eq!(
+        body["decision"]["change_from_previous"]["status"],
+        json!("initial")
+    );
+    assert_eq!(
         body["market_sentiment"]["rationale"],
         json!("Inflation data improved market sentiment.")
     );
@@ -608,6 +623,11 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
         json!("neutral")
     );
     let sentiment_snapshot = persisted[0].sentiment_snapshot.as_ref().unwrap();
+    assert_eq!(sentiment_snapshot["audit"]["status"], json!("available"));
+    assert_eq!(
+        sentiment_snapshot["audit"]["prompt_version"],
+        json!("market_sentiment_v1")
+    );
     assert_eq!(sentiment_snapshot["source"], json!("ai_evidence"));
     assert_eq!(
         sentiment_snapshot["provider"]["id"],
@@ -631,6 +651,52 @@ async fn decision_preview_submits_mock_paper_order_when_due() {
         persisted[0].broker_order_ack.as_ref().unwrap()["status"],
         json!("accepted")
     );
+}
+
+/// Verify the next audit records a structural change without re-evaluating the prior snapshot.
+#[tokio::test]
+async fn decision_preview_compares_with_the_latest_earlier_audit() {
+    let repository = Arc::new(FakeRepository::default());
+    let broker = Arc::new(MockBroker::paper_only());
+    let created = repository.create(create_input()).await.unwrap();
+    let (app, _) = app_with_records(repository, broker);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(preview_payload(15, "neutral").to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/investment-plans/{}/decision-preview", created.id))
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(preview_payload(15, "overheated").to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let body = response_json(second).await;
+    assert_eq!(
+        body["decision"]["change_from_previous"]["status"],
+        json!("changed")
+    );
+    assert_eq!(
+        body["decision"]["change_from_previous"]["action_changed"],
+        json!(true)
+    );
+    assert!(body["decision"]["change_from_previous"]["previous_record_id"].is_string());
 }
 
 /// Verify automatic preview hides caller signal fields and persists automatic-source disclosure.
@@ -828,9 +894,21 @@ async fn decision_preview_uses_fallback_weights_when_qwen_is_unavailable() {
         .as_str()
         .unwrap()
         .contains("market_sentiment=unavailable"));
-    assert!(records.records.lock().unwrap()[0]
+    assert_eq!(body["ai_audit"]["status"], json!("degraded"));
+    assert_eq!(
+        body["ai_audit"]["reason"],
+        json!("provider_response_invalid")
+    );
+    let snapshot = records.records.lock().unwrap()[0]
         .sentiment_snapshot
-        .is_none());
+        .clone()
+        .expect("legacy fallback must retain a safe degradation audit");
+    assert_eq!(snapshot["audit"]["status"], json!("degraded"));
+    assert_eq!(
+        snapshot["audit"]["reason"],
+        json!("provider_response_invalid")
+    );
+    assert!(snapshot.get("score").is_none());
 }
 
 /// Verify an absent Qwen configuration uses the same explicit fallback mode.
@@ -858,10 +936,13 @@ async fn decision_preview_uses_fallback_weights_without_qwen_configuration() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
     assert_eq!(
-        response_json(response).await["decision"]["weight_mode"],
+        body["decision"]["weight_mode"],
         json!("sentiment_unavailable")
     );
+    assert_eq!(body["ai_audit"]["status"], json!("degraded"));
+    assert_eq!(body["ai_audit"]["reason"], json!("not_configured"));
 }
 
 /// Verify non-due previews never submit paper orders.

@@ -119,17 +119,10 @@ struct SentimentResponse {
 
 // ─── QwenClient ────────────────────────────────────────────────────────────
 
-/// OpenAI 兼容 API 客户端（支持 Qwen / OpenAI / 任何兼容服务）。
+/// OpenAI-compatible client for Qwen and other compatible services.
 ///
-/// # 错误处理
-///
-/// 任何错误（超时、网络、HTTP 状态码、解析失败）都以 [`AiClientError`]
-/// 返回给调用方。ai-client 不自行降级——由上层 decision engine
-/// 按 70/20/10 → 90/10/0 策略统一处理。
-///
-/// 使用时以 [`Self::new`] 或 [`Self::with_profile`] 构造 client，再通过
-/// [`AiProvider::analyze_with_evidence`] 请求有界、可审计的情绪结果；调用失败由上层
-/// 决策层按既有降级策略处理。
+/// It returns timeout, transport, HTTP-status, and parsing failures as [`AiClientError`].
+/// The caller—not this client—selects any safe decision fallback.
 pub struct QwenClient {
     http: reqwest::Client,
     config: AiConfig,
@@ -147,10 +140,7 @@ impl QwenClient {
         Self::with_profile(config, profile)
     }
 
-    /// Build an OpenAI-compatible client with server-owned, credential-free profile metadata.
-    ///
-    /// The supplied profile is returned by [`AiProvider::profile`] but never changes the
-    /// protocol, exposes credentials, or grants persistence, activation, or order authority.
+    /// Build a client with server-owned, credential-free profile metadata and no extra authority.
     #[must_use]
     pub fn with_profile(config: AiConfig, profile: AiProviderProfile) -> Self {
         let http = reqwest::Client::builder()
@@ -435,7 +425,76 @@ impl AiProvider for QwenClient {
 
 #[cfg(test)]
 mod tests {
+    use axum::{http::StatusCode, routing::post, Json, Router};
+    use tokio::net::TcpListener;
+
     use super::*;
+
+    /// Start a local OpenAI-compatible fake so transport coverage stays in this crate.
+    async fn completion_server(status: StatusCode, content: &'static str) -> String {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move || async move {
+                (
+                    status,
+                    Json(serde_json::json!({
+                        "choices": [{"message": {"content": content}}],
+                    })),
+                )
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener must bind");
+        let address = listener.local_addr().expect("listener address must exist");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("local completion fake must remain available");
+        });
+        format!("http://{address}")
+    }
+
+    /// Verify successful provider output crosses the bounded transport path.
+    #[tokio::test]
+    async fn local_completion_returns_structured_evidence() {
+        let base_url = completion_server(
+            StatusCode::OK,
+            r#"{"score":0.25,"rationale":"Local evidence.","warnings":["Local warning."]}"#,
+        )
+        .await;
+        let client = QwenClient::new(AiConfig {
+            base_url,
+            api_key: "test-key".to_owned(),
+            model: "test-model".to_owned(),
+            ..Default::default()
+        });
+
+        let evidence = client
+            .analyze_with_evidence("one bounded test prompt")
+            .await
+            .expect("local provider must return valid evidence");
+
+        assert!((evidence.sentiment().value() - 0.25).abs() < f64::EPSILON);
+        assert_eq!(evidence.rationale(), "Local evidence.");
+        assert_eq!(evidence.warnings(), ["Local warning."]);
+    }
+
+    /// Verify non-success provider responses keep a safe status-only classification.
+    #[tokio::test]
+    async fn local_completion_maps_rate_limit_to_http_status() {
+        let base_url = completion_server(StatusCode::TOO_MANY_REQUESTS, "ignored").await;
+        let client = QwenClient::new(AiConfig {
+            base_url,
+            api_key: "test-key".to_owned(),
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            client.analyze("rate limit test").await,
+            Err(AiClientError::HttpStatus { status: 429 })
+        ));
+    }
 
     #[test]
     fn build_request_includes_user_prompt() {

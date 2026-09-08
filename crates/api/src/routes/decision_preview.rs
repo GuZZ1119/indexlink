@@ -44,7 +44,7 @@ use time::{Date, Month};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::{ApiError, ApiState};
+use crate::{state::AiEvidenceAttempt, ApiError, ApiState};
 
 use super::market_sentiment::MarketSentimentResponse;
 
@@ -198,6 +198,8 @@ struct DecisionPreviewResponse {
     /// AI rationale, risk warnings, and RSS sources used for this decision.
     #[serde(skip_serializing_if = "Option::is_none")]
     market_sentiment: Option<MarketSentimentResponse>,
+    /// Safe trace of AI availability or documented legacy fallback for this run.
+    ai_audit: AiDecisionAudit,
     /// Paper order acknowledgement when an executable due preview submitted an order.
     #[serde(skip_serializing_if = "Option::is_none")]
     paper_order_ack: Option<BrokerOrderAck>,
@@ -244,6 +246,51 @@ struct DecisionResponse {
     /// Sentiment contribution score when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     sentiment_score: Option<f64>,
+    /// Difference from the latest earlier record for the same plan, if comparable.
+    change_from_previous: DecisionChangeResponse,
+}
+
+/// Display-safe comparison between this decision and the latest earlier record.
+#[derive(Debug, Clone, Serialize)]
+struct DecisionChangeResponse {
+    /// `initial`, `unchanged`, or `changed`; never a trading instruction.
+    status: &'static str,
+    /// Previous local audit record when one was available for comparison.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_record_id: Option<Uuid>,
+    /// Whether the recommendation action changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_changed: Option<bool>,
+    /// Current minus previous multiplier when both values were available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multiplier_delta: Option<f64>,
+    /// Current minus previous legacy final score when both values were available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_score_delta: Option<f64>,
+}
+
+/// Stable AI-use disclosure attached to a live response and persisted audit snapshot.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum AiDecisionAudit {
+    /// The selected policy does not consume AI evidence.
+    NotUsed,
+    /// AI evidence was available and included a versioned prompt and latency trace.
+    Available {
+        /// UTC time at which this process accepted the model output.
+        generated_at: String,
+        /// End-to-end news and provider latency in milliseconds.
+        latency_ms: u64,
+        /// Server-owned prompt contract version.
+        prompt_version: &'static str,
+    },
+    /// Legacy policy used documented 90/10/0 fallback instead of AI evidence.
+    Degraded {
+        /// Safe category without provider or transport details.
+        reason: &'static str,
+        /// UTC time at which the fallback was selected.
+        observed_at: String,
+    },
 }
 
 /// API 中的不可变策略版本标识。
@@ -581,14 +628,18 @@ async fn preview_decision_input(
         == Some(BuiltinPolicyEvidenceKind::CoreOpportunity);
     // AI evidence is generic and independently auditable. Only the legacy
     // CoreOpportunityV1 compatibility adapter may map its score into 10% input.
-    let ai_evidence = if is_legacy_core {
-        ai_evidence_for_legacy_core_opportunity(state).await
-    } else {
-        None
+    let ai_attempt = is_legacy_core.then(|| state.legacy_ai_evidence_attempt());
+    let ai_attempt = match ai_attempt {
+        Some(attempt) => Some(attempt.await),
+        None => None,
     };
-    let market_sentiment_response = ai_evidence.as_ref().map(MarketSentimentResponse::from);
+    let ai_evidence = ai_attempt
+        .as_ref()
+        .and_then(|attempt| attempt.evidence.as_ref());
+    let ai_audit = ai_decision_audit(ai_attempt.as_ref());
+    let market_sentiment_response = ai_evidence.map(MarketSentimentResponse::from);
     let decision =
-        resolve_policy_decision(state, &plan, execution_date, &input, ai_evidence.as_ref()).await?;
+        resolve_policy_decision(state, &plan, execution_date, &input, ai_evidence).await?;
     let carried_opportunity_cash = state.opportunity_cash_balance(id).await?;
     let execution = state
         .plans()
@@ -628,7 +679,10 @@ async fn preview_decision_input(
     } else {
         paper_order
     };
-    let decision_response = DecisionResponse::from_policy_decision(&decision);
+    let change_from_previous =
+        decision_change_from_previous(state.latest_decision_record(id).await?.as_ref(), &decision);
+    let decision_response =
+        DecisionResponse::from_policy_decision(&decision, change_from_previous.clone());
     let should_submit = should_submit_paper_order(&execution, paper_order.as_ref());
     let preliminary_summary = summarize_decision(&execution, &decision, None);
     let persisted = state
@@ -639,7 +693,9 @@ async fn preview_decision_input(
             execution: &execution,
             policy: &plan.policy,
             decision: &decision,
-            ai_evidence: ai_evidence.as_ref(),
+            ai_attempt: ai_attempt.as_ref(),
+            ai_audit: &ai_audit,
+            change_from_previous: &change_from_previous,
             trigger,
             paper_order: paper_order.as_ref(),
             paper_order_ack: None,
@@ -744,6 +800,7 @@ async fn preview_decision_input(
         execution,
         decision: decision_response,
         market_sentiment: market_sentiment_response,
+        ai_audit,
         paper_order_ack,
         summary,
     })
@@ -1018,7 +1075,10 @@ impl From<BrokerOrderSideRequest> for BrokerOrderSide {
 }
 
 impl DecisionResponse {
-    fn from_policy_decision(decision: &BuiltinPolicyDecision) -> Self {
+    fn from_policy_decision(
+        decision: &BuiltinPolicyDecision,
+        change_from_previous: DecisionChangeResponse,
+    ) -> Self {
         let recommendation = decision.recommendation();
         let policy = PolicyResponse {
             id: recommendation.policy().id().as_str().to_owned(),
@@ -1035,6 +1095,7 @@ impl DecisionResponse {
                 fundamental_score: Some(signal.fundamental_score.value()),
                 trend_score: Some(signal.trend_score.value()),
                 sentiment_score: signal.sentiment_score.map(Percentile::value),
+                change_from_previous,
             },
             BuiltinPolicyDecision::FixedDca { .. } => Self {
                 market_signals_used: policy.id.starts_with("dsl_"),
@@ -1046,6 +1107,7 @@ impl DecisionResponse {
                 fundamental_score: None,
                 trend_score: None,
                 sentiment_score: None,
+                change_from_previous,
             },
         }
     }
@@ -1113,23 +1175,6 @@ async fn submit_paper_order(
     .map_err(Into::into)
 }
 
-/// Adapt generic AI evidence into the legacy CoreOpportunityV1 10% input only.
-async fn ai_evidence_for_legacy_core_opportunity(state: &ApiState) -> Option<AiEvidence> {
-    match state.ai_evidence().await {
-        Ok(evidence) => Some(evidence),
-        Err(ApiError::ServiceUnavailable) => {
-            tracing::warn!(
-                "AI evidence unavailable; legacy CoreOpportunityV1 uses 90/10/0 fallback"
-            );
-            None
-        }
-        Err(error) => {
-            tracing::error!(error = %error, "unexpected AI evidence error; legacy CoreOpportunityV1 uses fallback weights");
-            None
-        }
-    }
-}
-
 /// Borrowed decision material required to create one local audit record.
 struct DecisionRecordContext<'a> {
     plan_id: Uuid,
@@ -1137,7 +1182,9 @@ struct DecisionRecordContext<'a> {
     execution: &'a InvestmentPlanExecutionPreview,
     policy: &'a strategy_policy::PolicyRef,
     decision: &'a BuiltinPolicyDecision,
-    ai_evidence: Option<&'a AiEvidence>,
+    ai_attempt: Option<&'a AiEvidenceAttempt>,
+    ai_audit: &'a AiDecisionAudit,
+    change_from_previous: &'a DecisionChangeResponse,
     trigger: DecisionTrigger,
     paper_order: Option<&'a BrokerOrderRequest>,
     paper_order_ack: Option<&'a BrokerOrderAck>,
@@ -1175,8 +1222,12 @@ fn record_input(context: DecisionRecordContext<'_>) -> Result<CreateDecisionReco
             context.input.input_source.as_ref(),
             context.policy,
         )?,
-        sentiment_snapshot: context.ai_evidence.map(ai_evidence_snapshot),
-        decision_snapshot: decision_snapshot(context.decision),
+        sentiment_snapshot: context.ai_attempt.map(ai_evidence_attempt_snapshot),
+        decision_snapshot: decision_snapshot(
+            context.decision,
+            context.ai_audit,
+            context.change_from_previous,
+        ),
         policy_evidence: Some(DecisionPolicyEvidence {
             policy: context.policy.clone(),
             recommendation_snapshot: recommendation_snapshot(context.decision),
@@ -1257,9 +1308,17 @@ fn trigger_label(trigger: DecisionTrigger) -> &'static str {
 ///
 /// The legacy column name is retained for SQLite compatibility, while this JSON
 /// explicitly records that the payload is provider-neutral evidence.
-fn ai_evidence_snapshot(report: &AiEvidence) -> Value {
+fn ai_evidence_attempt_snapshot(attempt: &AiEvidenceAttempt) -> Value {
+    let audit = ai_decision_audit(Some(attempt));
+    let Some(report) = attempt.evidence.as_ref() else {
+        return json!({
+            "source": "ai_evidence",
+            "audit": audit,
+        });
+    };
     json!({
         "source": "ai_evidence",
+        "audit": audit,
         "provider": report.provider,
         "score": report.analysis.sentiment().value(),
         "rationale": report.analysis.rationale(),
@@ -1270,6 +1329,81 @@ fn ai_evidence_snapshot(report: &AiEvidence) -> Value {
             "published_at": headline.published_at.to_rfc3339(),
         })).collect::<Vec<_>>(),
     })
+}
+
+/// Convert one legacy AI attempt into a display-safe audit state.
+fn ai_decision_audit(attempt: Option<&AiEvidenceAttempt>) -> AiDecisionAudit {
+    match attempt {
+        None => AiDecisionAudit::NotUsed,
+        Some(AiEvidenceAttempt {
+            evidence: Some(evidence),
+            ..
+        }) => AiDecisionAudit::Available {
+            generated_at: evidence.generated_at.to_rfc3339(),
+            latency_ms: evidence.latency_ms,
+            prompt_version: evidence.prompt_version,
+        },
+        Some(AiEvidenceAttempt {
+            fallback_reason: Some(reason),
+            observed_at,
+            ..
+        }) => AiDecisionAudit::Degraded {
+            reason: reason.as_str(),
+            observed_at: observed_at.to_rfc3339(),
+        },
+        // `AiEvidenceAttempt` constructors always provide one of the states above.
+        Some(_) => AiDecisionAudit::Degraded {
+            reason: "provider_unavailable",
+            observed_at: chrono::Utc::now().to_rfc3339(),
+        },
+    }
+}
+
+/// Compare a recommendation with the newest earlier local audit without influencing it.
+fn decision_change_from_previous(
+    previous: Option<&decision_records::DecisionRecord>,
+    current: &BuiltinPolicyDecision,
+) -> DecisionChangeResponse {
+    let Some(previous) = previous else {
+        return DecisionChangeResponse {
+            status: "initial",
+            previous_record_id: None,
+            action_changed: None,
+            multiplier_delta: None,
+            final_score_delta: None,
+        };
+    };
+    let recommendation = current.recommendation();
+    let previous_action = previous
+        .decision_snapshot
+        .get("action")
+        .and_then(Value::as_str);
+    let action_changed =
+        previous_action.map(|action| action != action_label(recommendation.action()));
+    let multiplier_delta = previous
+        .decision_snapshot
+        .get("multiplier")
+        .and_then(Value::as_f64)
+        .map(|value| recommendation.multiplier().value() - value);
+    let current_score = current
+        .legacy_signal()
+        .map(|signal| signal.final_score.value());
+    let final_score_delta = previous
+        .decision_snapshot
+        .get("final_score")
+        .and_then(Value::as_f64)
+        .zip(current_score)
+        .map(|(previous, current)| current - previous);
+    let changed = action_changed == Some(true)
+        || multiplier_delta.is_some_and(|delta| delta.abs() > f64::EPSILON)
+        || final_score_delta.is_some_and(|delta| delta.abs() > f64::EPSILON);
+    DecisionChangeResponse {
+        status: if changed { "changed" } else { "unchanged" },
+        previous_record_id: Some(previous.id),
+        action_changed,
+        multiplier_delta,
+        final_score_delta,
+    }
 }
 
 /// Convert an execution preview status into its persisted audit representation.
@@ -1290,7 +1424,11 @@ fn snapshot(value: &impl Serialize) -> Result<Value, ApiError> {
 }
 
 /// Build the decision-output snapshot, including the effective weights.
-fn decision_snapshot(decision: &BuiltinPolicyDecision) -> Value {
+fn decision_snapshot(
+    decision: &BuiltinPolicyDecision,
+    ai_audit: &AiDecisionAudit,
+    change_from_previous: &DecisionChangeResponse,
+) -> Value {
     let recommendation = decision.recommendation();
     let base = json!({
         "policy": {
@@ -1306,6 +1444,8 @@ fn decision_snapshot(decision: &BuiltinPolicyDecision) -> Value {
             "multiplier": recommendation.multiplier().value(),
             "action": action_label(recommendation.action()),
             "market_signals_used": false,
+            "ai_audit": ai_audit,
+            "change_from_previous": change_from_previous,
         });
     };
     json!({
@@ -1323,6 +1463,8 @@ fn decision_snapshot(decision: &BuiltinPolicyDecision) -> Value {
         "fundamental_score": decision.fundamental_score.value(),
         "trend_score": decision.trend_score.value(),
         "sentiment_score": decision.sentiment_score.map(Percentile::value),
+        "ai_audit": ai_audit,
+        "change_from_previous": change_from_previous,
     })
 }
 

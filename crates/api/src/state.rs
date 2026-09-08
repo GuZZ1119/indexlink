@@ -4,8 +4,9 @@ use std::{
 };
 
 use ai_client::{
-    fetch_market_sentiment_report, AiCopilotDraft, AiCopilotDraftRequest, AiEvidence, AiProvider,
-    AiProviderProfile, AiProviderProfileError, AiProviderProfileId, AiProviderRegistry, NewsSource,
+    fetch_market_sentiment_report, AiClientError, AiCopilotDraft, AiCopilotDraftRequest,
+    AiEvidence, AiProvider, AiProviderProfile, AiProviderProfileError, AiProviderProfileId,
+    AiProviderRegistry, NewsSource, PipelineError,
 };
 use async_trait::async_trait;
 use broker::{
@@ -134,6 +135,95 @@ struct MarketSentimentDependencies {
     registry: AiProviderRegistry,
     providers: BTreeMap<AiProviderProfileId, Arc<dyn AiProvider>>,
     default_profile_id: AiProviderProfileId,
+}
+
+/// Safe category for a legacy 70/20/10 AI fallback.
+///
+/// The category is intentionally coarse: it is sufficient for users and audit
+/// records to understand why the 90/10/0 fallback was selected, while avoiding
+/// URLs, provider account identifiers, request bodies, and transport details.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AiFallbackReason {
+    /// No AI evidence provider was composed by the server operator.
+    NotConfigured,
+    /// The configured RSS/news source did not yield usable current evidence.
+    NewsUnavailable,
+    /// The provider did not answer within its configured timeout.
+    ProviderTimeout,
+    /// The provider declined or rate-limited the request.
+    ProviderRejected,
+    /// The provider response could not satisfy the bounded evidence contract.
+    ProviderResponseInvalid,
+    /// The provider could not be reached or returned another safe failure.
+    ProviderUnavailable,
+}
+
+impl AiFallbackReason {
+    /// Return the stable display-safe identifier persisted in decision snapshots.
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotConfigured => "not_configured",
+            Self::NewsUnavailable => "news_unavailable",
+            Self::ProviderTimeout => "provider_timeout",
+            Self::ProviderRejected => "provider_rejected",
+            Self::ProviderResponseInvalid => "provider_response_invalid",
+            Self::ProviderUnavailable => "provider_unavailable",
+        }
+    }
+
+    fn from_pipeline(error: &PipelineError) -> Self {
+        match error {
+            PipelineError::Source(_) => Self::NewsUnavailable,
+            PipelineError::Ai(AiClientError::Timeout { .. }) => Self::ProviderTimeout,
+            PipelineError::Ai(AiClientError::HttpStatus { status })
+                if *status == 401 || *status == 403 || *status == 429 =>
+            {
+                Self::ProviderRejected
+            }
+            PipelineError::Ai(
+                AiClientError::InvalidJson(_)
+                | AiClientError::UnexpectedStructure
+                | AiClientError::ParseFailure
+                | AiClientError::EmptyResponse,
+            ) => Self::ProviderResponseInvalid,
+            PipelineError::Ai(_) => Self::ProviderUnavailable,
+        }
+    }
+}
+
+/// Result of one legacy-compatible AI evidence attempt.
+///
+/// This does not turn an AI failure into an HTTP error. CoreOpportunityV1 can
+/// use the fallback category to preserve its documented 90/10/0 behavior and
+/// audit why that behavior occurred.
+#[derive(Debug, Clone)]
+pub(crate) struct AiEvidenceAttempt {
+    /// Structured evidence when both news and provider steps succeeded.
+    pub(crate) evidence: Option<AiEvidence>,
+    /// Safe fallback category when evidence was unavailable.
+    pub(crate) fallback_reason: Option<AiFallbackReason>,
+    /// UTC time at which the outcome was recorded.
+    pub(crate) observed_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl AiEvidenceAttempt {
+    fn available(evidence: AiEvidence) -> Self {
+        Self {
+            observed_at: evidence.generated_at,
+            evidence: Some(evidence),
+            fallback_reason: None,
+        }
+    }
+
+    fn fallback(reason: AiFallbackReason) -> Self {
+        Self {
+            evidence: None,
+            fallback_reason: Some(reason),
+            observed_at: chrono::Utc::now(),
+        }
+    }
 }
 
 /// One real local-paper series belonging to a configured recurring holding.
@@ -880,6 +970,22 @@ impl ApiState {
         &self.decision_records
     }
 
+    /// Return the most recent earlier audit record for one plan, if any.
+    ///
+    /// The result is used only to produce a readable local change summary for
+    /// the next audit record. It never changes a policy recommendation.
+    pub(crate) async fn latest_decision_record(
+        &self,
+        plan_id: uuid::Uuid,
+    ) -> Result<Option<DecisionRecord>, ApiError> {
+        Ok(self
+            .decision_records
+            .list_by_plan(plan_id)
+            .await?
+            .into_iter()
+            .next())
+    }
+
     /// List only credential-free AI profiles deployed by this server.
     #[must_use]
     pub(crate) fn ai_provider_profiles(&self) -> Vec<AiProviderProfile> {
@@ -888,9 +994,43 @@ impl ApiState {
             .map_or_else(Vec::new, |dependencies| dependencies.registry.profiles())
     }
 
-    /// 拉取新闻并调用默认已部署 AI profile 生成通用 AI 证据。
-    pub(crate) async fn ai_evidence(&self) -> Result<AiEvidence, ApiError> {
-        self.ai_evidence_for_profile(None).await
+    /// Attempt legacy-compatible AI evidence without losing its safe fallback reason.
+    ///
+    /// This path exists only for `CoreOpportunityV1`, whose documented
+    /// compatibility behavior is 70/20/10 when evidence is available and
+    /// 90/10/0 when it is not. Other policies do not receive AI authority.
+    pub(crate) async fn legacy_ai_evidence_attempt(&self) -> AiEvidenceAttempt {
+        let Some(dependencies) = self.market_sentiment.as_ref() else {
+            return AiEvidenceAttempt::fallback(AiFallbackReason::NotConfigured);
+        };
+        let profile_id = &dependencies.default_profile_id;
+        let Some(provider) = dependencies.providers.get(profile_id) else {
+            tracing::error!(profile_id = %profile_id, "configured AI profile has no client");
+            return AiEvidenceAttempt::fallback(AiFallbackReason::ProviderUnavailable);
+        };
+        match fetch_market_sentiment_report(dependencies.news_source.as_ref(), provider.as_ref())
+            .await
+        {
+            Ok(evidence) => {
+                tracing::info!(
+                    profile_id = %profile_id,
+                    latency_ms = evidence.latency_ms,
+                    prompt_version = evidence.prompt_version,
+                    "AI evidence pipeline completed"
+                );
+                AiEvidenceAttempt::available(evidence)
+            }
+            Err(error) => {
+                let reason = AiFallbackReason::from_pipeline(&error);
+                tracing::warn!(
+                    profile_id = %profile_id,
+                    reason = reason.as_str(),
+                    error = %error,
+                    "AI evidence unavailable; CoreOpportunityV1 uses the 90/10/0 fallback"
+                );
+                AiEvidenceAttempt::fallback(reason)
+            }
+        }
     }
 
     /// Generate generic evidence through one explicitly deployed profile only.
@@ -1493,7 +1633,7 @@ mod tests {
             Err(ApiError::ServiceUnavailable)
         ));
         assert!(matches!(
-            state.ai_evidence().await,
+            state.ai_evidence_for_profile(None).await,
             Err(ApiError::ServiceUnavailable)
         ));
         assert!(matches!(

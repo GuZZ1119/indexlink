@@ -64,6 +64,12 @@ pub(crate) struct MarketSentimentResponse {
     warnings: Vec<String>,
     /// RSS headlines actually supplied to the model.
     headlines: Vec<MarketSentimentHeadlineResponse>,
+    /// UTC timestamp at which the backend accepted the provider response.
+    generated_at: String,
+    /// End-to-end news and provider latency in milliseconds.
+    latency_ms: u64,
+    /// Version of the server-owned prompt contract used for this evidence.
+    prompt_version: String,
 }
 
 /// Presentation label for a market-sentiment score.
@@ -115,6 +121,9 @@ impl From<&AiEvidence> for MarketSentimentResponse {
                     published_at: headline.published_at.to_rfc3339(),
                 })
                 .collect(),
+            generated_at: report.generated_at.to_rfc3339(),
+            latency_ms: report.latency_ms,
+            prompt_version: report.prompt_version.to_owned(),
         }
     }
 }

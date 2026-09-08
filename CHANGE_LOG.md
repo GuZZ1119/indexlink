@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-09-08 CST — AI 审计追踪、决策差异与 Copilot 人工审阅
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：AI Evidence 可观测性、决策存证、受限 Copilot 交互边界、前端测试与双语文档。
+- 涉及文件：`crates/ai-client/src/{client,news}.rs`、`crates/api/src/{state.rs,routes/{decision_preview,market_sentiment}.rs}`、`crates/api/tests/{decision_preview,market_sentiment}.rs`、`apps/web/src/{api/types.ts,pages/{dashboard/index.tsx,decisions/index.tsx,strategies/{index.tsx,copilot-review.ts,copilot-review.test.ts}},i18n/locales/{zh,en}.ts}`、`apps/web/vitest.config.ts`、`docs/reference/api-management.md`、`readme.md`、`readme.en.md`、`CHANGE_LOG.md`。
+- 变更内容：AI Evidence 成功路径记录 UTC 生成时间、端到端耗时和提示词契约版本；旧 `CoreOpportunityV1` 遇到未配置、新闻不可用、超时、拒绝、结构异常或其他 provider 故障时，继续使用既有 `90/10/0` 安全降级，并将无密钥、无底层报错的分类原因持久化为审计快照。Decision Preview 公开 `ai_audit`，并按同一计划上一份记录给出只读决策差异；历史决策页显示该追踪、降级与变化。Copilot 草案不再直接改写表单，先显示元数据及字段/规则差异，用户确认后才应用到本地编辑表单，随后仍必须验证、准入、保存、激活。README 和 API 文档补充 V2 闭环与边界。
+- 验证：`cargo fmt --all -- --check`、`cargo test -p ai-client --locked`（99 unit + 23 local integration 通过，2 个真实网络 smoke ignored）、`cargo test -p indexlink-api --locked`（73 通过）、`cargo test -p core-domain --locked`（13 通过）、`cargo check --workspace --locked`、`cargo clippy -p ai-client -p indexlink-api --all-targets --all-features --locked -- -D warnings`、`cargo llvm-cov clean --workspace && cargo llvm-cov -p ai-client --all-features --summary-only`（Lines 98.18%）、`pnpm --dir apps/web lint`、`pnpm --dir apps/web test:coverage`（纳入范围 Lines 100%）、`pnpm --dir apps/web build`、`git diff --check`。
+
 ### 2026-09-01 CST — V2 文档归档与历史演示口径澄清
 
 - 执行模型：GPT-5 Codex。

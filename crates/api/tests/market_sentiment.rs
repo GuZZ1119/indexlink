@@ -116,6 +116,9 @@ async fn preview_returns_sentiment_from_injected_provider() {
         json!(true)
     );
     assert_eq!(body["label"], json!("positive"));
+    assert_eq!(body["prompt_version"], json!("market_sentiment_v1"));
+    assert!(body["generated_at"].is_string());
+    assert!(body["latency_ms"].is_u64());
     assert_eq!(
         body["rationale"],
         json!("Cooling inflation supports risk appetite.")

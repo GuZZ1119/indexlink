@@ -82,12 +82,16 @@ See [Strategy Calibration Baseline V1](./docs/research/calibration/STRATEGY_CALI
 
 1. Create a plan in “Recurring holdings”. A new plan defaults to `fixed_dca@1`; AI and market signals never rewrite its core budget.
 2. Open “Strategy Studio”, choose an actually server-deployed AI profile with `restricted_policy_drafts` capability, then describe the desired **opportunity-bucket** constraint in natural language.
-3. Copilot only returns a canonical DSL draft into the editable form, together with its provider, concise explanation, warnings, and server-supplied trusted references. It does not save, backtest, activate, bind a plan, or submit an order.
+3. Copilot first presents a read-only review of the candidate and its field/rule differences from the current form. The operator must explicitly apply it to the editable form; it also shows the provider, concise explanation, warnings, and server-supplied trusted references. It never saves, backtests, activates, binds a plan, or submits an order by itself.
 4. Review and edit the allow-listed indicators, conditions, and opportunity actions, then explicitly validate and save an immutable version. Scripts, user code, core-bucket vetoes, and actions outside the allowlist are rejected.
 5. Run fixed-sample admission for the saved version. The page truthfully reports XIRR, terminal wealth, maximum drawdown, volatility, Sortino, cash utilisation, and rolling windows against Fixed DCA; none is a return forecast.
 6. Only an eligible version can be explicitly bound to a plan. Decision Preview, the scheduler, and audit then use that same version; approval mode still requires a separate confirmation of the persisted decision record before a paper order.
 
 Without `DASHSCOPE_API_KEY` or another compatible provider deployed by the server, the profile list is empty and Studio disables draft generation. Manual DSL editing, validation, and fixed-sample admission do not require an AI key. Keys belong only in server environment variables or a secret manager and must never enter the repository, browser, or decision evidence.
+
+### V2 demo loop
+
+Create a plan → select Fixed DCA or an admitted DSL version → optionally review and explicitly apply a read-only Copilot draft → run automatic Decision Preview → inspect AI trace/safe fallback reason, changes from the prior decision, and the persisted audit → explicitly confirm a paper order for an `approval` plan. The scheduler creates audits only; neither it nor AI receives order or activation authority.
 
 ## Architecture and Safety Boundaries
 
