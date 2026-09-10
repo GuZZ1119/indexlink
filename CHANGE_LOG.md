@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-09-10 CST — V2.1 本地优先发布过渡计划
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：产品定位、发布范围与实施计划文档。
+- 涉及文件：`docs/plans/v2_1_productization_plan.md`、`docs/README.md`、`CHANGE_LOG.md`。
+- 变更内容：将 V2.1 从以页面重构为主的计划收束为单人可控的正式发布过渡版本：定位为本地优先的长期 ETF 策略库、回测与手动执行工作台；明确普通用户零基础设施配置、SQLite 默认、Docker 仅作分发/自托管方式、AI/OpenD 仅作高级可选能力。新增受控开源策略收录流程、策略来源与许可证要求、统一回测数据/假设契约、Manual-first 行动记录、Moomoo/Futu paper-only 边界，以及 P0–P5 实施顺序、发布门槛和 V3 交接条件。明确排除多用户 Cloud、任意代码、IBKR、新 broker 生产接入和实盘自动交易。
+- 验证：`git diff --check` 通过；已核对 Markdown 标题层级与文档索引链接。
+
 ### 2026-09-08 CST — V2.1 产品化定位、前端信息架构与上线门槛
 
 - 执行模型：GPT-5 Codex。
