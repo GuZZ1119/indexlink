@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-09-10 CST — V2.1 消费级前端壳交互与布局修正
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：前端布局缺陷修复、可交互状态反馈与测试更新。
+- 涉及文件：`apps/web/src/{components/v2_1/strategy-card.tsx,pages/{personal/index.tsx,strategy-center/index.tsx,lab/index.tsx,v2_1-shell.test.tsx}}`、`CHANGE_LOG.md`。
+- 变更内容：移除策略卡在个人中心栅格中的强制满高，修复卡片压住下方统计区的问题。已选策略改为明确状态，未选策略改为“选用这个策略”；选用后会更新当前策略并显示同步提示。个人中心的“我已完成这次投入”现在会在当前浏览器会话显示完成状态与统计变化，并明确未写入后端。高级实验室的配置预览改为在被点击的卡片内直接展开/收起，避免在页面下方展开而无可见反馈。将暂未实现的创建策略和风险筛选控件改为非按钮提示，避免不可交互的虚假入口。
+- 验证：`pnpm --dir apps/web lint`、`pnpm --dir apps/web test:coverage`（15 项通过；纳入范围 Lines / Statements / Functions / Branches 均为 100%）、`pnpm --dir apps/web build`、`git diff --check` 通过。
+
 ### 2026-09-10 CST — V2.1 消费级前端壳：个人中心、策略中心与高级实验室
 
 - 执行模型：GPT-5 Codex。

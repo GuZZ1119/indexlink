@@ -15,15 +15,18 @@ describe('V2.1 consumer shell', () => {
   beforeEach(() => setActiveStrategyId('adaptive-70-20-10'))
   afterEach(cleanup)
 
-  it('shows one clear monthly action in the personal center and lets a user change their plan', () => {
+  it('shows one clear monthly action and makes its local-only result visible', () => {
     renderPage(<PersonalPage />)
     expect(screen.getByRole('heading', { name: '按计划投入 ¥2,200' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /查看我的计划/ }))
-    expect(screen.getByText('自适应长期计划')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '我已完成这次投入' }))
+    expect(screen.getByRole('status').textContent).toContain('当前浏览器会话')
+    expect(screen.getByText('6 / 6 次')).toBeTruthy()
   })
 
   it('explains and compares strategies before a user selects one', () => {
     renderPage(<StrategyCenterPage />)
+    fireEvent.click(screen.getAllByRole('button', { name: '选用这个策略' })[0])
+    expect(screen.getByRole('status').textContent).toContain('个人中心已同步更新')
     fireEvent.click(screen.getByRole('button', { name: '和其他策略对比' }))
     expect(screen.getByText('最该知道的限制')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('选择对比策略'), { target: { value: 'defensive-balance' } })
@@ -32,15 +35,15 @@ describe('V2.1 consumer shell', () => {
 
   it('opens and closes a local configuration preview without claiming to connect anything', () => {
     renderPage(<LabPage />)
-    fireEvent.click(screen.getAllByRole('button', { name: '查看配置说明' })[1])
+    fireEvent.click(screen.getAllByRole('button', { name: '打开配置预览' })[1])
     expect(screen.getByText('配置预览')).toBeTruthy()
     expect(screen.getByText(/不写入任何配置/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.click(screen.getByRole('button', { name: '收起预览' }))
     expect(screen.queryByText('配置预览')).toBeNull()
   })
 
   it('renders a compact strategy card without the rule panel', () => {
-    render(<StrategyCard strategy={findConsumerStrategy('steady-dca')} selected={false} compact onSelect={() => undefined} />)
+    render(<StrategyCard strategy={findConsumerStrategy('steady-dca')} selected={false} variant="compact" onSelect={() => undefined} />)
     expect(screen.getByText('每月稳步投入')).toBeTruthy()
     expect(screen.queryByText('它会怎么做：')).toBeNull()
   })
