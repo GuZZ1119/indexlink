@@ -4,6 +4,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { useSnapshot } from 'valtio'
 
 import { PageHeading } from '@/components/v2_1/page-heading'
+import { ProfessionalResearchPanel } from '@/components/v2_1/professional-research-panel'
 import { StrategyCenterNav } from '@/components/v2_1/strategy-center-nav'
 import { buildNormalizedStrategyAnalysis, consumerStrategies, findConsumerStrategy, strategyAnalysisColors, strategyAnalysisRanges, type StrategyAnalysisRange, type StrategyId } from '@/features/v2_1/model'
 import { uiStore } from '@/stores/ui'
@@ -12,9 +13,12 @@ function formatChange(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
+type AnalysisView = 'plain' | 'research'
+
 export default function StrategyAnalysisPage() {
   const { activeStrategyId } = useSnapshot(uiStore)
   const [range, setRange] = useState<StrategyAnalysisRange>('3y')
+  const [view, setView] = useState<AnalysisView>('plain')
   const [strategyIds, setStrategyIds] = useState<StrategyId[]>([activeStrategyId])
   const analysis = useMemo(() => buildNormalizedStrategyAnalysis(strategyIds, range), [range, strategyIds])
 
@@ -29,6 +33,9 @@ export default function StrategyAnalysisPage() {
       <PageHeading eyebrow="策略中心 / 策略分析" title="把同一段路，放在一起看" description="选定时间范围后，每条曲线都从 100 开始。你看到的是策略在同一段时间里的变化体验，而不是谁投入的钱更多。" />
       <StrategyCenterNav />
 
+      <div className="flex w-fit rounded-full border border-slate-200 bg-white p-1 shadow-sm" aria-label="选择分析视角"><button type="button" aria-pressed={view === 'plain'} onClick={() => setView('plain')} className={`rounded-full px-3.5 py-2 text-sm font-medium transition-colors ${view === 'plain' ? 'bg-[#102028] text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-[#102028]'}`}>直观视角</button><button type="button" aria-pressed={view === 'research'} onClick={() => setView('research')} className={`rounded-full px-3.5 py-2 text-sm font-medium transition-colors ${view === 'research' ? 'bg-[#102028] text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-[#102028]'}`}>专业研究</button></div>
+
+      {view === 'plain' ? <>
       <section className="rounded-[1.45rem] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <div className="flex flex-col gap-6 border-b border-slate-100 pb-6 lg:flex-row lg:items-end lg:justify-between">
           <div><p className="inline-flex items-center gap-2 text-sm font-medium text-[#2d6a57]"><BarChart3 className="size-4" />走势对比</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.035em] text-[#102028]">归一化指数（起点 = 100）</h2><p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">只比较变化幅度。换一个时间范围，所有已选策略都会在该范围的起点重新归一化。</p></div>
@@ -45,6 +52,7 @@ export default function StrategyAnalysisPage() {
       </section>
 
       <section className="grid gap-4 md:grid-cols-3"><InfoCard icon={<Info />} title="本页的数据是什么" text="当前使用本地确定性示例序列来完成交互与视觉验证，不是策略的真实回测结论。" /><InfoCard icon={<CircleAlert />} title="比较时要记住什么" text="归一化能公平比较路径，却不能说明未来收益；请同时看规则、适用人群和限制。" /><InfoCard icon={<BarChart3 />} title="真实回测接入后" text="将替换为带策略版本、数据集、费用与样本范围的可复核结果，图表交互保持不变。" /></section>
+      </> : <ProfessionalResearchPanel />}
     </div>
   )
 }

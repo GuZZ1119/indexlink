@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
 
 import { StrategyCard } from '@/components/v2_1/strategy-card'
@@ -10,11 +11,16 @@ import StrategyAnalysisPage from '@/pages/strategy-analysis'
 import StrategyCenterPage from '@/pages/strategy-center'
 import { setActiveStrategyId } from '@/stores/ui'
 
-const renderPage = (page: React.ReactNode) => render(<MemoryRouter>{page}</MemoryRouter>)
+const renderPage = (page: React.ReactNode) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(<QueryClientProvider client={queryClient}><MemoryRouter>{page}</MemoryRouter></QueryClientProvider>)
+}
+
+const response = (body: unknown, ok = true) => ({ ok, status: ok ? 200 : 503, json: async () => body })
 
 describe('V2.1 consumer shell', () => {
   beforeEach(() => setActiveStrategyId('adaptive-70-20-10'))
-  afterEach(cleanup)
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
   it('shows one clear monthly action and makes its local-only result visible', () => {
     renderPage(<PersonalPage />)
@@ -48,6 +54,40 @@ describe('V2.1 consumer shell', () => {
     expect(screen.getByRole('button', { name: '近 1 年' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByRole('button', { name: '全部样本' }))
     expect(screen.getByRole('button', { name: '全部样本' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps backend fixed-sample metrics separate from the demo curve in professional research', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response([{ policy: { id: 'dsl_rsi_guard', version: 1 }, name: 'RSI 风险保护', document: {}, created_at: '2026-09-10T00:00:00Z' }]))
+      .mockResolvedValueOnce(response({ eligible: true, core_bucket_safe: true, budget_safe: true, assets: [{ symbol: 'SPY', observations: 120, evidence_start_as_of: '2016-01-01', evidence_end_as_of: '2025-12-31', strategy: { terminal_wealth_usd: 12450, maximum_drawdown_percent: -22.5, cash_utilisation_percent: 98.4 }, fixed_dca: { xirr_percent: 8.2, terminal_wealth_usd: 12110, maximum_drawdown_percent: -24.1, annualized_volatility_percent: 18.25, sortino_ratio: 0.61, cash_utilisation_percent: 100 }, rolling_out_of_sample: [{ start_as_of: '2016-01-01', end_as_of: '2018-01-01', observations: 24, strategy: { terminal_wealth_usd: 2100, maximum_drawdown_percent: -12, cash_utilisation_percent: 99 }, fixed_dca: { terminal_wealth_usd: 2050, maximum_drawdown_percent: -14, cash_utilisation_percent: 100 } }] }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage(<StrategyAnalysisPage />)
+    fireEvent.click(screen.getByRole('button', { name: '专业研究' }))
+    expect(await screen.findByLabelText('选择专业研究策略')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '读取固定样本研究' }))
+    expect(await screen.findByText('18.25%')).toBeTruthy()
+    expect(screen.getAllByText('样本不足')).toHaveLength(3)
+    expect(screen.getByText('查看滚动样本外窗口')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('explains when professional research has no saved strategy or a rejected report', async () => {
+    const emptyFetch = vi.fn().mockResolvedValue(response([]))
+    vi.stubGlobal('fetch', emptyFetch)
+    const firstRender = renderPage(<StrategyAnalysisPage />)
+    fireEvent.click(screen.getByRole('button', { name: '专业研究' }))
+    expect(await screen.findByText(/还没有已保存的 DSL 策略/)).toBeTruthy()
+    firstRender.unmount()
+
+    const rejectedFetch = vi.fn()
+      .mockResolvedValueOnce(response([{ policy: { id: 'dsl_guard', version: 1 }, name: '预算保护', document: {}, created_at: '2026-09-10T00:00:00Z' }]))
+      .mockResolvedValueOnce(response({ eligible: false, reason: '预算约束未通过', core_bucket_safe: true, budget_safe: false, assets: [] }))
+    vi.stubGlobal('fetch', rejectedFetch)
+    renderPage(<StrategyAnalysisPage />)
+    fireEvent.click(screen.getByRole('button', { name: '专业研究' }))
+    await screen.findByLabelText('选择专业研究策略')
+    fireEvent.click(screen.getByRole('button', { name: '读取固定样本研究' }))
+    expect(await screen.findByText('预算约束未通过')).toBeTruthy()
   })
 
   it('opens and closes a local configuration preview without claiming to connect anything', () => {

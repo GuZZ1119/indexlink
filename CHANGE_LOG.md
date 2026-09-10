@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-09-10 CST — 策略分析专业研究视角
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：前端专业研究视图、既有后端准入指标接入、测试与前端计划更新。
+- 涉及文件：`apps/web/src/{components/v2_1/professional-research-panel.tsx,pages/{strategy-analysis/index.tsx,v2_1-shell.test.tsx},vitest.config.ts}`、`apps/web/PLAN.md`、`CHANGE_LOG.md`。
+- 变更内容：策略分析页新增“直观视角 / 专业研究”切换。专业研究视角不复用或包装前端演示曲线，而是按需读取既有 `GET /strategies/:policy_id/:policy_version/admission` 固定样本报告，仅面向已保存 DSL 策略展示策略与 Fixed DCA 的 XIRR、期末净值、最大回撤、年化波动率、Sortino、现金使用率、证据覆盖、观察数和滚动样本外窗口；后端不可用、无策略、准入未通过与样本不足均明确呈现，不伪造数值。内置 Fixed DCA 与 70/20/10 尚无统一公开准入报告，继续与演示曲线严格区分。
+- 验证：`pnpm --dir apps/web lint`、`pnpm --dir apps/web test:coverage`（19 项通过；纳入范围 Statements 96.22%、Branches 90.47%、Functions 93.75%、Lines 100%）、`pnpm --dir apps/web build`、`git diff --check` 通过。
+
 ### 2026-09-10 CST — V2.1 策略分析与归一化多策略对比
 
 - 执行模型：GPT-5 Codex。

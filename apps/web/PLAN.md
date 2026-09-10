@@ -11,7 +11,7 @@ The default entry is now a local-first consumer shell: Personal, Strategy Center
 | 页面 / Page | V2.1 用户任务 / V2.1 user task | 当前数据边界 / Data boundary |
 | --- | --- | --- |
 | 个人中心 / Personal | 查看正在坚持的策略、下一次行动与近期变化 | 本地演示状态；不伪装为已连接收益或订单数据 |
-| 策略中心 / Strategy Center | 理解、选用、比较固定定投与 70/20/10 等精选策略 | 路由为 `/strategy-center`，避免与 Rust `/strategies` API 前缀冲突；含 `/strategy-analysis` 二级导航，按统一起点 100 比较多个本地示例策略；公开分享/fork 与真实版本化回测等待后续契约 |
+| 策略中心 / Strategy Center | 理解、选用、比较固定定投与 70/20/10 等精选策略 | 路由为 `/strategy-center`，避免与 Rust `/strategies` API 前缀冲突；含 `/strategy-analysis` 二级导航：直观视角按统一起点 100 比较本地示例策略，专业研究视角则按需读取后端已保存 DSL 的固定样本准入指标；公开分享/fork 与通用版本化回测等待后续契约 |
 | 高级实验室 / Advanced Lab | 了解 Docker、Moomoo/OpenD、Qwen、市场数据等可选能力 | 只显示配置入口与安全边界；不保存密钥、不验证账户、不下单 |
 
 ## 页面与契约 / Pages and contracts
