@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-09-10 CST — V2.1 消费级前端壳：个人中心、策略中心与高级实验室
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：V2.1 前端信息架构、消费级视觉重构、本地演示交互与前端测试。
+- 涉及文件：`apps/web/src/{App.tsx,index.css,stores/ui.ts,components/{layout/**,v2_1/**},features/v2_1/**,pages/{personal/**,strategy-center/**,lab/**,v2_1-shell.test.tsx},i18n/locales/{zh,en}.ts}`、`apps/web/{PLAN.md,vitest.config.ts}`、`CHANGE_LOG.md`。
+- 变更内容：主导航重构为个人中心、策略中心与高级实验室；默认入口改为个人中心，呈现“本月航线”、正在坚持的策略、近期变化和本地演示统计。新增面向普通用户的三条精选策略卡、策略限制说明与本地比较交互；当前示例回测明确标注为界面展示，不伪装为实时收益。新增高级实验室壳，暴露 Docker、本地数据、Moomoo/OpenD、Qwen 与市场数据的配置方向，但不保存浏览器密钥、不验证账号、不连接或提交订单。策略中心使用 `/strategy-center`，明确避开既有 Rust `/strategies` API 的开发代理前缀。旧 Dashboard、计划、决策与 DSL Studio 页面/API 层保留为非主导航的后续集成基础。新增 V2.1 页面模型和交互测试，并将其纳入前端 90% 覆盖率门槛。
+- 验证：`pnpm --dir apps/web test:coverage`（15 项通过；纳入范围 Lines / Statements / Functions / Branches 均为 100%）；桌面与 390px 本地浏览器视觉检查通过，主行动与移动布局可用；其余 lint、build 与差异检查见本次提交。
+
 ### 2026-09-10 CST — V2.1 本地优先发布过渡计划
 
 - 执行模型：GPT-5 Codex。

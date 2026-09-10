@@ -5,6 +5,10 @@ export default {
     loading: 'Loading…',
   },
   nav: {
+    primary: 'Primary navigation',
+    personal: 'My space',
+    strategiesCenter: 'Strategies',
+    lab: 'Advanced lab',
     dashboard: 'Dashboard',
     decisions: 'Decisions',
     plans: 'Recurring holdings',

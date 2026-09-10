@@ -1,10 +1,18 @@
 # IndexLink Web Plan / 前端计划
 
-## 当前状态 / Current state
+## V2.1 当前主路径 / Current V2.1 path
 
-Web 已连接 Rust API，而不是静态演示页。所有长期服务端数据均由 React Query 获取、缓存与失效；Valtio 只保存当前选中标的、图表范围与局部交互状态。
+Web 的默认入口现为本地优先的消费级外壳：个人中心、策略中心与高级实验室。它先让普通用户理解并采用长期策略；现有 Rust API 页面、审计与 paper-only 能力保留为旧路径和后续接入基础，而不再占据主导航。
 
-The web client is connected to the Rust API, not a static demo. React Query owns server data, cache and invalidation; Valtio is limited to selected holding, chart range and transient UI state.
+The default entry is now a local-first consumer shell: Personal, Strategy Center, and Advanced Lab. It helps ordinary users understand and adopt long-term strategies first. Existing Rust API pages, audits, and paper-only capabilities remain available as legacy routes and future integration foundations rather than the primary navigation.
+
+### 信息架构 / Information architecture
+
+| 页面 / Page | V2.1 用户任务 / V2.1 user task | 当前数据边界 / Data boundary |
+| --- | --- | --- |
+| 个人中心 / Personal | 查看正在坚持的策略、下一次行动与近期变化 | 本地演示状态；不伪装为已连接收益或订单数据 |
+| 策略中心 / Strategy Center | 理解、选用、比较固定定投与 70/20/10 等精选策略 | 路由为 `/strategy-center`，避免与 Rust `/strategies` API 前缀冲突；本地精选目录与示例回测展示，公开分享/fork 与真实回测等待后续契约 |
+| 高级实验室 / Advanced Lab | 了解 Docker、Moomoo/OpenD、Qwen、市场数据等可选能力 | 只显示配置入口与安全边界；不保存密钥、不验证账户、不下单 |
 
 ## 页面与契约 / Pages and contracts
 
@@ -33,12 +41,12 @@ The top status strip reads `/health`, `/ready` and `/runtime-status`. It disting
 
 ```bash
 pnpm --dir apps/web lint
-pnpm --dir apps/web test
+pnpm --dir apps/web test:coverage
 pnpm --dir apps/web build
 ```
 
 ## 后续 / Next
 
-1. 在有真实多账户与真实填单数据时，增加账户维度筛选和服务端游标分页。
-2. 为 Dashboard 图表单独拆分 Recharts vendor chunk，并按性能测量再调整。
-3. 用 Playwright 覆盖浏览器级关键路径：后端离线、Qwen 未配置、审批下单与语言切换。
+1. 以版本化策略、数据集与假设契约替换当前策略中心的示例回测数据。
+2. 实现本地计划采用、手动完成/跳过/调整记录与可复核复盘。
+3. 在保持用户确认的前提下，先接入一个只读券商账户，再评估预填订单或一键确认执行。

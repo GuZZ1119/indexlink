@@ -5,6 +5,10 @@ export default {
     loading: '加载中…',
   },
   nav: {
+    primary: '主要导航',
+    personal: '个人中心',
+    strategiesCenter: '策略中心',
+    lab: '高级实验室',
     dashboard: '仪表盘',
     decisions: '决策明细',
     plans: '定投标的',
