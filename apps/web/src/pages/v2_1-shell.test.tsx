@@ -6,6 +6,7 @@ import { StrategyCard } from '@/components/v2_1/strategy-card'
 import { findConsumerStrategy } from '@/features/v2_1/model'
 import LabPage from '@/pages/lab'
 import PersonalPage from '@/pages/personal'
+import StrategyAnalysisPage from '@/pages/strategy-analysis'
 import StrategyCenterPage from '@/pages/strategy-center'
 import { setActiveStrategyId } from '@/stores/ui'
 
@@ -31,6 +32,22 @@ describe('V2.1 consumer shell', () => {
     expect(screen.getByText('最该知道的限制')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('选择对比策略'), { target: { value: 'defensive-balance' } })
     expect(screen.getByText('股债平衡')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: '分析走势' })[0].getAttribute('href')).toBe('/strategy-analysis')
+  })
+
+  it('compares selected strategies on one normalized analysis chart', () => {
+    renderPage(<StrategyAnalysisPage />)
+    expect(screen.getByText(/当前使用本地确定性示例序列来完成交互与视觉验证/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /70 \/ 20 \/ 10/ }))
+    expect(screen.getByRole('button', { name: /70 \/ 20 \/ 10/ }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: /固定定投/ }))
+    expect(screen.getAllByText('固定定投', { selector: 'span' })).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: /70 \/ 20 \/ 10/ }))
+    expect(screen.getByRole('button', { name: /70 \/ 20 \/ 10/ }).getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: '近 1 年' }))
+    expect(screen.getByRole('button', { name: '近 1 年' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '全部样本' }))
+    expect(screen.getByRole('button', { name: '全部样本' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('opens and closes a local configuration preview without claiming to connect anything', () => {

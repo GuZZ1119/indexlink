@@ -1,9 +1,10 @@
 import { ArrowUpRight, Check, CircleAlert } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 import type { ConsumerStrategy } from '@/features/v2_1/model'
 import { cn } from '@/lib/utils'
 
-export function StrategyCard({ strategy, selected, onSelect, variant = 'full' }: { strategy: ConsumerStrategy; selected: boolean; onSelect?: (id: ConsumerStrategy['id']) => void; variant?: 'full' | 'compact' }) {
+export function StrategyCard({ strategy, selected, onSelect, variant = 'full', children }: { strategy: ConsumerStrategy; selected: boolean; onSelect?: (id: ConsumerStrategy['id']) => void; variant?: 'full' | 'compact'; children?: ReactNode }) {
   return (
     <article className={cn('relative flex flex-col rounded-[1.35rem] border bg-white p-5 transition-colors', selected ? 'border-[#2d6a57] bg-[#f5faf7]' : 'border-slate-200 hover:border-slate-300')}>
       <div className="flex items-start justify-between gap-3">
@@ -21,6 +22,7 @@ export function StrategyCard({ strategy, selected, onSelect, variant = 'full' }:
       {selected
         ? <p className="mt-5 inline-flex items-center gap-1 self-start text-sm font-medium text-[#2d6a57]"><Check className="size-3.5" />当前正在使用</p>
         : <button type="button" onClick={() => onSelect?.(strategy.id)} className="mt-5 inline-flex items-center gap-1 self-start text-sm font-medium text-[#2d6a57] outline-none hover:text-[#1f5444] focus-visible:rounded focus-visible:ring-2 focus-visible:ring-[#2d6a57] focus-visible:ring-offset-2">选用这个策略 <ArrowUpRight className="size-3.5" /></button>}
+      {children && <div className="mt-4 border-t border-slate-100 pt-4">{children}</div>}
     </article>
   )
 }

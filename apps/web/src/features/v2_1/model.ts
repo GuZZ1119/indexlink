@@ -74,6 +74,79 @@ export interface ComparisonRow {
   right: string
 }
 
+export const strategyAnalysisRanges = [
+  { id: '1y', label: '近 1 年', months: 12 },
+  { id: '3y', label: '近 3 年', months: 36 },
+  { id: 'all', label: '全部样本', months: 60 },
+] as const
+
+export type StrategyAnalysisRange = (typeof strategyAnalysisRanges)[number]['id']
+
+export type StrategyAnalysisPoint = { date: string } & Partial<Record<StrategyId, number>>
+
+export interface StrategyAnalysisSummary {
+  id: StrategyId
+  endIndex: number
+  change: number
+}
+
+const analysisProfiles: Record<StrategyId, { drift: number; marketSensitivity: number; rhythm: number; setback: number }> = {
+  'steady-dca': { drift: 0.55, marketSensitivity: 0.78, rhythm: 0.14, setback: 0.23 },
+  'adaptive-70-20-10': { drift: 0.62, marketSensitivity: 0.72, rhythm: 0.11, setback: 0.15 },
+  'defensive-balance': { drift: 0.43, marketSensitivity: 0.44, rhythm: 0.08, setback: 0.08 },
+}
+
+/**
+ * Build a deterministic local preview for the analysis shell. Each selected series
+ * is rebased to 100 at the first point so the page compares the experience, never
+ * account size. This is intentionally not a substitute for versioned backtest data.
+ */
+export function buildNormalizedStrategyAnalysis(ids: readonly StrategyId[], range: StrategyAnalysisRange): { points: StrategyAnalysisPoint[]; summaries: StrategyAnalysisSummary[] } {
+  const months = strategyAnalysisRanges.find((candidate) => candidate.id === range)?.months ?? 60
+  const selectedIds = [...new Set(ids)]
+  const startMonth = 60 - months
+  const values = new Map<StrategyId, number>(selectedIds.map((id) => [id, 100]))
+  const points: StrategyAnalysisPoint[] = []
+
+  for (let offset = 0; offset <= months; offset += 1) {
+    const month = startMonth + offset
+    const point: StrategyAnalysisPoint = { date: analysisDate(month) }
+    for (const id of selectedIds) {
+      const nextValue = offset === 0 ? 100 : Number(((values.get(id) ?? 100) * (1 + previewMonthlyReturn(id, month))).toFixed(2))
+      values.set(id, nextValue)
+      point[id] = nextValue
+    }
+    points.push(point)
+  }
+
+  return {
+    points,
+    summaries: selectedIds.map((id) => {
+      const endIndex = values.get(id) ?? 100
+      return { id, endIndex, change: Number((endIndex - 100).toFixed(1)) }
+    }),
+  }
+}
+
+function previewMonthlyReturn(id: StrategyId, month: number): number {
+  const profile = analysisProfiles[id]
+  const broadMarket = Math.sin(month * 0.72) * 0.018 + Math.cos(month * 0.23) * 0.011 - (month % 17 === 0 ? 0.035 : 0)
+  const strategyRhythm = Math.sin(month * 0.39 + profile.marketSensitivity) * profile.rhythm / 100
+  const drawdownBuffer = broadMarket < 0 ? profile.setback / 100 : 0
+  return profile.drift / 100 + broadMarket * profile.marketSensitivity + strategyRhythm - drawdownBuffer
+}
+
+function analysisDate(month: number): string {
+  const date = new Date(Date.UTC(2021, 5 + month, 1))
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', timeZone: 'UTC' }).format(date)
+}
+
+export const strategyAnalysisColors: Record<StrategyId, string> = {
+  'steady-dca': '#50738a',
+  'adaptive-70-20-10': '#2d6a57',
+  'defensive-balance': '#ad7d35',
+}
+
 /** Build a deliberately small, comparable view without pretending these demo figures are live data. */
 export function compareStrategies(leftId: StrategyId, rightId: StrategyId): ComparisonRow[] {
   const left = findConsumerStrategy(leftId)

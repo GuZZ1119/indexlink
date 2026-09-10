@@ -1,9 +1,11 @@
 import { BarChart3, ChevronDown, GitCompareArrows, Plus, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { useSnapshot } from 'valtio'
 
 import { PageHeading } from '@/components/v2_1/page-heading'
 import { StrategyCard } from '@/components/v2_1/strategy-card'
+import { StrategyCenterNav } from '@/components/v2_1/strategy-center-nav'
 import { compareStrategies, consumerStrategies, findConsumerStrategy, type StrategyId } from '@/features/v2_1/model'
 import { setActiveStrategyId, uiStore } from '@/stores/ui'
 
@@ -22,6 +24,7 @@ export default function StrategyCenterPage() {
   return (
     <div className="mx-auto w-full max-w-7xl space-y-8 px-5 py-8 md:px-8 lg:px-10 lg:py-10">
       <PageHeading eyebrow="策略中心" title="先看懂，再开始坚持" description="每一份策略都明确告诉你它想解决什么、历史上经历过什么，以及最不适合它的情况。" action={<span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-500"><Plus className="size-4" />创建策略将在下一阶段开放</span>} />
+      <StrategyCenterNav />
 
       <section className="rounded-[1.35rem] border border-[#cfded8] bg-[#f1f7f4] p-5 sm:p-6">
         <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center"><div><p className="text-sm font-medium text-[#2d6a57]">你正在坚持</p><h2 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#102028]">{current.name}</h2><p className="mt-2 text-sm leading-6 text-slate-600">{current.strength}</p></div><button type="button" onClick={() => setShowComparison((value) => !value)} className="inline-flex items-center justify-center gap-2 rounded-full bg-[#102028] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#1c343f]"><GitCompareArrows className="size-4" />{showComparison ? '收起对比' : '和其他策略对比'}</button></div>
@@ -30,7 +33,7 @@ export default function StrategyCenterPage() {
 
       {selectionNotice && <p role="status" className="rounded-xl border border-[#b8d5c6] bg-[#f1f7f4] px-4 py-3 text-sm text-[#245a49]">{selectionNotice}</p>}
 
-      <section><div className="mb-5 flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold tracking-[-0.03em] text-[#102028]">从简单的方式开始</h2><p className="mt-1 text-sm text-slate-500">目前是本地精选策略库；公开分享与真实回测将在后续版本接入。</p></div><span className="hidden items-center gap-1 text-sm text-slate-400 sm:inline-flex">风险筛选将在策略库上线后开放 <ChevronDown className="size-4" /></span></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{consumerStrategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} selected={activeStrategyId === strategy.id} onSelect={selectStrategy} />)}</div></section>
+      <section><div className="mb-5 flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold tracking-[-0.03em] text-[#102028]">从简单的方式开始</h2><p className="mt-1 text-sm text-slate-500">目前是本地精选策略库；公开分享与真实回测将在后续版本接入。</p></div><span className="hidden items-center gap-1 text-sm text-slate-400 sm:inline-flex">风险筛选将在策略库上线后开放 <ChevronDown className="size-4" /></span></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{consumerStrategies.map((strategy) => <StrategyCard key={strategy.id} strategy={strategy} selected={activeStrategyId === strategy.id} onSelect={selectStrategy}><Link to="/strategy-analysis" onClick={() => setActiveStrategyId(strategy.id)} className="inline-flex items-center gap-1 text-sm font-medium text-[#294f60] hover:text-[#102028]">分析走势 <BarChart3 className="size-3.5" /></Link></StrategyCard>)}</div></section>
 
       <section className="grid gap-4 md:grid-cols-2"><InfoBlock icon={<BarChart3 />} title="回测不是承诺" text="你会看到策略过去经历了什么，也会看到费用、样本范围和最难坚持的阶段。它不能预测下一次市场。" /><InfoBlock icon={<RotateCcw />} title="选用不是复制" text="先从完整理解开始。未来可以 fork 一份策略，改成符合自己投入金额、市场和风险承受能力的个人计划。" /></section>
     </div>

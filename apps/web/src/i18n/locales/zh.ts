@@ -8,6 +8,7 @@ export default {
     primary: '主要导航',
     personal: '个人中心',
     strategiesCenter: '策略中心',
+    strategyAnalysis: '策略分析',
     lab: '高级实验室',
     dashboard: '仪表盘',
     decisions: '决策明细',

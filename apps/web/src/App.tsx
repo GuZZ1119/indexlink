@@ -7,6 +7,7 @@ import RouteErrorPage from '@/pages/route-error'
 
 const PersonalPage = lazy(() => import('@/pages/personal'))
 const StrategyCenterPage = lazy(() => import('@/pages/strategy-center'))
+const StrategyAnalysisPage = lazy(() => import('@/pages/strategy-analysis'))
 const LabPage = lazy(() => import('@/pages/lab'))
 const DecisionsPage = lazy(() => import('@/pages/decisions'))
 const PlansPage = lazy(() => import('@/pages/plans'))
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
       { index: true, element: <Navigate to="/personal" replace /> },
       { path: '/personal', element: <LazyPage Page={PersonalPage} /> },
       { path: '/strategy-center', element: <LazyPage Page={StrategyCenterPage} /> },
+      { path: '/strategy-analysis', element: <LazyPage Page={StrategyAnalysisPage} /> },
       { path: '/lab', element: <LazyPage Page={LabPage} /> },
       { path: '/decisions/:id?', element: <LazyPage Page={DecisionsPage} /> },
       { path: '/plans/:id?', element: <LazyPage Page={PlansPage} /> },

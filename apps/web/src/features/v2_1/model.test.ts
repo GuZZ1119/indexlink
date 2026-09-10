@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareStrategies, connectionLabel, consumerStrategies, findConsumerStrategy } from './model'
+import { buildNormalizedStrategyAnalysis, compareStrategies, connectionLabel, consumerStrategies, findConsumerStrategy } from './model'
 
 describe('consumer strategy model', () => {
   it('keeps the curated library readable and finds a selected strategy', () => {
@@ -21,5 +21,14 @@ describe('consumer strategy model', () => {
   it('keeps local-only and unconfigured integrations visually distinct', () => {
     expect(connectionLabel('local-only')).toBe('仅本机可用')
     expect(connectionLabel('not-configured')).toBe('尚未配置')
+  })
+
+  it('rebases every selected strategy to 100 before comparing a shared range', () => {
+    const analysis = buildNormalizedStrategyAnalysis(['steady-dca', 'adaptive-70-20-10'], '3y')
+    expect(analysis.points).toHaveLength(37)
+    expect(analysis.points[0]['steady-dca']).toBe(100)
+    expect(analysis.points[0]['adaptive-70-20-10']).toBe(100)
+    expect(analysis.summaries.map((summary) => summary.id)).toEqual(['steady-dca', 'adaptive-70-20-10'])
+    expect(analysis.summaries[0].endIndex).not.toBe(100)
   })
 })

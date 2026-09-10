@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 2026-09-10 CST — V2.1 策略分析与归一化多策略对比
+
+- 执行模型：GPT-5 Codex。
+- 变更类型：消费级策略分析页面、归一化图表交互、导航、测试与前端计划更新。
+- 涉及文件：`apps/web/src/{App.tsx,components/{layout/app-sidebar.tsx,v2_1/{strategy-card.tsx,strategy-center-nav.tsx}},features/v2_1/{model.ts,model.test.ts},pages/{strategy-center/index.tsx,strategy-analysis/index.tsx,v2_1-shell.test.tsx},i18n/locales/{zh.ts,en.ts}}`、`apps/web/{PLAN.md,vitest.config.ts}`、`CHANGE_LOG.md`。
+- 变更内容：在策略中心增加“策略库 / 策略分析”二级导航和侧栏子入口；策略卡可直接进入分析页并把该策略作为初始对比对象。新增策略分析页，复用 Recharts 折线图能力，支持近 1 年、近 3 年和全部样本切换，并可在一张图上选择最多三条策略对比。所有曲线在选定窗口首点重置为 100，摘要显示同口径区间变化与期末指数。当前数据为确定性的本地示例序列，页面与计划均明确其不是真实回测；后续仅替换为带版本、数据集、费用和假设的可复核数据契约。
+- 验证：`pnpm --dir apps/web lint`、`pnpm --dir apps/web test:coverage`（17 项通过；纳入范围 Statements 97.52%、Branches 93.10%、Functions 94.64%、Lines 100%）、`pnpm --dir apps/web build`、`git diff --check` 通过；本地浏览器确认多策略选择后折线与摘要同步出现。
+
 ### 2026-09-10 CST — V2.1 消费级前端壳交互与布局修正
 
 - 执行模型：GPT-5 Codex。

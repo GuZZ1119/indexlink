@@ -8,6 +8,7 @@ export default {
     primary: 'Primary navigation',
     personal: 'My space',
     strategiesCenter: 'Strategies',
+    strategyAnalysis: 'Strategy analysis',
     lab: 'Advanced lab',
     dashboard: 'Dashboard',
     decisions: 'Decisions',
